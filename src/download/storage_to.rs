@@ -39,17 +39,62 @@ pub struct ShareInfo {
 
 pub struct StorageDownloader {
     client: reqwest::Client,
-}
-
-impl Default for StorageDownloader {
-    fn default() -> Self {
-        Self::new().expect("http client")
-    }
+    /// Cookie jar file for the curl fallback (password cookies `pwok_*`).
+    cookie_jar: std::path::PathBuf,
+    /// Set once reqwest was challenged by Cloudflare; then always use curl.
+    use_curl: std::sync::atomic::AtomicBool,
 }
 
 impl StorageDownloader {
     pub fn new() -> Result<Self> {
-        Ok(Self { client: browser_client()? })
+        let jar = std::env::temp_dir().join(format!("uni-share-cookies-{}.txt", std::process::id()));
+        Ok(Self { client: browser_client()?, cookie_jar: jar, use_curl: std::sync::atomic::AtomicBool::new(false) })
+    }
+
+    /// storage.to sits behind Cloudflare, whose bot heuristics challenge
+    /// rustls-based clients (TLS fingerprint) on the *site* routes, while the
+    /// public `/api` is fine. `curl` (bundled with Linux, macOS and Windows
+    /// 10+) is not challenged, so we try reqwest first and transparently fall
+    /// back to curl (with a cookie jar) for the whole session afterwards.
+    async fn site_request(&self, method: &str, url: &str, headers: &[(&str, String)], body: Option<String>) -> Result<(u16, String)> {
+        use std::sync::atomic::Ordering;
+        if !self.use_curl.load(Ordering::Relaxed) {
+            let m = reqwest::Method::from_bytes(method.as_bytes()).context("method")?;
+            let mut rb = self.client.request(m, url);
+            for (k, v) in headers {
+                rb = rb.header(*k, v.as_str());
+            }
+            if let Some(b) = &body {
+                rb = rb.header(reqwest::header::CONTENT_TYPE, "application/json").body(b.clone());
+            }
+            match rb.send().await {
+                Ok(r) => {
+                    let cf = r.headers().get("cf-mitigated").is_some()
+                        || (r.status().as_u16() == 403 && r.headers().get("server").and_then(|v| v.to_str().ok()) == Some("cloudflare"));
+                    if !cf {
+                        let st = r.status().as_u16();
+                        return Ok((st, r.text().await?));
+                    }
+                    tracing::debug!(url, "Cloudflare challenge from reqwest, switching to curl");
+                }
+                Err(e) => tracing::debug!(url, "reqwest error ({e}), switching to curl"),
+            }
+            self.use_curl.store(true, Ordering::Relaxed);
+        }
+        curl_request(method, url, headers, body.as_deref(), &self.cookie_jar).await
+    }
+
+    async fn fetch_page_html(&self, page_url: &str) -> Result<String> {
+        let (status, html) = self
+            .site_request("GET", page_url, &[("Accept", "text/html,application/xhtml+xml,*/*;q=0.8".into()), ("Accept-Language", "en-US,en;q=0.9".into())], None)
+            .await?;
+        if status == 404 || html.contains("<title>Page not found") {
+            bail!("link not found or expired: {page_url}");
+        }
+        if !(200..300).contains(&status) || html.contains("Just a moment...") {
+            bail!("storage.to blocked the request (HTTP {status}); open {page_url} in a browser instead");
+        }
+        Ok(html)
     }
 
     pub async fn info(&self, url_or_id: &str) -> Result<ShareInfo> {
@@ -58,28 +103,23 @@ impl StorageDownloader {
             ResourceKind::File => format!("{SITE}/{id}"),
             ResourceKind::Collection => format!("{SITE}/c/{id}"),
         };
-        let resp = self.client.get(&page_url).header(reqwest::header::ACCEPT, "text/html").send().await.context("fetching share page")?;
-        if resp.status().as_u16() == 404 {
-            bail!("link not found or expired: {url_or_id}");
-        }
-        let html = resp.error_for_status()?.text().await?;
+        let html = self.fetch_page_html(&page_url).await?;
         let data = extract_loader_data(&html).ok_or_else(|| anyhow!("could not parse storage.to page (site changed?)"))?;
         parse_share(kind, &id, &data)
     }
 
+    /// Verify the password; the server answers with a `pwok_*` cookie that
+    /// authorises the subsequent URL requests (kept in the client/curl jar).
     pub async fn verify_password(&self, info: &ShareInfo, password: &str) -> Result<()> {
         let path = if info.kind == "collection" { "collection" } else { "file" };
-        let r = self
-            .client
-            .post(format!("{SITE}/api/{path}/{}/verify-password", info.id))
-            .header(reqwest::header::ACCEPT, "application/json")
-            .json(&serde_json::json!({ "password": password }))
-            .send()
+        let url = format!("{SITE}/api/{path}/{}/verify-password", info.id);
+        let (status, text) = self
+            .site_request("POST", &url, &[("Accept", "application/json".into())], Some(serde_json::json!({ "password": password }).to_string()))
             .await?;
-        match r.status().as_u16() {
+        match status {
             200 => Ok(()),
             401 => bail!("incorrect password"),
-            s => bail!("password verification failed (HTTP {s})"),
+            s => bail!("password verification failed (HTTP {s}): {}", text.chars().take(200).collect::<String>()),
         }
     }
 
@@ -89,32 +129,31 @@ impl StorageDownloader {
         if info.kind == "collection" {
             let ids: Vec<&str> = info.files.iter().map(|f| f.id.as_str()).collect();
             for chunk in ids.chunks(50) {
-                let r = self
-                    .client
-                    .post(format!("{SITE}/c/{}/urls", info.id))
-                    .header(reqwest::header::ACCEPT, "application/json")
-                    .header("x-mint-proof", &info.mint_proof)
-                    .header(reqwest::header::REFERER, format!("{SITE}/c/{}", info.id))
-                    .json(&serde_json::json!({ "file_ids": chunk }))
-                    .send()
+                let (status, text) = self
+                    .site_request(
+                        "POST",
+                        &format!("{SITE}/c/{}/urls", info.id),
+                        &[("Accept", "application/json".into()), ("x-mint-proof", info.mint_proof.clone()), ("Referer", format!("{SITE}/c/{}", info.id))],
+                        Some(serde_json::json!({ "file_ids": chunk }).to_string()),
+                    )
                     .await?;
-                let v: serde_json::Value = check_json(r).await?;
+                let v = check_json(status, &text)?;
                 let urls = v.pointer("/data/urls").or_else(|| v.get("urls")).cloned().unwrap_or_default();
                 for f in info.files.iter().filter(|f| chunk.contains(&f.id.as_str())) {
-                    let u = urls.get(&f.id).and_then(|x| x.as_str()).ok_or_else(|| anyhow!("no download url for {}", f.name))?;
+                    let u = urls.get(&f.id).and_then(|x| x.as_str()).ok_or_else(|| anyhow!("no download url for {} (wrong password?)", f.name))?;
                     out.push((f.clone(), u.to_string()));
                 }
             }
         } else {
-            let r = self
-                .client
-                .get(format!("{SITE}/{}/download", info.id))
-                .header(reqwest::header::ACCEPT, "application/json")
-                .header("x-mint-proof", &info.mint_proof)
-                .header(reqwest::header::REFERER, format!("{SITE}/{}", info.id))
-                .send()
+            let (status, text) = self
+                .site_request(
+                    "GET",
+                    &format!("{SITE}/{}/download", info.id),
+                    &[("Accept", "application/json".into()), ("x-mint-proof", info.mint_proof.clone()), ("Referer", format!("{SITE}/{}", info.id))],
+                    None,
+                )
                 .await?;
-            let v: serde_json::Value = check_json(r).await?;
+            let v = check_json(status, &text)?;
             let u = v.pointer("/data/url").or_else(|| v.get("url")).and_then(|x| x.as_str()).ok_or_else(|| anyhow!("no download url returned"))?;
             let f = info.files.first().cloned().ok_or_else(|| anyhow!("no file in share"))?;
             out.push((f, u.to_string()));
@@ -136,6 +175,7 @@ impl StorageDownloader {
         for (f, url) in pairs {
             on_file(&f.name);
             let dest = destination_path(dest_dir, &f.name, force);
+            // CDN (cdn.storagetobox.com) is not challenged → plain reqwest with Range resume.
             download_resumable(&self.client, &url, &dest, Some(f.size).filter(|s| *s > 0), progress.clone(), 3).await?;
             saved.push(dest);
         }
@@ -143,17 +183,48 @@ impl StorageDownloader {
     }
 }
 
-async fn check_json(r: reqwest::Response) -> Result<serde_json::Value> {
-    let status = r.status();
-    let text = r.text().await?;
-    let v: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
-    if !status.is_success() {
+impl Drop for StorageDownloader {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.cookie_jar);
+    }
+}
+
+async fn curl_request(method: &str, url: &str, headers: &[(&str, String)], body: Option<&str>, jar: &Path) -> Result<(u16, String)> {
+    let mut cmd = tokio::process::Command::new("curl");
+    cmd.args(["-sS", "-L", "--max-time", "60", "-A", super::http::BROWSER_UA, "-X", method, "-w", "\n__STATUS__%{http_code}"]);
+    cmd.arg("-c").arg(jar).arg("-b").arg(jar);
+    for (k, v) in headers {
+        cmd.arg("-H").arg(format!("{k}: {v}"));
+    }
+    if let Some(b) = body {
+        cmd.arg("-H").arg("Content-Type: application/json").arg("--data-binary").arg(b);
+    }
+    cmd.arg(url);
+    let out = cmd.output().await.context("running curl (needed to bypass the Cloudflare bot check; install curl)")?;
+    if !out.status.success() {
+        bail!("curl exited with {}: {}", out.status, String::from_utf8_lossy(&out.stderr).trim());
+    }
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let (body, status) = match text.rsplit_once("\n__STATUS__") {
+        Some((b, s)) => (b.to_string(), s.trim().parse::<u16>().unwrap_or(0)),
+        None => (text, 0),
+    };
+    Ok((status, body))
+}
+
+fn check_json(status: u16, text: &str) -> Result<serde_json::Value> {
+    let v: serde_json::Value = serde_json::from_str(text).unwrap_or(serde_json::Value::Null);
+    if !(200..300).contains(&status) {
         let code = v.pointer("/error/code").and_then(|c| c.as_str()).unwrap_or("");
-        let msg = v.pointer("/error/message").and_then(|c| c.as_str()).or_else(|| v.get("error").and_then(|c| c.as_str())).unwrap_or(&text);
+        let msg = v.pointer("/error/message").and_then(|c| c.as_str()).or_else(|| v.get("error").and_then(|c| c.as_str())).unwrap_or("");
         match code {
             "password_required" | "password" => bail!("this share is password protected (use --password)"),
             "challenge_required" | "turnstile_required" => bail!("storage.to requires a browser captcha for this download; open the link in a browser"),
-            _ => bail!("storage.to download failed (HTTP {status}): {msg}"),
+            _ if text.contains("Just a moment...") => bail!("storage.to (Cloudflare) blocked the request; open the link in a browser"),
+            _ => bail!(
+                "storage.to download failed (HTTP {status}): {}",
+                if msg.is_empty() { text.chars().take(200).collect::<String>() } else { msg.to_string() }
+            ),
         }
     }
     Ok(v)

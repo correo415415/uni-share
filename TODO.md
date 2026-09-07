@@ -57,14 +57,23 @@ Leyenda: `[x]` hecho · `[~]` en progreso · `[ ]` pendiente
 - [ ] Ticket para transferencias LAN (`send-lan --ticket`: ip/puerto/fingerprint/PIN en QR para emparejar sin descubrimiento).
 - [ ] Firma opcional del ticket (Ed25519) para verificar remitente.
 
-## Fase 7 — GUI de escritorio profesional (estilo qBittorrent, identidad propia)
-- [ ] Backend GUI: jobs con velocidad/ETA/archivo actual/lista de archivos, pausar/cancelar, reintentar, eliminar; SSE o WebSocket en lugar de polling.
-- [ ] Backend GUI: explorador de ficheros del sistema (`/api/fs`), ajustes editables (`/api/config` GET/PUT), QR SVG (`/api/qr`), tickets (`/api/ticket/create|parse|download`), abrir carpeta de destino.
-- [ ] Frontend: layout tipo qBittorrent — barra de herramientas, panel lateral con filtros (Todas / Recibiendo / Enviando / Subidas / Descargas / Completadas / Fallidas / Dispositivos LAN / Tickets), tabla central ordenable con barras de progreso, panel inferior de detalles con pestañas (General / Archivos / Fuentes / Log), barra de estado con velocidades globales.
-- [ ] Frontend: estilo único (tema oscuro/claro, tipografía y paleta propias, iconografía SVG inline), atajos de teclado, arrastrar y soltar rutas/tickets, notificaciones en la app.
-- [ ] Frontend: diálogo "Nueva transferencia" (LAN / Global / Descarga / Ticket) con vista previa de árbol de archivos; diálogo "Compartir" con link, QR grande, copiar, guardar `.unishare`.
-- [ ] Frontend: aceptar/rechazar ofertas LAN entrantes con previsualización del árbol y elección de carpeta destino.
-- [ ] Ventana nativa (webview vía `tao`/`wry` o `tauri`) opcional en vez de abrir el navegador.
+## Fase 7 — GUI (web, portable) sobre un *engine* compartido
+- [x] `engine.rs`: núcleo sin UI compartido por todos los front-ends — receptor LAN embebido + anuncio mDNS, ofertas pendientes (aceptar con carpeta destino / rechazar), jobs (envío LAN, recepción LAN, subida link, descarga) con progreso por bytes, velocidad, ETA, archivo actual, lista de archivos, log por job, cancelación; descubrimiento periódico; config editable en caliente y persistida; creación/parseo de tickets; listado de directorios para selectores.
+- [x] GUI web (`uni-share gui`) reescrita como capa fina sobre el engine: layout tipo qBittorrent (barra de herramientas, panel lateral con filtros y dispositivos LAN, tabla ordenable con barras de progreso, panel de detalles con pestañas General/Archivos/Compartir/Registro/Historial, barra de estado con velocidades ↓↑), diálogo "Nueva transferencia" (LAN / link / descarga / ticket) con vista previa, explorador de archivos propio, diálogo "Compartir" con QR grande (link y ticket) + guardar `.unishare`/SVG, ajustes editables, menú contextual, atajos de teclado, tema claro/oscuro, arrastrar y soltar `.unishare`.
+- [ ] SSE en lugar de polling para `/api/state`.
+- [ ] Reintentar job fallido desde la UI.
+
+## Fase 7b — GUI nativa de escritorio con **Slint** (`uni-share app`)
+Decisión: Slint (Rust puro, renderizado propio con `winit`+`femtovg`/`skia`, sin webview ni Electron; binario único; estilo 100 % definido por nosotros, no por el toolkit). Comparte el `engine` con la GUI web, así que ambas se comportan igual y la lógica no se duplica.
+- [ ] Feature de cargo `slint` (opcional, para que `cargo build` siga funcionando sin dependencias gráficas) y subcomando `uni-share app`.
+- [ ] Sistema de diseño propio en `.slint`: paleta (grafito + acento teal/violeta), tipografía, radios, sombras, iconografía vectorial propia (Path), sin controles del estilo por defecto (fluent/material): botones, inputs, checkbox, segmented control, tabla, barra de progreso, badges, pestañas, tooltips, menú contextual, diálogos y toasts propios.
+- [ ] Ventana principal: barra de herramientas (Nueva / Enviar LAN / Compartir link / Descargar / Ticket / Cancelar / Limpiar / buscar / ajustes), panel lateral (filtros con contadores + dispositivos LAN en vivo + tarjeta "este equipo"), tabla central ordenable y redimensionable con progreso/velocidad/ETA, panel inferior de detalles con pestañas (General / Archivos / Compartir con QR / Registro / Historial), barra de estado con velocidades globales.
+- [ ] Ofertas LAN entrantes: banner con árbol de archivos, huella del emisor, aceptar (elegir carpeta) / rechazar; notificación del sistema.
+- [ ] Diálogos: Nueva transferencia (4 modos) con selector de archivos nativo (`rfd`) y vista previa; Compartir (QR renderizado en la propia ventana desde `qrcode`, copiar, guardar `.unishare`, guardar QR); Ajustes; confirmaciones.
+- [ ] Puente engine↔UI: tokio en hilo aparte, snapshot cada 500 ms → `VecModel` de Slint vía `invoke_from_event_loop`; acciones de la UI → canal mpsc hacia el engine.
+- [ ] Arrastrar y soltar (rutas y `.unishare`), atajos de teclado, tema claro/oscuro, bandeja del sistema (`tray-icon`) con "minimizar a bandeja" y menú rápido.
+- [ ] Asociación de `.unishare` y `unishare:` al binario (Linux `.desktop` + MIME, Windows registro, macOS Info.plist) → abre la GUI con el ticket cargado.
+- [ ] Empaquetado: AppImage/.deb, .msi, .dmg (cargo-dist / cargo-bundle); iconos de la app.
 
 ## Fase 8 — Smash (aparcado)
 - [ ] Smash queda como backend **experimental**: oculto de la ayuda por defecto, sin más desarrollo hasta nueva orden. La API key nunca se versiona.

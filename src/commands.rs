@@ -1,5 +1,6 @@
 //! CLI subcommand implementations (thin glue over the library).
 
+pub use crate::commands_daemon::daemon;
 pub use crate::commands_download::download;
 pub use crate::commands_global::send_global;
 pub use crate::commands_lan::{list_devices, receive, send_lan};
@@ -80,10 +81,6 @@ fn truncate(s: &str, n: usize) -> String {
         let cut: String = s.chars().take(n - 1).collect();
         format!("{cut}…")
     }
-}
-
-pub async fn daemon(_ctx: Ctx, _a: DaemonArgs) -> Result<()> {
-    bail!("daemon: not implemented yet (phase 5)")
 }
 
 pub async fn gui(_ctx: Ctx, _a: GuiArgs) -> Result<()> {

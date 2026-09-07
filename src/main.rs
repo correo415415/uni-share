@@ -9,6 +9,7 @@ mod commands;
 mod commands_lan;
 mod commands_global;
 mod commands_download;
+mod commands_daemon;
 
 #[derive(Parser, Debug)]
 #[command(

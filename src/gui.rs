@@ -1,441 +1,240 @@
-//! Local web GUI (`uni-share gui`): a small axum app on 127.0.0.1 serving an
-//! embedded single-page UI. It embeds the LAN receiver so incoming offers can
-//! be previewed and accepted/rejected from the browser, and exposes actions
-//! for LAN/global sending, downloads, device discovery and history.
+//! Local web GUI (`uni-share gui`): thin axum layer over [`crate::engine::Engine`]
+//! serving an embedded single-page app on 127.0.0.1.
+//!
+//! The web UI is the *portable* front-end (any machine with a browser, also
+//! remotely over SSH port-forwarding); the native Slint window shares the
+//! same engine, so both behave identically.
 
 use crate::config::Config;
-use crate::fsutil::{collect_files, total_size};
-use crate::history::{History, Kind, Status};
-use crate::lan::client::{Sender, build_manifest, hash_all};
-use crate::lan::discovery::{Announcer, discover, parse_target};
-use crate::lan::server::{Decision, IncomingOffer, Progress, ServerHandle, ServerOptions};
-use crate::lan::tls::Identity;
+use crate::engine::{ConfigPatch, DownloadReq, Engine, SendGlobalReq, SendLanReq, TicketCreateReq};
+use crate::history::History;
+use crate::ticket::Ticket;
 use anyhow::{Context, Result};
-use axum::extract::{Path as AxPath, State};
+use axum::Json;
+use axum::Router;
+use axum::body::Body;
+use axum::extract::{Path as AxPath, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde::Deserialize;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
-use tokio::sync::{Mutex, RwLock};
 
 pub const INDEX_HTML: &str = include_str!("gui/index.html");
+pub const APP_CSS: &str = include_str!("gui/app.css");
+pub const APP_JS: &str = include_str!("gui/app.js");
 
-#[derive(Clone, Serialize)]
-pub struct PendingOffer {
-    pub transfer_id: String,
-    pub sender: String,
-    pub peer: String,
-    pub name: String,
-    pub total_size: u64,
-    pub files: Vec<(String, u64)>,
-}
-
-#[derive(Clone, Serialize, Default)]
-pub struct Job {
-    pub id: u64,
-    pub kind: String,
-    pub name: String,
-    pub total: u64,
-    pub done: u64,
-    pub state: String, // running | completed | failed
-    pub message: String,
-    pub link: Option<String>,
-}
-
-pub struct GuiState {
-    pub cfg: Config,
-    pub cfg_path: PathBuf,
-    pub history: History,
-    pub identity: Identity,
-    pub lan_addr: SocketAddr,
-    pending: RwLock<HashMap<String, (PendingOffer, tokio::sync::oneshot::Sender<Decision>)>>,
-    lan_progress: tokio::sync::watch::Receiver<Progress>,
-    jobs: RwLock<Vec<Job>>,
-    next_job: AtomicU64,
-    visitor_token: Mutex<Option<String>>,
-}
-
-impl GuiState {
-    async fn new_job(&self, kind: &str, name: &str, total: u64) -> (u64, Arc<AtomicU64>) {
-        let id = self.next_job.fetch_add(1, Ordering::Relaxed) + 1;
-        let mut jobs = self.jobs.write().await;
-        jobs.insert(0, Job { id, kind: kind.into(), name: name.into(), total, state: "running".into(), ..Default::default() });
-        jobs.truncate(50);
-        (id, Arc::new(AtomicU64::new(0)))
-    }
-    async fn update_job(&self, id: u64, f: impl FnOnce(&mut Job)) {
-        if let Some(j) = self.jobs.write().await.iter_mut().find(|j| j.id == id) {
-            f(j);
-        }
-    }
-}
+type St = State<Arc<Engine>>;
 
 pub struct GuiOptions {
     pub port: u16,
     pub open_browser: bool,
 }
 
-/// Run the GUI until Ctrl-C.
+/// Run the web GUI until Ctrl-C.
 pub async fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: GuiOptions) -> Result<()> {
-    let identity = Identity::load_or_generate(&crate::config::data_dir(), &cfg.device_name)?;
-    tokio::fs::create_dir_all(&cfg.download_dir).await.ok();
-    let mut lan: ServerHandle = crate::lan::server::start(
-        identity.clone(),
-        ServerOptions {
-            device_name: cfg.device_name.clone(),
-            port: cfg.lan_port,
-            pin: cfg.pin.clone(),
-            force_overwrite: false,
-            dest_dir: cfg.download_dir.clone(),
-            rate_limit_mbps: cfg.rate_limit_mbps,
-        },
-    )
-    .await?;
-    let _announcer = Announcer::start(&cfg.device_name, lan.addr.port(), &identity.fingerprint, cfg.pin.is_some())?;
-
-    let state = Arc::new(GuiState {
-        cfg: cfg.clone(),
-        cfg_path,
-        history: history.clone(),
-        identity,
-        lan_addr: lan.addr,
-        pending: RwLock::new(HashMap::new()),
-        lan_progress: lan.progress.clone(),
-        jobs: RwLock::new(Vec::new()),
-        next_job: AtomicU64::new(0),
-        visitor_token: Mutex::new(cfg.global.storage_to_visitor_token.clone()),
-    });
-
-    // Forward incoming LAN offers into the pending map (+ auto-accept if configured).
-    let st = state.clone();
-    let auto = cfg.auto_accept;
-    let dest = cfg.download_dir.clone();
-    tokio::spawn(async move {
-        while let Some(IncomingOffer { transfer_id, manifest, peer, decision }) = lan.offers.recv().await {
-            if auto {
-                let _ = decision.send(Decision::Accept { dest_dir: dest.clone() });
-                let _ = st.history.start(Kind::LanReceive, &manifest.name, manifest.total_size, &manifest.sender, manifest.files.len() as u32);
-                continue;
-            }
-            let po = PendingOffer {
-                transfer_id: transfer_id.clone(),
-                sender: manifest.sender.clone(),
-                peer: peer.ip().to_string(),
-                name: manifest.name.clone(),
-                total_size: manifest.total_size,
-                files: manifest.files.iter().map(|f| (f.path.clone(), f.size)).collect(),
-            };
-            if st.cfg.notifications {
-                crate::ui::notify("uni-share: solicitud entrante", &format!("{} quiere enviarte {}", manifest.sender, manifest.name));
-            }
-            st.pending.write().await.insert(transfer_id, (po, decision));
-        }
-    });
-    // Record completed LAN receptions in history.
-    let st = state.clone();
-    tokio::spawn(async move {
-        while let Some(done) = lan.completed.recv().await {
-            if let Ok(id) = st.history.start(Kind::LanReceive, &done.name, done.total, &done.sender, done.files_total as u32) {
-                let _ = st.history.finish(id, Status::Completed, None);
-            }
-            if st.cfg.notifications {
-                crate::ui::notify("uni-share: transferencia recibida", &done.name);
-            }
-        }
-    });
-
-    let app = Router::new()
-        .route("/", get(index))
-        .route("/api/state", get(api_state))
-        .route("/api/devices", get(api_devices))
-        .route("/api/history", get(api_history))
-        .route("/api/offers/{id}/accept", post(api_accept))
-        .route("/api/offers/{id}/reject", post(api_reject))
-        .route("/api/send-lan", post(api_send_lan))
-        .route("/api/send-global", post(api_send_global))
-        .route("/api/download", post(api_download))
-        .with_state(state.clone());
-
+    let engine = Engine::start(cfg, cfg_path, history).await?;
+    let app = router(engine.clone());
     let addr: SocketAddr = format!("127.0.0.1:{}", opts.port).parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("binding {addr}"))?;
     let url = format!("http://{}", listener.local_addr()?);
-    crate::ui::info("GUI", format!("interfaz disponible en {url}  (LAN receiver en {})", state.lan_addr));
+    crate::ui::info("GUI", format!("interfaz disponible en {url}  (LAN receiver en {})", engine.lan_addr));
     if opts.open_browser {
-        let u = url.clone();
-        std::thread::spawn(move || {
-            let _ = std::process::Command::new(if cfg!(target_os = "macos") { "open" } else if cfg!(windows) { "cmd" } else { "xdg-open" })
-                .args(if cfg!(windows) { vec!["/C", "start", "", u.as_str()] } else { vec![u.as_str()] })
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
-        });
+        crate::engine::open_in_system(&url);
     }
-    axum::serve(listener, app).with_graceful_shutdown(async { let _ = tokio::signal::ctrl_c().await; }).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await?;
     Ok(())
 }
 
-async fn index() -> Html<&'static str> {
-    Html(INDEX_HTML)
+pub fn router(engine: Arc<Engine>) -> Router {
+    Router::new()
+        .route("/", get(|| async { Html(INDEX_HTML) }))
+        .route("/app.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], APP_CSS) }))
+        .route("/app.js", get(|| async { ([(header::CONTENT_TYPE, "application/javascript; charset=utf-8")], APP_JS) }))
+        .route("/api/state", get(api_state))
+        .route("/api/devices", get(api_devices))
+        .route("/api/history", get(api_history).delete(api_history_clear))
+        .route("/api/offers/{id}/accept", post(api_accept))
+        .route("/api/offers/{id}/reject", post(api_reject))
+        .route("/api/jobs/{id}/cancel", post(api_job_cancel))
+        .route("/api/jobs/{id}", axum::routing::delete(api_job_remove))
+        .route("/api/jobs/clear-finished", post(api_jobs_clear))
+        .route("/api/send-lan", post(api_send_lan))
+        .route("/api/send-global", post(api_send_global))
+        .route("/api/download", post(api_download))
+        .route("/api/fs", get(api_fs))
+        .route("/api/preview", get(api_preview))
+        .route("/api/open", post(api_open))
+        .route("/api/qr", get(api_qr))
+        .route("/api/config", get(api_config_get).put(api_config_put))
+        .route("/api/ticket/parse", post(api_ticket_parse))
+        .route("/api/ticket/create", post(api_ticket_create))
+        .route("/api/ticket/file", get(api_ticket_file))
+        .with_state(engine)
 }
 
 fn json_err(status: StatusCode, msg: impl ToString) -> Response {
     (status, Json(serde_json::json!({ "error": msg.to_string() }))).into_response()
 }
+fn bad(e: impl std::fmt::Display) -> Response {
+    json_err(StatusCode::BAD_REQUEST, format!("{e:#}"))
+}
+fn res_json<T: serde::Serialize>(r: Result<T>) -> Response {
+    match r {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => bad(e),
+    }
+}
 
-async fn api_state(State(s): State<Arc<GuiState>>) -> Json<serde_json::Value> {
-    let pending: Vec<PendingOffer> = s.pending.read().await.values().map(|(p, _)| p.clone()).collect();
-    let p = s.lan_progress.borrow().clone();
-    let jobs = s.jobs.read().await.clone();
-    Json(serde_json::json!({
-        "device_name": s.cfg.device_name,
-        "fingerprint": crate::lan::tls::short_fingerprint(&s.identity.fingerprint),
-        "lan_addr": s.lan_addr.to_string(),
-        "download_dir": s.cfg.download_dir,
-        "backend": s.cfg.global.backend,
-        "smash_configured": s.cfg.global.smash_api_key.as_deref().map(|k| !k.is_empty()).unwrap_or(false),
-        "pending": pending,
-        "receiving": { "active": p.total > 0 && !p.finished, "name": p.name, "sender": p.sender, "total": p.total, "received": p.received, "current_file": p.current_file },
-        "jobs": jobs,
-        "version": crate::APP_VERSION,
+async fn api_state(State(e): St) -> Response {
+    Json(e.snapshot().await).into_response()
+}
+async fn api_devices(State(e): St) -> Response {
+    Json(e.refresh_devices().await).into_response()
+}
+async fn api_history(State(e): St) -> Response {
+    res_json(e.history.list(200))
+}
+async fn api_history_clear(State(e): St) -> Response {
+    res_json(e.history.clear().map(|n| serde_json::json!({ "deleted": n })))
+}
+
+#[derive(Deserialize, Default)]
+struct AcceptReq {
+    #[serde(default)]
+    dest: Option<String>,
+}
+async fn api_accept(State(e): St, AxPath(id): AxPath<String>, body: Option<Json<AcceptReq>>) -> Response {
+    let dest = body.and_then(|Json(b)| b.dest).filter(|d| !d.trim().is_empty()).map(PathBuf::from);
+    res_json(e.accept_offer(&id, dest).await.map(|j| serde_json::json!({ "job": j })))
+}
+async fn api_reject(State(e): St, AxPath(id): AxPath<String>) -> Response {
+    res_json(e.reject_offer(&id).await.map(|_| serde_json::json!({ "ok": true })))
+}
+async fn api_job_cancel(State(e): St, AxPath(id): AxPath<u64>) -> Response {
+    if e.cancel_job(id).await { StatusCode::OK.into_response() } else { json_err(StatusCode::CONFLICT, "job is not running") }
+}
+async fn api_job_remove(State(e): St, AxPath(id): AxPath<u64>) -> Response {
+    if e.remove_job(id).await { StatusCode::OK.into_response() } else { json_err(StatusCode::CONFLICT, "job not found or still active") }
+}
+async fn api_jobs_clear(State(e): St) -> Response {
+    Json(serde_json::json!({ "removed": e.clear_finished().await })).into_response()
+}
+async fn api_send_lan(State(e): St, Json(r): Json<SendLanReq>) -> Response {
+    res_json(e.send_lan(r).await.map(|j| serde_json::json!({ "job": j })))
+}
+async fn api_send_global(State(e): St, Json(r): Json<SendGlobalReq>) -> Response {
+    res_json(e.send_global(r).await.map(|j| serde_json::json!({ "job": j })))
+}
+async fn api_download(State(e): St, Json(r): Json<DownloadReq>) -> Response {
+    res_json(e.download(r).await.map(|j| serde_json::json!({ "job": j })))
+}
+
+#[derive(Deserialize)]
+struct FsQuery {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    dirs_only: bool,
+}
+async fn api_fs(Query(q): Query<FsQuery>) -> Response {
+    res_json(crate::engine::list_dir(q.path.as_deref().map(Path::new), q.dirs_only, false))
+}
+
+#[derive(Deserialize)]
+struct PathQuery {
+    path: String,
+}
+async fn api_preview(Query(q): Query<PathQuery>) -> Response {
+    let p = PathBuf::from(&q.path);
+    if !p.exists() {
+        return bad("path not found");
+    }
+    match tokio::task::spawn_blocking(move || crate::fsutil::collect_files(&p)).await {
+        Ok(Ok(files)) => {
+            let total = crate::fsutil::total_size(&files);
+            let list: Vec<crate::engine::JobFile> =
+                files.iter().take(2000).map(|f| crate::engine::JobFile { path: f.rel_path.clone(), size: f.size }).collect();
+            Json(serde_json::json!({ "count": files.len(), "total": total, "files": list, "truncated": files.len() > 2000 })).into_response()
+        }
+        Ok(Err(e)) => bad(e),
+        Err(e) => bad(e),
+    }
+}
+async fn api_open(Json(r): Json<PathQuery>) -> Response {
+    let p = PathBuf::from(&r.path);
+    if !p.exists() {
+        return bad("path not found");
+    }
+    let target = if p.is_dir() { p } else { p.parent().map(Path::to_path_buf).unwrap_or(p) };
+    crate::engine::open_in_system(&target.display().to_string());
+    StatusCode::OK.into_response()
+}
+
+#[derive(Deserialize)]
+struct QrQuery {
+    data: String,
+}
+async fn api_qr(Query(q): Query<QrQuery>) -> Response {
+    match crate::ui::qr_svg(&q.data) {
+        Some(svg) => ([(header::CONTENT_TYPE, "image/svg+xml"), (header::CACHE_CONTROL, "no-store")], svg).into_response(),
+        None => bad("data too long for a QR code"),
+    }
+}
+
+async fn api_config_get(State(e): St) -> Response {
+    let mut cfg = e.config().await;
+    cfg.global.smash_api_key = cfg.global.smash_api_key.map(|_| "••••••".into());
+    cfg.global.storage_to_token = cfg.global.storage_to_token.map(|_| "••••••".into());
+    Json(serde_json::json!({ "path": e.cfg_path, "config": cfg })).into_response()
+}
+async fn api_config_put(State(e): St, Json(p): Json<ConfigPatch>) -> Response {
+    res_json(e.patch_config(p).await.map(|restart| serde_json::json!({ "ok": true, "restart_needed": restart })))
+}
+
+#[derive(Deserialize)]
+struct TicketParseReq {
+    data: String,
+}
+async fn api_ticket_parse(Json(r): Json<TicketParseReq>) -> Response {
+    res_json(Engine::parse_ticket(&r.data).map(|t| {
+        let uri = t.to_uri_compact().unwrap_or_default();
+        serde_json::json!({ "ticket": t, "uri": uri, "expired": t.is_expired(), "summary": t.summary() })
     }))
 }
-
-async fn api_devices(State(s): State<Arc<GuiState>>) -> Response {
-    match discover(Duration::from_secs(2), Some(&s.identity.fingerprint)).await {
-        Ok(d) => Json(d).into_response(),
-        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")),
-    }
-}
-
-async fn api_history(State(s): State<Arc<GuiState>>) -> Response {
-    match s.history.list(50) {
-        Ok(l) => Json(l).into_response(),
-        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")),
-    }
-}
-
-async fn api_accept(State(s): State<Arc<GuiState>>, AxPath(id): AxPath<String>) -> Response {
-    match s.pending.write().await.remove(&id) {
-        Some((_, tx)) => {
-            let _ = tx.send(Decision::Accept { dest_dir: s.cfg.download_dir.clone() });
-            StatusCode::OK.into_response()
-        }
-        None => json_err(StatusCode::NOT_FOUND, "offer not found"),
-    }
-}
-
-async fn api_reject(State(s): State<Arc<GuiState>>, AxPath(id): AxPath<String>) -> Response {
-    match s.pending.write().await.remove(&id) {
-        Some((p, tx)) => {
-            let _ = tx.send(Decision::Reject { reason: "rechazada desde la GUI".into() });
-            if let Ok(rid) = s.history.start(Kind::LanReceive, &p.name, p.total_size, &p.sender, p.files.len() as u32) {
-                let _ = s.history.finish(rid, Status::Rejected, None);
-            }
-            StatusCode::OK.into_response()
-        }
-        None => json_err(StatusCode::NOT_FOUND, "offer not found"),
-    }
+async fn api_ticket_create(State(e): St, Json(r): Json<TicketCreateReq>) -> Response {
+    res_json(e.create_ticket(r).await)
 }
 
 #[derive(Deserialize)]
-struct SendLanReq {
-    path: String,
-    target: String,
+struct TicketFileQuery {
+    uri: String,
     #[serde(default)]
-    fingerprint: Option<String>,
-    #[serde(default)]
-    port: Option<u16>,
-    #[serde(default)]
-    pin: Option<String>,
+    name: Option<String>,
 }
-
-async fn api_send_lan(State(s): State<Arc<GuiState>>, Json(req): Json<SendLanReq>) -> Response {
-    let path = PathBuf::from(&req.path);
-    if !path.exists() {
-        return json_err(StatusCode::BAD_REQUEST, "path not found");
-    }
-    let (ip, port) = match parse_target(&req.target, req.port.unwrap_or(s.cfg.lan_port)) {
-        Some(t) => t,
-        None => return json_err(StatusCode::BAD_REQUEST, "target must be ip or ip:port"),
+/// Serve a ticket as a `.unishare` attachment (browser "Save as").
+async fn api_ticket_file(Query(q): Query<TicketFileQuery>) -> Response {
+    let t = match Ticket::from_uri(&q.uri) {
+        Ok(t) => t,
+        Err(e) => return bad(e),
     };
-    let files = match collect_files(&path) {
-        Ok(f) => f,
-        Err(e) => return json_err(StatusCode::BAD_REQUEST, format!("{e:#}")),
+    let bytes = match t.encode() {
+        Ok(b) => b,
+        Err(e) => return bad(e),
     };
-    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-    let total = total_size(&files);
-    let (job, counter) = s.new_job("lan_send", &name, total).await;
-    let st = s.clone();
-    tokio::spawn(async move {
-        let res: Result<()> = async {
-            let hashes = hash_all(&files, |_| {}).await?;
-            let manifest = build_manifest(&st.cfg.device_name, &st.identity.fingerprint, &name, &files, &hashes);
-            let sender = Sender::new(ip, port, req.fingerprint.as_deref().filter(|f| !f.is_empty()), req.pin.clone())?;
-            let info = sender.info().await?;
-            let rid = st.history.start(Kind::LanSend, &name, total, &info.name, files.len() as u32)?;
-            let c2 = counter.clone();
-            let st2 = st.clone();
-            let progress: crate::lan::client::ProgressFn = Arc::new(move |n, f| {
-                let done = c2.fetch_add(n, Ordering::Relaxed) + n;
-                let st3 = st2.clone();
-                let f = f.to_string();
-                tokio::spawn(async move { st3.update_job(job, |j| { j.done = done; j.message = f; }).await });
-            });
-            let r = sender.send(&manifest, &files, &hashes, progress, Duration::from_secs(300), 0).await;
-            st.history.finish(rid, if r.is_ok() { Status::Completed } else { Status::Failed }, r.as_ref().err().map(|e| format!("{e:#}")).as_deref())?;
-            r.map(|_| ())
-        }
-        .await;
-        st.update_job(job, |j| match &res {
-            Ok(()) => { j.state = "completed".into(); j.done = j.total; j.message = "Verificación BLAKE3 correcta".into(); }
-            Err(e) => { j.state = "failed".into(); j.message = format!("{e:#}"); }
-        })
-        .await;
-    });
-    Json(serde_json::json!({ "job": job })).into_response()
-}
-
-#[derive(Deserialize)]
-struct SendGlobalReq {
-    path: String,
-    #[serde(default)]
-    backend: Option<String>,
-    #[serde(default)]
-    password: Option<String>,
-}
-
-async fn api_send_global(State(s): State<Arc<GuiState>>, Json(req): Json<SendGlobalReq>) -> Response {
-    let path = PathBuf::from(&req.path);
-    if !path.exists() {
-        return json_err(StatusCode::BAD_REQUEST, "path not found");
-    }
-    let files: Vec<_> = match collect_files(&path) {
-        Ok(f) => f.into_iter().filter(|f| f.size > 0).collect(),
-        Err(e) => return json_err(StatusCode::BAD_REQUEST, format!("{e:#}")),
-    };
-    if files.is_empty() {
-        return json_err(StatusCode::BAD_REQUEST, "nothing to upload");
-    }
-    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-    let total = total_size(&files);
-    let backend = req.backend.clone().unwrap_or_else(|| s.cfg.global.backend.clone());
-    let (job, counter) = s.new_job("global_upload", &name, total).await;
-    let st = s.clone();
-    tokio::spawn(async move {
-        let res: Result<crate::global::upload::UploadOutcome> = async {
-            let rid = st.history.start(Kind::GlobalUpload, &name, total, &backend, files.len() as u32)?;
-            let c2 = counter.clone();
-            let st2 = st.clone();
-            let progress: crate::global::upload::ProgressFn = Arc::new(move |n| {
-                let done = c2.fetch_add(n, Ordering::Relaxed) + n;
-                let st3 = st2.clone();
-                tokio::spawn(async move { st3.update_job(job, |j| j.done = done).await });
-            });
-            let opts = crate::global::upload::UploadOptions {
-                expiry_days: Some(st.cfg.global.expiry_days),
-                parallel_parts: st.cfg.global.parallel_parts,
-                password: req.password.clone().filter(|p| !p.is_empty()),
-                max_downloads: None,
-            };
-            let r = if backend == "smash" {
-                let key = st.cfg.global.smash_api_key.clone().filter(|k| !k.is_empty()).context("Smash API key not configured")?;
-                let client = crate::global::smash::SmashClient::new(&key, &st.cfg.global.smash_region)?;
-                crate::global::upload::upload_entries_smash(&client, &files, &name, &opts, progress, |_| {}).await
-            } else {
-                let token = {
-                    let mut vt = st.visitor_token.lock().await;
-                    match vt.clone() {
-                        Some(t) if !t.is_empty() => t,
-                        _ => {
-                            let mut cfg = st.cfg.clone();
-                            let t = cfg.ensure_visitor_token(&st.cfg_path)?;
-                            *vt = Some(t.clone());
-                            t
-                        }
-                    }
-                };
-                let client = crate::global::storage_to::Client::new(&st.cfg.global.storage_to_api, &token, st.cfg.global.storage_to_token.as_deref())?;
-                crate::global::upload::upload_entries(&client, &files, &opts, progress, |_| {}).await
-            };
-            match &r {
-                Ok(o) => {
-                    st.history.set_link(rid, &o.url, Some(&serde_json::json!({"owner_token": o.owner_token, "id": o.id, "kind": o.kind}).to_string()))?;
-                    st.history.finish(rid, Status::Completed, None)?;
-                }
-                Err(e) => st.history.finish(rid, Status::Failed, Some(&format!("{e:#}")))?,
-            }
-            r
-        }
-        .await;
-        st.update_job(job, |j| match &res {
-            Ok(o) => { j.state = "completed".into(); j.done = j.total; j.link = Some(o.url.clone()); j.message = "Subida completada".into(); }
-            Err(e) => { j.state = "failed".into(); j.message = format!("{e:#}"); }
-        })
-        .await;
-    });
-    Json(serde_json::json!({ "job": job })).into_response()
-}
-
-#[derive(Deserialize)]
-struct DownloadReq {
-    url: String,
-    #[serde(default)]
-    password: Option<String>,
-}
-
-async fn api_download(State(s): State<Arc<GuiState>>, Json(req): Json<DownloadReq>) -> Response {
-    let (job, counter) = s.new_job("download", &req.url, 0).await;
-    let st = s.clone();
-    tokio::spawn(async move {
-        let dest = st.cfg.download_dir.clone();
-        let res: Result<usize> = async {
-            let c2 = counter.clone();
-            let st2 = st.clone();
-            let progress: crate::download::http::ProgressFn = Arc::new(move |n| {
-                let done = c2.fetch_add(n, Ordering::Relaxed) + n;
-                let st3 = st2.clone();
-                tokio::spawn(async move { st3.update_job(job, |j| j.done = done).await });
-            });
-            let pw = req.password.clone().filter(|p| !p.is_empty());
-            if crate::download::swisstransfer::is_swisstransfer_url(&req.url) {
-                let mut c = crate::download::swisstransfer::SwissTransferClient::new()?;
-                let t = c.get_transfer(&req.url, pw.as_deref()).await?;
-                st.update_job(job, |j| { j.total = t.total_size; j.name = t.title.clone().unwrap_or_else(|| t.link_id.clone()); }).await;
-                let rid = st.history.start(Kind::Download, t.title.as_deref().unwrap_or(&t.link_id), t.total_size, &req.url, t.files.len() as u32)?;
-                let r = c.download_all(&t, &dest, false, progress, |_| {}).await;
-                st.history.finish(rid, if r.is_ok() { Status::Completed } else { Status::Failed }, r.as_ref().err().map(|e| format!("{e:#}")).as_deref())?;
-                Ok(r?.len())
-            } else {
-                let d = crate::download::storage_to::StorageDownloader::new()?;
-                let info = d.info(&req.url).await?;
-                if info.password_protected {
-                    d.verify_password(&info, pw.as_deref().context("password required")?).await?;
-                }
-                st.update_job(job, |j| { j.total = info.total_size; j.name = info.title.clone().unwrap_or_else(|| info.files[0].name.clone()); }).await;
-                let rid = st.history.start(Kind::Download, info.title.as_deref().unwrap_or(&info.files[0].name), info.total_size, &req.url, info.files.len() as u32)?;
-                let r = d.download_all(&info, &dest, false, progress, |_| {}).await;
-                st.history.finish(rid, if r.is_ok() { Status::Completed } else { Status::Failed }, r.as_ref().err().map(|e| format!("{e:#}")).as_deref())?;
-                Ok(r?.len())
-            }
-        }
-        .await;
-        st.update_job(job, |j| match &res {
-            Ok(n) => { j.state = "completed".into(); j.done = j.total; j.message = format!("{n} archivo(s) en {}", dest.display()); }
-            Err(e) => { j.state = "failed".into(); j.message = format!("{e:#}"); }
-        })
-        .await;
-    });
-    Json(serde_json::json!({ "job": job })).into_response()
-}
-
-#[allow(dead_code)]
-fn _content_type() -> (header::HeaderName, &'static str) {
-    (header::CONTENT_TYPE, "text/html; charset=utf-8")
+    let fname = q.name.filter(|n| !n.is_empty()).unwrap_or_else(|| t.default_filename());
+    (
+        [
+            (header::CONTENT_TYPE, "application/vnd.unishare".to_string()),
+            (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"", fname.replace('"', ""))),
+        ],
+        Body::from(bytes),
+    )
+        .into_response()
 }

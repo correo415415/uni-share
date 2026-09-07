@@ -1,0 +1,271 @@
+// Custom widget set for uni-share (no std-widgets styling).
+import { Theme } from "theme.slint";
+
+// ───────────────────────── icons (vector paths, 24x24 grid) ─────────────────────────
+export component Icon inherits Path {
+    in property <string> name;
+    in property <color> color: Theme.fg2;
+    width: 16px; height: 16px;
+    viewbox-width: 24; viewbox-height: 24;
+    stroke: color; stroke-width: 1.8px; fill: transparent;
+    commands: name == "plus" ? "M12 5 V19 M5 12 H19"
+        : name == "send" ? "M12 20 V8 M6 14 L12 8 L18 14 M4 4 H20"
+        : name == "upload" ? "M12 16 V4 M7 9 L12 4 L17 9 M4 20 H20"
+        : name == "download" ? "M12 4 V16 M7 11 L12 16 L17 11 M4 20 H20"
+        : name == "ticket" ? "M4 7 A2 2 0 0 1 6 5 H18 A2 2 0 0 1 20 7 V9 A2 2 0 0 0 20 13 V15 A2 2 0 0 1 18 17 H6 A2 2 0 0 1 4 15 V13 A2 2 0 0 0 4 9 Z"
+        : name == "stop" ? "M7 7 H17 V17 H7 Z"
+        : name == "trash" ? "M4 7 H20 M9 7 V4 H15 V7 M6 7 L7 20 H17 L18 7"
+        : name == "search" ? "M11 4 A7 7 0 1 0 11 18 A7 7 0 1 0 11 4 M20 20 L16.5 16.5"
+        : name == "gear" ? "M12 9 A3 3 0 1 0 12 15 A3 3 0 1 0 12 9 M12 2 V5 M12 19 V22 M2 12 H5 M19 12 H22 M4.9 4.9 L7 7 M17 17 L19.1 19.1 M4.9 19.1 L7 17 M17 7 L19.1 4.9"
+        : name == "moon" ? "M12 3 A9 9 0 1 0 21 12 A7 7 0 0 1 12 3 Z"
+        : name == "list" ? "M4 6 H20 M4 12 H20 M4 18 H20"
+        : name == "clock" ? "M12 3 A9 9 0 1 0 12 21 A9 9 0 1 0 12 3 M12 7 V12 L15 15"
+        : name == "arrow-up" ? "M12 19 V7 M7 12 L12 7 L17 12"
+        : name == "arrow-down" ? "M12 5 V17 M7 12 L12 17 L17 12"
+        : name == "globe" ? "M12 3 A9 9 0 1 0 12 21 A9 9 0 1 0 12 3 M12 16 V8 M9 11 L12 8 L15 11"
+        : name == "check" ? "M5 13 L9 17 L19 7"
+        : name == "x-circle" ? "M12 3 A9 9 0 1 0 12 21 A9 9 0 1 0 12 3 M15 9 L9 15 M9 9 L15 15"
+        : name == "refresh" ? "M20 12 A8 8 0 1 1 17.7 6.3 M20 4 V9 H15"
+        : name == "x" ? "M6 6 L18 18 M18 6 L6 18"
+        : name == "folder" ? "M3 7 A2 2 0 0 1 5 5 H9 L11 7 H19 A2 2 0 0 1 21 9 V17 A2 2 0 0 1 19 19 H5 A2 2 0 0 1 3 17 Z"
+        : name == "file" ? "M6 3 H14 L18 7 V21 H6 Z M14 3 V7 H18"
+        : name == "copy" ? "M9 9 H20 V20 H9 Z M5 15 H4 V4 H15 V5"
+        : name == "qr" ? "M4 4 H10 V10 H4 Z M14 4 H20 V10 H14 Z M4 14 H10 V20 H4 Z M14 14 H17 V17 H14 Z M17 17 H20 V20 H17 Z M20 14 V15"
+        : name == "chevron-up" ? "M6 15 L12 9 L18 15"
+        : name == "chevron-down" ? "M6 9 L12 15 L18 9"
+        : name == "inbox" ? "M4 13 H8 L10 16 H14 L16 13 H20 M4 13 L6 5 H18 L20 13 V19 H4 Z"
+        : "";
+}
+
+// ───────────────────────── buttons ─────────────────────────
+export component Button inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool> primary: false;
+    in property <bool> ghost: false;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    in property <string> tooltip;
+    callback clicked;
+
+    height: Theme.control-h;
+    width: (text == "" ? 0px : t.preferred-width + 24px) + (icon == "" ? 0px : (text == "" ? 32px : 22px));
+    border-radius: Theme.radius;
+    opacity: enabled ? 1 : 0.45;
+    background: primary ? Theme.accent-grad
+        : ghost ? (ta.has-hover ? Theme.bg3 : transparent)
+        : (ta.has-hover ? Theme.bg4 : Theme.bg3);
+    border-width: (primary || ghost) ? 0px : 1px;
+    border-color: ta.has-hover ? Theme.line2 : Theme.line;
+    animate background { duration: 120ms; }
+
+    HorizontalLayout {
+        padding-left: text == "" ? 0px : 11px; padding-right: text == "" ? 0px : 11px;
+        spacing: 6px; alignment: center;
+        if icon != "": Icon { name: icon; color: primary ? Theme.on-accent : (danger ? Theme.err : Theme.fg); vertical-alignment: center; }
+        t := Text { text: root.text; color: primary ? Theme.on-accent : (danger ? Theme.err : Theme.fg); font-size: Theme.fs; font-weight: primary ? 600 : 500; vertical-alignment: center; visible: text != ""; }
+    }
+    ta := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { root.clicked(); } }
+    if tooltip != "" && ta.has-hover: Rectangle {
+        y: parent.height + 6px; x: 0; width: tt.preferred-width + 16px; height: 24px; z: 10;
+        background: Theme.bg4; border-radius: 5px; border-width: 1px; border-color: Theme.line2;
+        tt := Text { text: tooltip; color: Theme.fg; font-size: Theme.fs-sm; vertical-alignment: center; horizontal-alignment: center; }
+    }
+}
+
+// ───────────────────────── text input ─────────────────────────
+export component Input inherits Rectangle {
+    in-out property <string> text <=> te.text;
+    in property <string> placeholder;
+    in property <bool> password: false;
+    in property <bool> mono: false;
+    in property <bool> read-only: false;
+    callback accepted(string);
+    callback edited(string);
+    height: 34px;
+    border-radius: Theme.radius; background: Theme.bg3;
+    border-width: 1px; border-color: te.has-focus ? Theme.accent : Theme.line;
+    animate border-color { duration: 120ms; }
+    HorizontalLayout {
+        padding-left: 10px; padding-right: 10px;
+        te := TextInput {
+            color: Theme.fg; font-size: mono ? 12px : Theme.fs; font-family: mono ? Theme.mono : "";
+            vertical-alignment: center; single-line: true; input-type: password ? InputType.password : InputType.text;
+            read-only: root.read-only;
+            accepted => { root.accepted(self.text); }
+            edited => { root.edited(self.text); }
+        }
+    }
+    if te.text == "" && placeholder != "": Text {
+        x: 10px; text: placeholder; color: Theme.fg3; font-size: Theme.fs; vertical-alignment: center; height: parent.height;
+    }
+    public function focus() { te.focus(); }
+}
+
+export component TextArea inherits Rectangle {
+    in-out property <string> text <=> te.text;
+    in property <string> placeholder;
+    height: 72px;
+    border-radius: Theme.radius; background: Theme.bg3;
+    border-width: 1px; border-color: te.has-focus ? Theme.accent : Theme.line;
+    Flickable {
+        x: 10px; y: 8px; width: parent.width - 20px; height: parent.height - 16px;
+        te := TextInput { color: Theme.fg; font-size: Theme.fs; wrap: word-wrap; single-line: false; width: parent.width; }
+    }
+    if te.text == "" && placeholder != "": Text { x: 10px; y: 8px; text: placeholder; color: Theme.fg3; font-size: Theme.fs; }
+}
+
+// ───────────────────────── checkbox ─────────────────────────
+export component Check inherits Rectangle {
+    in-out property <bool> checked;
+    in property <string> text;
+    callback toggled(bool);
+    height: 24px; width: box.width + 8px + lbl.preferred-width;
+    HorizontalLayout {
+        spacing: 8px; alignment: start;
+        box := Rectangle {
+            width: 16px; height: 16px; y: 4px; border-radius: 4px;
+            background: checked ? Theme.accent : Theme.bg3; border-width: 1px; border-color: checked ? Theme.accent : Theme.line2;
+            animate background { duration: 100ms; }
+            if checked: Icon { name: "check"; color: Theme.on-accent; width: 12px; height: 12px; stroke-width: 2.4px; x: 2px; y: 2px; }
+        }
+        lbl := Text { text: root.text; color: Theme.fg2; font-size: Theme.fs; vertical-alignment: center; }
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { root.checked = !root.checked; root.toggled(root.checked); } }
+}
+
+// ───────────────────────── segmented control ─────────────────────────
+export component Segmented inherits Rectangle {
+    in property <[string]> items;
+    in-out property <int> current: 0;
+    callback changed(int);
+    height: Theme.control-h; width: hl.preferred-width + 6px;
+    border-radius: Theme.radius; background: Theme.bg3; border-width: 1px; border-color: Theme.line;
+    hl := HorizontalLayout {
+        padding: 3px; spacing: 3px;
+        for it[i] in items: Rectangle {
+            width: t.preferred-width + 24px; border-radius: Theme.radius-sm;
+            background: i == current ? Theme.bg4 : (ta.has-hover ? Theme.bg4.with-alpha(0.5) : transparent);
+            t := Text { text: it; color: i == current ? Theme.fg : Theme.fg2; font-size: Theme.fs; font-weight: 500; vertical-alignment: center; horizontal-alignment: center; }
+            ta := TouchArea { mouse-cursor: pointer; clicked => { root.current = i; root.changed(i); } }
+        }
+    }
+}
+
+// ───────────────────────── progress bar ─────────────────────────
+export component ProgressBar inherits Rectangle {
+    in property <float> value: 0; // 0..100
+    in property <string> state: "running";
+    in property <bool> indeterminate: false;
+    height: 8px; border-radius: 6px; background: Theme.bg4; clip: true;
+    Rectangle {
+        x: 0; height: parent.height; border-radius: 6px;
+        width: indeterminate ? parent.width * 0.3 : parent.width * clamp(value, 0, 100) / 100;
+        background: state == "completed" ? Theme.ok : (state == "failed" || state == "cancelled") ? Theme.err : Theme.accent-grad;
+        animate width { duration: 300ms; easing: ease-out; }
+    }
+}
+
+// ───────────────────────── badge ─────────────────────────
+export component Badge inherits Rectangle {
+    in property <string> text;
+    in property <string> kind: "running"; // running queued completed failed cancelled
+    height: 18px; width: t.preferred-width + 16px; border-radius: 9px;
+    background: kind == "running" ? Theme.info.with-alpha(0.15) : kind == "completed" ? Theme.ok.with-alpha(0.15)
+        : kind == "failed" ? Theme.err.with-alpha(0.15) : kind == "cancelled" ? Theme.warn.with-alpha(0.15) : Theme.bg4;
+    t := Text {
+        text: root.text; font-size: 11px; font-weight: 600; vertical-alignment: center; horizontal-alignment: center;
+        color: kind == "running" ? Theme.info : kind == "completed" ? Theme.ok : kind == "failed" ? Theme.err : kind == "cancelled" ? Theme.warn : Theme.fg2;
+    }
+}
+
+// ───────────────────────── sidebar item ─────────────────────────
+export component SideItem inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <int> count: -1;
+    in property <bool> active: false;
+    callback clicked;
+    height: 32px; border-radius: 7px;
+    background: active ? Theme.sel : (ta.has-hover ? Theme.bg3 : transparent);
+    border-width: 1px; border-color: active ? Theme.sel-line : transparent;
+    HorizontalLayout {
+        padding-left: 9px; padding-right: 9px; spacing: 9px;
+        if icon != "": Icon { name: icon; width: 15px; height: 15px; color: active ? Theme.fg : Theme.fg2; vertical-alignment: center; }
+        Text { text: root.text; color: active ? Theme.fg : Theme.fg2; font-size: Theme.fs; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+        if count >= 0: Rectangle {
+            width: max(20px, ct.preferred-width + 12px); height: 18px; y: 7px; border-radius: 9px; background: Theme.bg4;
+            ct := Text { text: count; color: active ? Theme.accent : Theme.fg3; font-size: 11px; vertical-alignment: center; horizontal-alignment: center; }
+        }
+    }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+// ───────────────────────── tab ─────────────────────────
+export component Tab inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    callback clicked;
+    width: t.preferred-width + 24px; height: 34px;
+    t := Text { text: root.text; color: active || ta.has-hover ? Theme.fg : Theme.fg2; font-size: Theme.fs; font-weight: 500; vertical-alignment: center; horizontal-alignment: center; }
+    Rectangle { y: parent.height - 2px; height: 2px; background: active ? Theme.accent : transparent; }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+// ───────────────────────── key/value line ─────────────────────────
+export component KV inherits HorizontalLayout {
+    in property <string> k;
+    in property <string> v;
+    in property <bool> mono: false;
+    spacing: 12px; height: 22px;
+    Text { text: k; color: Theme.fg3; font-size: Theme.fs; width: 110px; vertical-alignment: center; }
+    Text { text: v; color: Theme.fg; font-size: mono ? 12px : Theme.fs; font-family: mono ? Theme.mono : ""; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+}
+
+// ───────────────────────── label + hint ─────────────────────────
+export component FieldLabel inherits Text {
+    color: Theme.fg2; font-size: 12px; font-weight: 500;
+}
+export component Hint inherits Text {
+    color: Theme.fg3; font-size: Theme.fs-sm; wrap: word-wrap;
+}
+
+// ───────────────────────── dialog frame ─────────────────────────
+export component Dialog inherits Rectangle {
+    in property <string> title;
+    in property <length> dialog-width: 720px;
+    callback close;
+    background: #05080cb3; // dim
+    TouchArea { clicked => { root.close(); } }
+    Rectangle {
+        width: min(root.dialog-width, root.width - 32px); height: min(vl.preferred-height, root.height - 48px);
+        border-radius: Theme.radius-lg; background: Theme.bg2; border-width: 1px; border-color: Theme.line2;
+        drop-shadow-blur: 40px; drop-shadow-color: #00000073; drop-shadow-offset-y: 12px;
+        TouchArea { } // swallow clicks
+        vl := VerticalLayout {
+            Rectangle {
+                height: 50px; border-radius: Theme.radius-lg;
+                HorizontalLayout {
+                    padding-left: 18px; padding-right: 12px; spacing: 10px;
+                    Text { text: root.title; color: Theme.fg; font-size: Theme.fs-lg; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; }
+                    Button { icon: "x"; ghost: true; y: 9px; clicked => { root.close(); } }
+                }
+                Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+            }
+            @children
+        }
+    }
+}
+
+// ───────────────────────── toast ─────────────────────────
+export component Toast inherits Rectangle {
+    in property <string> text;
+    in property <string> kind: "info";
+    callback dismiss;
+    width: min(380px, t.preferred-width + 48px); height: t.preferred-height + 20px;
+    border-radius: 10px; background: Theme.bg3; border-width: 1px; border-color: Theme.line2;
+    drop-shadow-blur: 30px; drop-shadow-color: #00000066; drop-shadow-offset-y: 8px;
+    Rectangle { x: 0; width: 3px; height: parent.height; border-radius: 2px; background: kind == "ok" ? Theme.ok : kind == "err" ? Theme.err : Theme.info; }
+    t := Text { x: 14px; y: 10px; width: parent.width - 40px; text: root.text; color: Theme.fg; font-size: Theme.fs; wrap: word-wrap; }
+    Button { icon: "x"; ghost: true; x: parent.width - 30px; y: 4px; width: 24px; height: 24px; clicked => { root.dismiss(); } }
+}

@@ -81,6 +81,19 @@ tempfile = "3"
 bytesize = "2"
 regex = "1"
 
+# --- native desktop GUI (optional; `cargo build --features slint`) ---
+slint = { version = "1.9", optional = true, default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "accessibility"] }
+rfd = { version = "0.15", optional = true, default-features = false, features = ["xdg-portal", "tokio"] }
+image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
+
+[features]
+default = []
+# Native Slint window (`uni-share app`). Needs system libs on Linux: libfontconfig1-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev.
+slint = ["dep:slint", "dep:rfd", "dep:image", "dep:slint-build"]
+
+[build-dependencies]
+slint-build = { version = "1.9", optional = true }
+
 [dev-dependencies]
 tempfile = "3"
 

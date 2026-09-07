@@ -1,0 +1,610 @@
+// uni-share — native desktop window (Slint).
+import { Theme } from "theme.slint";
+import { Icon, Button, Input, TextArea, Check, Segmented, ProgressBar, Badge, SideItem, Tab, KV, FieldLabel, Hint, Dialog, Toast } from "widgets.slint";
+export { Theme }
+
+// ───────────────────────── data ─────────────────────────
+export struct JobRow {
+    id: int,
+    kind: string,        // lan_send lan_receive global_upload download
+    kind-label: string,
+    name: string,
+    peer: string,
+    total: int,          // bytes (fits i32? no) -> we pass formatted strings + percent
+    size-text: string,
+    percent: float,
+    state: string,       // running queued completed failed cancelled
+    state-label: string,
+    speed-text: string,
+    eta-text: string,
+    started-text: string,
+    message: string,
+    current-file: string,
+    link: string,
+    ticket-uri: string,
+    ticket-path: string,
+    dest: string,
+    done-text: string,
+    files-count: int,
+    finished-text: string,
+    indeterminate: bool,
+}
+export struct FileRow { path: string, size-text: string }
+export struct DeviceRow { name: string, addr: string, fingerprint: string, pin: bool }
+export struct OfferRow { id: string, sender: string, name: string, size-text: string, files-count: int, peer: string, fingerprint: string, compressed: bool }
+export struct FilterRow { id: string, label: string, icon: string, count: int }
+export struct HistoryRow { when: string, kind: string, name: string, size-text: string, status: string, peer: string }
+export struct ToastRow { id: int, text: string, kind: string }
+export struct FsEntry { name: string, path: string, dir: bool, size-text: string }
+
+// ───────────────────────── main window ─────────────────────────
+export component MainWindow inherits Window {
+    title: "uni-share";
+    min-width: 900px; min-height: 560px;
+    preferred-width: 1280px; preferred-height: 800px;
+    background: Theme.bg;
+    default-font-size: Theme.fs;
+    default-font-family: "Inter, Segoe UI, Noto Sans, DejaVu Sans, sans-serif";
+    icon: @image-url("icon.png");
+
+    // ---- state from Rust ----
+    in property <string> version;
+    in property <string> device-name;
+    in property <string> fingerprint;
+    in property <string> fingerprint-full;
+    in property <string> lan-addr;
+    in property <string> local-ip;
+    in property <string> download-dir;
+    in property <bool> pin-required;
+    in property <bool> auto-accept;
+    in property <string> speed-down: "0 B/s";
+    in property <string> speed-up: "0 B/s";
+    in property <int> active-count;
+    in property <[JobRow]> jobs;
+    in property <[FilterRow]> filters;
+    in property <[DeviceRow]> devices;
+    in property <[OfferRow]> offers;
+    in property <[FileRow]> sel-files;
+    in property <string> sel-log;
+    in property <[HistoryRow]> history;
+    in property <[ToastRow]> toasts;
+    in property <image> qr-image;
+    in property <string> qr-caption;
+    in property <[FsEntry]> fs-entries;
+    in property <string> fs-path;
+    in property <[string]> fs-roots;
+    in property <string> preview-text;
+    in property <string> dialog-error;
+
+    // ---- UI state ----
+    in-out property <string> filter: "all";
+    in-out property <string> query;
+    in-out property <int> selected: -1;
+    in-out property <int> tab: 0;           // 0 general 1 files 2 share 3 log 4 history
+    in-out property <string> sort-key: "started";
+    in-out property <bool> sort-desc: true;
+    in-out property <bool> details-collapsed: false;
+    in-out property <length> details-h: 260px;
+    in-out property <string> dialog: "";    // "" | new | share | settings | fs | confirm
+    in-out property <int> new-mode: 0;      // 0 lan 1 global 2 download 3 ticket
+    in-out property <string> share-what: "link";
+    in-out property <string> confirm-text;
+
+    // new-transfer form
+    in-out property <string> f-path;
+    in-out property <string> f-target;
+    in-out property <int> f-device: -1;
+    in-out property <string> f-pin;
+    in-out property <bool> f-compress;
+    in-out property <string> f-password;
+    in-out property <string> f-expiry: "7";
+    in-out property <string> f-max;
+    in-out property <string> f-message;
+    in-out property <bool> f-ticket: true;
+    in-out property <string> f-url;
+    in-out property <string> f-dest;
+    in-out property <bool> f-force;
+    in-out property <string> f-links;
+    in-out property <string> f-name;
+    // settings form
+    in-out property <string> s-name;
+    in-out property <string> s-pin;
+    in-out property <string> s-dir;
+    in-out property <string> s-rate;
+    in-out property <string> s-parallel;
+    in-out property <string> s-expiry;
+    in-out property <bool> s-auto;
+    in-out property <bool> s-notif;
+    in-out property <bool> s-compress;
+    in-out property <string> fs-target-field;   // which field the fs dialog fills
+    in-out property <bool> fs-dirs-only;
+
+    // ---- callbacks to Rust ----
+    callback select-job(int);
+    callback sort-by(string);
+    callback set-filter(string);
+    callback set-query(string);
+    callback set-tab(int);
+    callback cancel-job(int);
+    callback remove-job(int);
+    callback clear-finished();
+    callback rescan();
+    callback accept-offer(string, string);
+    callback reject-offer(string);
+    callback open-path(string);
+    callback copy-text(string);
+    callback open-url(string);
+    callback toggle-theme();
+    callback submit-new();
+    callback submit-settings();
+    callback open-settings();
+    callback open-share(int, string);
+    callback save-ticket(string);
+    callback save-qr(string);
+    callback fs-open(string);
+    callback fs-pick(string);
+    callback preview-path(string);
+    callback preview-ticket(string);
+    callback dismiss-toast(int);
+    callback confirm-yes();
+    callback load-history();
+    callback shortcut(string);
+
+    function fmt-tab(i: int) -> string { i == 0 ? "General" : i == 1 ? "Archivos" : i == 2 ? "Compartir" : i == 3 ? "Registro" : "Historial"; }
+    function sel() -> JobRow { selected >= 0 && selected < jobs.length ? jobs[selected] : { id: -1 }; }
+    function sel-active() -> bool { sel().state == "running" || sel().state == "queued"; }
+
+    forward-focus: keys;
+    keys := FocusScope {
+        key-pressed(ev) => {
+            if root.dialog != "" { if ev.text == Key.Escape { root.dialog = ""; return accept; } return reject; }
+            if ev.text == "n" || ev.text == "l" { root.new-mode = 0; root.dialog = "new"; return accept; }
+            if ev.text == "u" { root.new-mode = 1; root.dialog = "new"; return accept; }
+            if ev.text == "d" { root.new-mode = 2; root.dialog = "new"; return accept; }
+            if ev.text == "t" { root.new-mode = 3; root.dialog = "new"; return accept; }
+            if ev.text == "," { root.open-settings(); return accept; }
+            if ev.text == Key.Delete && root.sel-active() { root.cancel-job(root.sel().id); return accept; }
+            if ev.text == Key.DownArrow { root.select-job(min(root.selected + 1, root.jobs.length - 1)); return accept; }
+            if ev.text == Key.UpArrow { root.select-job(max(root.selected - 1, 0)); return accept; }
+            if ev.text == Key.Escape { root.select-job(-1); return accept; }
+            reject
+        }
+
+        VerticalLayout {
+            // ═══════════ toolbar ═══════════
+            Rectangle {
+                height: Theme.toolbar-h; background: Theme.bg2;
+                Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+                HorizontalLayout {
+                    padding-left: 12px; padding-right: 12px; spacing: 6px; alignment: start;
+                    // brand
+                    HorizontalLayout {
+                        spacing: 10px; padding-right: 10px;
+                        Rectangle { width: 28px; height: 28px; y: 10px; border-radius: 8px; background: Theme.accent-grad;
+                            Text { text: "u"; color: Theme.on-accent; font-size: 14px; font-weight: 800; vertical-alignment: center; horizontal-alignment: center; } }
+                        Text { text: "uni-share"; color: Theme.fg; font-weight: 700; vertical-alignment: center; }
+                        Text { text: version; color: Theme.fg3; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    }
+                    Rectangle { width: 1px; height: 24px; y: 12px; background: Theme.line; }
+                    Button { y: 8px; text: "Nueva"; icon: "plus"; primary: true; tooltip: "Nueva transferencia (N)"; clicked => { root.new-mode = 0; root.dialog = "new"; } }
+                    Button { y: 8px; text: "Enviar LAN"; icon: "send"; clicked => { root.new-mode = 0; root.dialog = "new"; } }
+                    Button { y: 8px; text: "Compartir link"; icon: "upload"; clicked => { root.new-mode = 1; root.dialog = "new"; } }
+                    Button { y: 8px; text: "Descargar"; icon: "download"; clicked => { root.new-mode = 2; root.dialog = "new"; } }
+                    Button { y: 8px; text: "Ticket"; icon: "ticket"; clicked => { root.new-mode = 3; root.dialog = "new"; } }
+                    Rectangle { width: 1px; height: 24px; y: 12px; background: Theme.line; }
+                    Button { y: 8px; icon: "stop"; enabled: root.sel-active(); tooltip: "Cancelar (Supr)"; clicked => { root.confirm-text = "¿Cancelar «" + root.sel().name + "»?"; root.dialog = "confirm"; } }
+                    Button { y: 8px; icon: "trash"; tooltip: "Limpiar finalizadas"; clicked => { root.clear-finished(); } }
+                    Rectangle { horizontal-stretch: 1; }
+                    // search
+                    Rectangle {
+                        y: 8px; width: 240px; height: 32px; border-radius: Theme.radius; background: Theme.bg3; border-width: 1px; border-color: q.has-focus ? Theme.accent : Theme.line;
+                        HorizontalLayout { padding-left: 10px; padding-right: 10px; spacing: 6px;
+                            Icon { name: "search"; color: Theme.fg3; width: 15px; height: 15px; vertical-alignment: center; }
+                            q := TextInput { text <=> root.query; color: Theme.fg; font-size: Theme.fs; vertical-alignment: center; single-line: true; edited => { root.set-query(self.text); } }
+                        }
+                        if root.query == "": Text { x: 31px; text: "Filtrar transferencias…"; color: Theme.fg3; height: parent.height; vertical-alignment: center; }
+                    }
+                    Button { y: 8px; icon: "moon"; ghost: true; tooltip: "Tema"; clicked => { root.toggle-theme(); } }
+                    Button { y: 8px; icon: "gear"; ghost: true; tooltip: "Ajustes (,)"; clicked => { root.open-settings(); } }
+                }
+            }
+
+            HorizontalLayout {
+                // ═══════════ sidebar ═══════════
+                Rectangle {
+                    width: Theme.sidebar-w; background: Theme.bg2;
+                    Rectangle { x: parent.width - 1px; width: 1px; background: Theme.line; }
+                    VerticalLayout {
+                        padding: 8px; spacing: 4px;
+                        Text { text: "TRANSFERENCIAS"; color: Theme.fg3; font-size: Theme.fs-xs; font-weight: 700; letter-spacing: 0.9px; height: 26px; vertical-alignment: end; x: 8px; }
+                        for f in filters: SideItem { text: f.label; icon: f.icon; count: f.count; active: root.filter == f.id; clicked => { root.set-filter(f.id); } }
+                        HorizontalLayout { height: 30px; padding-top: 8px;
+                            Text { text: "DISPOSITIVOS LAN"; color: Theme.fg3; font-size: Theme.fs-xs; font-weight: 700; letter-spacing: 0.9px; vertical-alignment: center; horizontal-stretch: 1; }
+                            Button { icon: "refresh"; ghost: true; width: 22px; height: 22px; clicked => { root.rescan(); } }
+                        }
+                        if devices.length == 0: Hint { text: "Ningún dispositivo encontrado. Abre uni-share en el otro equipo."; }
+                        for d[i] in devices: Rectangle {
+                            height: 40px; border-radius: 7px; background: dta.has-hover ? Theme.bg3 : transparent;
+                            HorizontalLayout { padding-left: 9px; padding-right: 9px; spacing: 9px;
+                                Rectangle { width: 8px; height: 8px; y: 16px; border-radius: 4px; background: d.pin ? Theme.warn : Theme.ok; }
+                                VerticalLayout { alignment: center; spacing: 1px;
+                                    Text { text: d.name; color: Theme.fg; font-size: Theme.fs; overflow: elide; }
+                                    Text { text: d.addr + (d.pin ? " · PIN" : ""); color: Theme.fg3; font-size: 11px; font-family: Theme.mono; overflow: elide; }
+                                }
+                            }
+                            dta := TouchArea { mouse-cursor: pointer; clicked => { root.f-device = i; root.f-target = ""; root.new-mode = 0; root.dialog = "new"; } }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                        // me card
+                        Rectangle {
+                            height: 74px; border-radius: Theme.radius; background: Theme.bg3; border-width: 1px; border-color: Theme.line;
+                            VerticalLayout { padding: 10px; spacing: 2px;
+                                Text { text: device-name; color: Theme.fg; font-weight: 600; overflow: elide; }
+                                Text { text: fingerprint; color: Theme.fg3; font-size: 11px; font-family: Theme.mono; }
+                                HorizontalLayout { Text { text: "LAN"; color: Theme.fg2; font-size: 12px; horizontal-stretch: 1; } Text { text: local-ip + ":" + lan-addr; color: Theme.fg3; font-size: 11px; font-family: Theme.mono; overflow: elide; } }
+                                HorizontalLayout { Text { text: pin-required ? "PIN requerido" : "Sin PIN"; color: Theme.fg2; font-size: 12px; horizontal-stretch: 1; } Text { text: auto-accept ? "auto-aceptar" : "confirmar"; color: Theme.fg2; font-size: 12px; } }
+                            }
+                        }
+                    }
+                }
+
+                // ═══════════ main ═══════════
+                VerticalLayout {
+                    // offers + table
+                    Rectangle {
+                        vertical-stretch: 1; background: Theme.bg; clip: true;
+                        VerticalLayout {
+                            // pending offers
+                            for o in offers: Rectangle {
+                                height: 70px;
+                                Rectangle {
+                                    x: 12px; y: 10px; width: parent.width - 24px; height: 60px; border-radius: Theme.radius; background: Theme.bg2; border-width: 1px; border-color: Theme.warn;
+                                    HorizontalLayout { padding: 10px; spacing: 12px;
+                                        Rectangle { width: 40px; height: 40px; border-radius: 10px; background: Theme.warn.with-alpha(0.15); Icon { name: "arrow-down"; color: Theme.warn; width: 20px; height: 20px; x: 10px; y: 10px; } }
+                                        VerticalLayout { alignment: center; spacing: 2px; horizontal-stretch: 1;
+                                            Text { text: o.sender + " quiere enviarte " + o.name; color: Theme.fg; font-weight: 600; overflow: elide; }
+                                            Text { text: o.size-text + " · " + o.files-count + " archivo(s)" + (o.compressed ? " · comprimido" : "") + " · desde " + o.peer + " · huella " + o.fingerprint; color: Theme.fg2; font-size: 12px; overflow: elide; }
+                                        }
+                                        Button { y: 4px; text: "Rechazar"; clicked => { root.reject-offer(o.id); } }
+                                        Button { y: 4px; text: "Carpeta…"; clicked => { root.fs-target-field = "offer:" + o.id; root.fs-dirs-only = true; root.fs-open(root.download-dir); root.dialog = "fs"; } }
+                                        Button { y: 4px; text: "Aceptar"; primary: true; clicked => { root.accept-offer(o.id, ""); } }
+                                    }
+                                }
+                            }
+                            // header
+                            Rectangle {
+                                height: 30px; background: Theme.bg2;
+                                Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+                                HorizontalLayout {
+                                    padding-left: 10px; padding-right: 10px;
+                                    for c in [ { k: "name", l: "Nombre", w: 0.30 }, { k: "kind", l: "Tipo", w: 0.10 }, { k: "size", l: "Tamaño", w: 0.08 }, { k: "progress", l: "Progreso", w: 0.20 }, { k: "state", l: "Estado", w: 0.09 }, { k: "speed", l: "Velocidad", w: 0.08 }, { k: "eta", l: "ETA", w: 0.06 }, { k: "peer", l: "Origen / destino", w: 0.09 } ]: Rectangle {
+                                        width: (parent.width - 20px) * c.w;
+                                        HorizontalLayout { spacing: 4px; alignment: start;
+                                            Text { text: c.l; color: hta.has-hover ? Theme.fg : Theme.fg3; font-size: Theme.fs-sm; font-weight: 600; vertical-alignment: center; }
+                                            if root.sort-key == c.k: Icon { name: root.sort-desc ? "chevron-down" : "chevron-up"; color: Theme.accent; width: 12px; height: 12px; vertical-alignment: center; stroke-width: 2.4px; }
+                                        }
+                                        hta := TouchArea { mouse-cursor: pointer; clicked => { root.sort-by(c.k); } }
+                                    }
+                                }
+                            }
+                            // rows
+                            if jobs.length == 0 && offers.length == 0: Rectangle {
+                                VerticalLayout { alignment: center; spacing: 6px;
+                                    Text { text: "⇅"; color: Theme.fg3; font-size: 42px; horizontal-alignment: center; opacity: 0.5; }
+                                    Text { text: "No hay transferencias en esta vista."; color: Theme.fg3; horizontal-alignment: center; }
+                                    Text { text: "Pulsa N para empezar, o arrastra aquí un archivo o un ticket .unishare."; color: Theme.fg3; font-size: Theme.fs-sm; horizontal-alignment: center; }
+                                }
+                            }
+                            Flickable {
+                                viewport-height: rows.preferred-height;
+                                rows := VerticalLayout {
+                                    alignment: start;
+                                    for j[i] in jobs: Rectangle {
+                                        height: Theme.row-h;
+                                        background: root.selected == i ? Theme.sel : (rta.has-hover ? Theme.bg2 : transparent);
+                                        Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+                                        if root.selected == i: Rectangle { x: 0; width: 3px; background: Theme.accent; }
+                                        HorizontalLayout {
+                                            padding-left: 10px; padding-right: 10px;
+                                            // name
+                                            Rectangle { width: (parent.width - 20px) * 0.30;
+                                                HorizontalLayout { spacing: 8px; alignment: start;
+                                                    Rectangle { width: 22px; height: 22px; y: 6px; border-radius: 6px; background: Theme.bg4;
+                                                        Icon { name: j.kind == "lan_send" ? "arrow-up" : j.kind == "lan_receive" ? "arrow-down" : j.kind == "global_upload" ? "globe" : "download"; width: 13px; height: 13px; x: 4.5px; y: 4.5px; stroke-width: 2.2px;
+                                                            color: (j.kind == "lan_send" || j.kind == "global_upload") ? Theme.accent2 : Theme.accent; } }
+                                                    Text { text: j.name; color: Theme.fg; font-weight: 500; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                                                } }
+                                            Text { width: (parent.width - 20px) * 0.10; text: j.kind-label; color: Theme.fg3; vertical-alignment: center; overflow: elide; }
+                                            Text { width: (parent.width - 20px) * 0.08; text: j.size-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; vertical-alignment: center; overflow: elide; }
+                                            Rectangle { width: (parent.width - 20px) * 0.20;
+                                                HorizontalLayout { spacing: 8px; padding-right: 10px;
+                                                    ProgressBar { y: 13px; value: j.percent; state: j.state; indeterminate: j.indeterminate; horizontal-stretch: 1; }
+                                                    Text { width: 44px; text: j.indeterminate ? "…" : round(j.percent) + "%"; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; horizontal-alignment: right; vertical-alignment: center; }
+                                                } }
+                                            Rectangle { width: (parent.width - 20px) * 0.09; Badge { y: 8px; text: j.state-label; kind: j.state; } }
+                                            Text { width: (parent.width - 20px) * 0.08; text: j.speed-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; vertical-alignment: center; }
+                                            Text { width: (parent.width - 20px) * 0.06; text: j.eta-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; vertical-alignment: center; }
+                                            Text { width: (parent.width - 20px) * 0.09; text: j.peer; color: Theme.fg3; vertical-alignment: center; overflow: elide; }
+                                        }
+                                        rta := TouchArea {
+                                            clicked => { root.select-job(i); }
+                                            double-clicked => { if j.link != "" || j.ticket-uri != "" { root.open-share(i, j.ticket-uri != "" ? "ticket" : "link"); } else if j.dest != "" { root.open-path(j.dest); } }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // splitter
+                    Rectangle {
+                        height: 6px; background: spl.has-hover || spl.pressed ? Theme.line2 : Theme.bg2;
+                        Rectangle { y: 0; height: 1px; background: Theme.line; }
+                        spl := TouchArea {
+                            mouse-cursor: row-resize;
+                            property <length> start-h;
+                            pointer-event(ev) => { if ev.kind == PointerEventKind.down { self.start-h = root.details-h; } }
+                            moved => { if self.pressed { root.details-h = clamp(self.start-h - (self.mouse-y - self.pressed-y), 120px, 600px); root.details-collapsed = false; } }
+                            double-clicked => { root.details-collapsed = !root.details-collapsed; }
+                        }
+                    }
+                    // details
+                    Rectangle {
+                        height: root.details-collapsed ? 0px : root.details-h; background: Theme.bg2; clip: true;
+                        animate height { duration: 150ms; easing: ease-out; }
+                        VerticalLayout {
+                            Rectangle { height: 34px;
+                                Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+                                HorizontalLayout { padding-left: 8px; padding-right: 8px; spacing: 2px; alignment: start;
+                                    for i in [0, 1, 2, 3]: Tab { text: root.fmt-tab(i); active: root.tab == i; clicked => { root.set-tab(i); } }
+                                    Rectangle { horizontal-stretch: 1; }
+                                    Tab { text: "Historial"; active: root.tab == 4; clicked => { root.set-tab(4); root.load-history(); } }
+                                }
+                            }
+                            Flickable {
+                                viewport-height: pane.preferred-height;
+                                pane := VerticalLayout {
+                                    padding: 14px; spacing: 6px; alignment: start;
+                                    if root.tab != 4 && root.sel().id < 0: Hint { text: "Selecciona una transferencia para ver sus detalles."; }
+                                    // General
+                                    if root.tab == 0 && root.sel().id >= 0: HorizontalLayout { spacing: 24px;
+                                        VerticalLayout { spacing: 4px; horizontal-stretch: 1;
+                                            KV { k: "Nombre"; v: root.sel().name; }
+                                            KV { k: "Tipo"; v: root.sel().kind-label; }
+                                            HorizontalLayout { spacing: 12px; height: 22px; Text { text: "Estado"; color: Theme.fg3; width: 110px; vertical-alignment: center; } Badge { y: 2px; text: root.sel().state-label; kind: root.sel().state; } Text { text: root.sel().message; color: Theme.fg3; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; } }
+                                            KV { k: "Progreso"; v: root.sel().done-text + " / " + root.sel().size-text + "  (" + round(root.sel().percent) + "%)"; mono: true; }
+                                            KV { k: "Velocidad"; v: root.sel().state == "running" ? root.sel().speed-text + " · ETA " + root.sel().eta-text : "—"; mono: true; }
+                                            KV { k: "Archivo actual"; v: root.sel().current-file == "" ? "—" : root.sel().current-file; mono: true; }
+                                        }
+                                        VerticalLayout { spacing: 4px; horizontal-stretch: 1;
+                                            KV { k: (root.sel().kind == "lan_send" || root.sel().kind == "global_upload") ? "Destino" : "Origen"; v: root.sel().peer; }
+                                            HorizontalLayout { spacing: 12px; height: 22px; Text { text: "Carpeta"; color: Theme.fg3; width: 110px; vertical-alignment: center; }
+                                                Text { text: root.sel().dest == "" ? "—" : root.sel().dest; color: root.sel().dest == "" ? Theme.fg : Theme.accent; vertical-alignment: center; overflow: elide; horizontal-stretch: 1;
+                                                    TouchArea { mouse-cursor: pointer; clicked => { if root.sel().dest != "" { root.open-path(root.sel().dest); } } } } }
+                                            KV { k: "Archivos"; v: root.sel().files-count > 0 ? root.sel().files-count : "—"; }
+                                            KV { k: "Inicio"; v: root.sel().started-text; mono: true; }
+                                            KV { k: "Fin"; v: root.sel().finished-text; mono: true; }
+                                            HorizontalLayout { spacing: 12px; height: 22px; Text { text: "Link"; color: Theme.fg3; width: 110px; vertical-alignment: center; }
+                                                Text { text: root.sel().link == "" ? "—" : root.sel().link; color: root.sel().link == "" ? Theme.fg : Theme.accent; vertical-alignment: center; overflow: elide; horizontal-stretch: 1;
+                                                    TouchArea { mouse-cursor: pointer; clicked => { if root.sel().link != "" { root.open-url(root.sel().link); } } } } }
+                                        }
+                                    }
+                                    // Files
+                                    if root.tab == 1 && root.sel().id >= 0: VerticalLayout { spacing: 0px;
+                                        if sel-files.length == 0: Hint { text: "Sin lista de archivos."; }
+                                        for f in sel-files: Rectangle { height: 24px;
+                                            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+                                            HorizontalLayout { spacing: 8px; Text { text: f.path; color: Theme.fg; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; } Text { text: f.size-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; width: 110px; horizontal-alignment: right; vertical-alignment: center; } }
+                                        }
+                                    }
+                                    // Share
+                                    if root.tab == 2 && root.sel().id >= 0: VerticalLayout { spacing: 10px;
+                                        if root.sel().link == "" && root.sel().ticket-uri == "": Hint { text: "Esta transferencia no tiene link. Usa «Compartir link» o «Ticket»."; }
+                                        if root.sel().link != "": VerticalLayout { spacing: 4px;
+                                            FieldLabel { text: "Link público"; }
+                                            HorizontalLayout { spacing: 8px;
+                                                Input { text: root.sel().link; read-only: true; mono: true; horizontal-stretch: 1; }
+                                                Button { text: "Copiar"; icon: "copy"; clicked => { root.copy-text(root.sel().link); } }
+                                                Button { text: "QR"; icon: "qr"; clicked => { root.open-share(root.selected, "link"); } }
+                                            }
+                                        }
+                                        if root.sel().ticket-uri != "": VerticalLayout { spacing: 4px;
+                                            FieldLabel { text: "Ticket .unishare" + (root.sel().ticket-path != "" ? "  (" + root.sel().ticket-path + ")" : ""); }
+                                            HorizontalLayout { spacing: 8px;
+                                                Input { text: root.sel().ticket-uri; read-only: true; mono: true; horizontal-stretch: 1; }
+                                                Button { text: "Copiar"; icon: "copy"; clicked => { root.copy-text(root.sel().ticket-uri); } }
+                                                Button { text: "QR"; icon: "qr"; clicked => { root.open-share(root.selected, "ticket"); } }
+                                            }
+                                        }
+                                    }
+                                    // Log
+                                    if root.tab == 3 && root.sel().id >= 0: Text { text: root.sel-log == "" ? "—" : root.sel-log; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; wrap: word-wrap; }
+                                    // History
+                                    if root.tab == 4: VerticalLayout { spacing: 0px;
+                                        HorizontalLayout { height: 36px; spacing: 8px; Hint { text: history.length + " registro(s) en SQLite"; vertical-alignment: center; horizontal-stretch: 1; } Button { text: "Actualizar"; icon: "refresh"; clicked => { root.load-history(); } } }
+                                        for r in history: Rectangle { height: 24px;
+                                            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+                                            HorizontalLayout { spacing: 10px;
+                                                Text { text: r.when; color: Theme.fg3; font-family: Theme.mono; font-size: 12px; width: 140px; vertical-alignment: center; }
+                                                Text { text: r.kind; color: Theme.fg2; width: 110px; vertical-alignment: center; }
+                                                Text { text: r.name; color: Theme.fg; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                                                Text { text: r.size-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; width: 90px; horizontal-alignment: right; vertical-alignment: center; }
+                                                Badge { y: 3px; text: r.status; kind: r.status == "completed" ? "completed" : r.status == "failed" ? "failed" : r.status == "rejected" ? "cancelled" : "running"; }
+                                                Text { text: r.peer; color: Theme.fg3; width: 220px; vertical-alignment: center; overflow: elide; }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ═══════════ status bar ═══════════
+            Rectangle {
+                height: Theme.status-h; background: Theme.bg2;
+                Rectangle { y: 0; height: 1px; background: Theme.line; }
+                HorizontalLayout { padding-left: 12px; padding-right: 12px; spacing: 16px;
+                    HorizontalLayout { spacing: 6px; Rectangle { width: 7px; height: 7px; y: 9.5px; border-radius: 3.5px; background: Theme.ok; } Text { text: "conectado"; color: Theme.fg2; font-size: Theme.fs-sm; vertical-alignment: center; } }
+                    HorizontalLayout { spacing: 5px; Icon { name: "arrow-down"; color: Theme.accent; width: 12px; height: 12px; vertical-alignment: center; stroke-width: 2.2px; } Text { text: speed-down; color: Theme.accent; font-family: Theme.mono; font-size: Theme.fs-sm; vertical-alignment: center; } }
+                    HorizontalLayout { spacing: 5px; Icon { name: "arrow-up"; color: Theme.accent2; width: 12px; height: 12px; vertical-alignment: center; stroke-width: 2.2px; } Text { text: speed-up; color: Theme.accent2; font-family: Theme.mono; font-size: Theme.fs-sm; vertical-alignment: center; } }
+                    Text { text: active-count > 0 ? active-count + " activa(s)" : ""; color: Theme.fg3; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    Rectangle { horizontal-stretch: 1; }
+                    Text { text: "LAN " + lan-addr; color: Theme.fg3; font-family: Theme.mono; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    Text { text: "↓ " + download-dir; color: Theme.fg3; font-size: Theme.fs-sm; vertical-alignment: center; overflow: elide; }
+                }
+            }
+        }
+    }
+
+    // ═══════════ toasts ═══════════
+    VerticalLayout {
+        x: root.width - 396px; y: root.height - 40px - self.preferred-height; width: 380px; spacing: 8px; alignment: end;
+        for t in toasts: Toast { text: t.text; kind: t.kind; dismiss => { root.dismiss-toast(t.id); } }
+    }
+
+    // ═══════════ dialogs ═══════════
+    if root.dialog == "confirm": Dialog { title: "Confirmar"; dialog-width: 460px; close => { root.dialog = ""; }
+        VerticalLayout { padding: 18px; spacing: 14px;
+            Text { text: root.confirm-text; color: Theme.fg; wrap: word-wrap; }
+            HorizontalLayout { spacing: 8px; alignment: end; Button { text: "Cancelar"; clicked => { root.dialog = ""; } } Button { text: "Aceptar"; primary: true; clicked => { root.dialog = ""; root.confirm-yes(); } } }
+        }
+    }
+
+    if root.dialog == "share": Dialog { title: "Compartir «" + root.sel().name + "»"; dialog-width: 820px; close => { root.dialog = ""; }
+        VerticalLayout { padding: 18px; spacing: 14px;
+            if root.sel().link != "" && root.sel().ticket-uri != "": Segmented { items: ["Link público", "Ticket .unishare"]; current: root.share-what == "ticket" ? 1 : 0; changed(i) => { root.open-share(root.selected, i == 1 ? "ticket" : "link"); } }
+            HorizontalLayout { spacing: 20px;
+                Rectangle { width: 240px; height: 240px; border-radius: 12px; background: white; Image { source: qr-image; x: 10px; y: 10px; width: 220px; height: 220px; image-rendering: pixelated; } }
+                VerticalLayout { spacing: 8px; alignment: start; horizontal-stretch: 1;
+                    FieldLabel { text: root.share-what == "ticket" ? "Ticket .unishare" : "Link público"; }
+                    HorizontalLayout { spacing: 8px; Input { text: root.qr-caption; read-only: true; mono: true; horizontal-stretch: 1; } Button { text: "Copiar"; icon: "copy"; clicked => { root.copy-text(root.qr-caption); } } }
+                    Hint { text: root.share-what == "ticket" ? "El QR/URI contiene los links alternativos, la contraseña y los digests BLAKE3. El destinatario lo escanea con el móvil o abre el fichero .unishare." : "Cualquiera con el link puede descargar (si tiene contraseña, la pedirá). Escanea el QR con el móvil para abrirlo."; }
+                    HorizontalLayout { spacing: 8px; alignment: start;
+                        if root.share-what == "link": Button { text: "Abrir en el navegador"; clicked => { root.open-url(root.qr-caption); } }
+                        if root.share-what == "ticket": Button { text: "Guardar .unishare…"; icon: "ticket"; clicked => { root.save-ticket(root.qr-caption); } }
+                        if root.share-what == "ticket" && root.sel().ticket-path != "": Button { text: "Abrir carpeta del ticket"; icon: "folder"; clicked => { root.open-path(root.sel().ticket-path); } }
+                        Button { text: "Guardar QR (SVG)…"; icon: "qr"; clicked => { root.save-qr(root.qr-caption); } }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.dialog == "settings": Dialog { title: "Ajustes"; dialog-width: 720px; close => { root.dialog = ""; }
+        VerticalLayout { padding: 18px; spacing: 12px;
+            Text { text: "DISPOSITIVO"; color: Theme.fg3; font-size: Theme.fs-xs; font-weight: 700; letter-spacing: 0.7px; }
+            HorizontalLayout { spacing: 12px;
+                VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "Nombre visible en la LAN"; } Input { text <=> root.s-name; } }
+                VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "PIN de emparejamiento (vacío = sin PIN)"; } Input { text <=> root.s-pin; placeholder: "4-6 dígitos"; } }
+            }
+            VerticalLayout { spacing: 5px; FieldLabel { text: "Carpeta de descargas"; } HorizontalLayout { spacing: 6px; Input { text <=> root.s-dir; horizontal-stretch: 1; } Button { text: "…"; clicked => { root.fs-target-field = "s-dir"; root.fs-dirs-only = true; root.fs-open(root.s-dir); root.dialog = "fs"; } } } }
+            HorizontalLayout { spacing: 12px;
+                VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "Límite de velocidad (Mbit/s, 0 = sin límite)"; } Input { text <=> root.s-rate; } }
+                VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "Partes paralelas (multipart)"; } Input { text <=> root.s-parallel; } }
+                VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "Caducidad de links (días, 1-7)"; } Input { text <=> root.s-expiry; } }
+            }
+            Check { text: "Aceptar automáticamente las transferencias LAN entrantes"; checked <=> root.s-auto; }
+            Check { text: "Notificaciones de escritorio"; checked <=> root.s-notif; }
+            Check { text: "Comprimir carpetas (.tar.zst) por defecto"; checked <=> root.s-compress; }
+            Rectangle { height: 40px; border-radius: Theme.radius; background: Theme.bg3; border-width: 1px; border-color: Theme.line;
+                Text { x: 12px; text: "Huella TLS de este equipo: " + fingerprint-full; color: Theme.fg2; font-size: 12px; font-family: Theme.mono; vertical-alignment: center; height: parent.height; overflow: elide; width: parent.width - 24px; } }
+            HorizontalLayout { spacing: 8px; alignment: end; Text { text: root.dialog-error; color: Theme.err; vertical-alignment: center; horizontal-stretch: 1; } Button { text: "Cancelar"; clicked => { root.dialog = ""; } } Button { text: "Guardar"; primary: true; clicked => { root.submit-settings(); } } }
+        }
+    }
+
+    if root.dialog == "fs": Dialog { title: root.fs-dirs-only ? "Seleccionar carpeta" : "Seleccionar archivo o carpeta"; dialog-width: 860px; close => { root.dialog = ""; }
+        VerticalLayout { padding: 18px; spacing: 12px;
+            HorizontalLayout { spacing: 12px; height: 400px;
+                VerticalLayout { width: 170px; spacing: 2px; alignment: start;
+                    for r in fs-roots: Rectangle { height: 28px; border-radius: 6px; background: rt.has-hover ? Theme.bg3 : transparent;
+                        Text { x: 8px; text: r; color: Theme.fg2; vertical-alignment: center; height: parent.height; overflow: elide; width: parent.width - 16px; }
+                        rt := TouchArea { mouse-cursor: pointer; clicked => { root.fs-open(r); } } }
+                }
+                Rectangle { width: 1px; background: Theme.line; }
+                VerticalLayout { spacing: 8px; horizontal-stretch: 1;
+                    HorizontalLayout { spacing: 6px; Input { text: root.fs-path; mono: true; horizontal-stretch: 1; accepted(t) => { root.fs-open(t); } } Button { icon: "arrow-up"; tooltip: "Subir"; clicked => { root.fs-open(root.fs-path + "/.."); } } }
+                    Rectangle { border-radius: Theme.radius; border-width: 1px; border-color: Theme.line; clip: true; vertical-stretch: 1;
+                        Flickable { viewport-height: fl.preferred-height;
+                            fl := VerticalLayout { alignment: start;
+                                for e in fs-entries: Rectangle { height: 28px; background: eta.has-hover ? Theme.bg3 : transparent;
+                                    Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+                                    HorizontalLayout { padding-left: 10px; padding-right: 10px; spacing: 8px;
+                                        Icon { name: e.dir ? "folder" : "file"; color: e.dir ? Theme.accent : Theme.fg3; width: 15px; height: 15px; vertical-alignment: center; }
+                                        Text { text: e.name; color: Theme.fg; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                                        Text { text: e.size-text; color: Theme.fg3; font-family: Theme.mono; font-size: 11px; vertical-alignment: center; }
+                                    }
+                                    eta := TouchArea { mouse-cursor: pointer;
+                                        clicked => { if !e.dir { root.fs-pick(e.path); } }
+                                        double-clicked => { if e.dir { root.fs-open(e.path); } else { root.fs-pick(e.path); } } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            HorizontalLayout { spacing: 8px; alignment: end; Hint { text: root.fs-path; vertical-alignment: center; horizontal-stretch: 1; } Button { text: "Cancelar"; clicked => { root.dialog = ""; } } Button { text: "Seleccionar esta carpeta"; primary: true; clicked => { root.fs-pick(root.fs-path); } } }
+        }
+    }
+
+    if root.dialog == "new": Dialog { title: "Nueva transferencia"; dialog-width: 740px; close => { root.dialog = ""; }
+        VerticalLayout { padding: 18px; spacing: 14px;
+            Segmented { items: ["Enviar por LAN", "Compartir link", "Descargar", "Crear ticket"]; current <=> root.new-mode; }
+            // source path (lan / global / ticket verify)
+            if root.new-mode != 2: VerticalLayout { spacing: 5px;
+                FieldLabel { text: root.new-mode == 3 ? "Copia local para añadir digests BLAKE3 (opcional)" : "Archivo o carpeta"; }
+                HorizontalLayout { spacing: 6px; Input { text <=> root.f-path; placeholder: "/ruta/al/archivo-o-carpeta"; horizontal-stretch: 1; accepted(t) => { root.preview-path(t); } } Button { text: "Explorar…"; icon: "folder"; clicked => { root.fs-target-field = "f-path"; root.fs-dirs-only = false; root.fs-open(root.f-path); root.dialog = "fs"; } } }
+                if root.preview-text != "" && root.new-mode != 3: Rectangle { height: min(160px, pv.preferred-height + 16px); border-radius: Theme.radius; background: Theme.bg3; border-width: 1px; border-color: Theme.line; clip: true;
+                    Flickable { x: 10px; y: 8px; width: parent.width - 20px; height: parent.height - 16px; viewport-height: pv.preferred-height; pv := Text { text: root.preview-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; wrap: word-wrap; width: parent.width; } } }
+            }
+            if root.new-mode == 0: VerticalLayout { spacing: 10px;
+                FieldLabel { text: "Dispositivo destino"; }
+                if devices.length == 0: Hint { text: "No se han encontrado dispositivos. Usa la dirección manual."; }
+                HorizontalLayout { spacing: 8px; alignment: start;
+                    for d[i] in devices: Rectangle { width: 190px; height: 52px; border-radius: Theme.radius; background: root.f-device == i ? Theme.sel : Theme.bg3; border-width: 1px; border-color: root.f-device == i ? Theme.accent : Theme.line;
+                        VerticalLayout { padding: 9px; spacing: 2px; Text { text: d.name; color: Theme.fg; font-weight: 600; overflow: elide; } Text { text: d.addr + (d.pin ? " · PIN" : ""); color: Theme.fg3; font-size: 11px; font-family: Theme.mono; } }
+                        TouchArea { mouse-cursor: pointer; clicked => { root.f-device = i; root.f-target = ""; } } }
+                }
+                HorizontalLayout { spacing: 12px;
+                    VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "o dirección manual (ip[:puerto])"; } Input { text <=> root.f-target; placeholder: "192.168.1.20:47820"; edited => { root.f-device = -1; } } }
+                    VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "PIN (si lo exige el receptor)"; } Input { text <=> root.f-pin; } }
+                }
+                Check { text: "Comprimir carpeta en .tar.zst antes de enviar"; checked <=> root.f-compress; }
+            }
+            if root.new-mode == 1: VerticalLayout { spacing: 10px;
+                HorizontalLayout { spacing: 12px;
+                    VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "Contraseña (opcional, 4-100)"; } Input { text <=> root.f-password; password: true; } }
+                    VerticalLayout { spacing: 5px; width: 120px; FieldLabel { text: "Caducidad (días)"; } Input { text <=> root.f-expiry; } }
+                    VerticalLayout { spacing: 5px; width: 120px; FieldLabel { text: "Máx. descargas"; } Input { text <=> root.f-max; placeholder: "∞"; } }
+                }
+                VerticalLayout { spacing: 5px; FieldLabel { text: "Mensaje para el ticket (opcional)"; } Input { text <=> root.f-message; } }
+                Check { text: "Generar ticket .unishare (link + contraseña + digests BLAKE3, compartible por QR)"; checked <=> root.f-ticket; }
+                Check { text: "Comprimir carpeta en un único .tar.zst (en vez de colección)"; checked <=> root.f-compress; }
+                Hint { text: "Se sube a storage.to (≤ 25 GB, anónimo). El link y el QR aparecerán en la pestaña Compartir al terminar."; }
+            }
+            if root.new-mode == 2: VerticalLayout { spacing: 10px;
+                FieldLabel { text: "Link, URI unishare: o ruta a un fichero .unishare"; }
+                TextArea { text <=> root.f-url; placeholder: "https://storage.to/…   ·   https://www.swisstransfer.com/d/…   ·   unishare:…"; }
+                HorizontalLayout { spacing: 8px; alignment: start; Button { text: "Abrir .unishare…"; icon: "ticket"; clicked => { root.fs-target-field = "f-url"; root.fs-dirs-only = false; root.fs-open(root.download-dir); root.dialog = "fs"; } } Button { text: "Previsualizar"; icon: "search"; clicked => { root.preview-ticket(root.f-url); } } }
+                if root.preview-text != "": Rectangle { height: min(140px, pv2.preferred-height + 16px); border-radius: Theme.radius; background: Theme.bg3; border-width: 1px; border-color: Theme.line; clip: true;
+                    pv2 := Text { x: 10px; y: 8px; width: parent.width - 20px; text: root.preview-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; wrap: word-wrap; } }
+                HorizontalLayout { spacing: 12px;
+                    VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "Contraseña (si la pide)"; } Input { text <=> root.f-password; password: true; } }
+                    VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "Carpeta destino"; } HorizontalLayout { spacing: 6px; Input { text <=> root.f-dest; horizontal-stretch: 1; } Button { text: "…"; clicked => { root.fs-target-field = "f-dest"; root.fs-dirs-only = true; root.fs-open(root.f-dest); root.dialog = "fs"; } } } }
+                }
+                Check { text: "Sobrescribir si existe (por defecto se renombra «archivo (1).ext»)"; checked <=> root.f-force; }
+            }
+            if root.new-mode == 3: VerticalLayout { spacing: 10px;
+                FieldLabel { text: "Links (uno por línea; se prueban en orden)"; }
+                TextArea { text <=> root.f-links; placeholder: "https://storage.to/abc123\nhttps://www.swisstransfer.com/d/…"; }
+                HorizontalLayout { spacing: 12px;
+                    VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "Título"; } Input { text <=> root.f-name; } }
+                    VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "Contraseña embebida (opcional)"; } Input { text <=> root.f-password; password: true; } }
+                }
+                VerticalLayout { spacing: 5px; FieldLabel { text: "Mensaje"; } Input { text <=> root.f-message; } }
+                Hint { text: "Un ticket .unishare agrupa links alternativos, contraseña y hashes en un solo fichero/QR."; }
+            }
+            HorizontalLayout { spacing: 8px; alignment: end; Text { text: root.dialog-error; color: Theme.err; vertical-alignment: center; horizontal-stretch: 1; wrap: word-wrap; } Button { text: "Cancelar"; clicked => { root.dialog = ""; } } Button { text: root.new-mode == 3 ? "Crear ticket" : "Iniciar"; primary: true; clicked => { root.submit-new(); } } }
+        }
+    }
+}

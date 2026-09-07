@@ -87,3 +87,16 @@ fn truncate(s: &str, n: usize) -> String {
 pub async fn gui(ctx: Ctx, a: GuiArgs) -> Result<()> {
     uni_share::gui::run(ctx.cfg, ctx.cfg_path, ctx.history, uni_share::gui::GuiOptions { port: a.port, open_browser: !a.no_open }).await
 }
+
+/// Native desktop window. Runs on the main thread (no tokio here; the engine
+/// owns its own runtime thread).
+#[cfg(feature = "slint")]
+pub fn app(ctx: Ctx, a: AppArgs) -> Result<()> {
+    let Ctx { cfg, cfg_path, history, .. } = ctx;
+    uni_share::native::run(cfg, cfg_path, history, uni_share::native::AppOptions { open: a.open })
+}
+
+#[cfg(not(feature = "slint"))]
+pub fn app(_ctx: Ctx, _a: AppArgs) -> Result<()> {
+    anyhow::bail!("this build has no native GUI: rebuild with `cargo build --release --features slint` (or use `uni-share gui` for the browser UI)")
+}

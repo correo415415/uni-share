@@ -16,6 +16,8 @@ pub mod daemon;
 pub mod gui;
 pub mod ticket;
 pub mod engine;
+#[cfg(feature = "slint")]
+pub mod native;
 
 /// Application name used for config dirs, mDNS service, user-agent…
 pub const APP_NAME: &str = "uni-share";

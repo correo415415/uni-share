@@ -57,8 +57,10 @@ pub enum Command {
     History(HistoryArgs),
     /// Manage the background receiver daemon
     Daemon(DaemonArgs),
-    /// Launch the local web GUI
+    /// Launch the local web GUI (browser)
     Gui(GuiArgs),
+    /// Launch the native desktop app (Slint). Optionally open a link / .unishare ticket
+    App(AppArgs),
     /// Show or edit configuration
     Config(ConfigArgs),
 }
@@ -285,6 +287,12 @@ pub struct GuiArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct AppArgs {
+    /// Link, unishare: URI or .unishare file to open on start
+    pub open: Option<String>,
+}
+
+#[derive(Args, Debug)]
 pub struct ConfigArgs {
     /// Print the path of the active config file
     #[arg(long)]
@@ -307,22 +315,39 @@ impl Ctx {
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let cli = Cli::parse();
     logging::init(cli.verbose, cli.quiet);
-    if let Err(e) = run(cli).await {
+    // The native GUI event loop must own the *main* thread (winit requirement
+    // on macOS), so it runs outside tokio; the engine gets its own runtime.
+    let res = if matches!(cli.command, Command::App(_)) {
+        load_ctx(&cli).and_then(|ctx| match cli.command {
+            Command::App(a) => commands::app(ctx, a),
+            _ => unreachable!(),
+        })
+    } else {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .context("tokio runtime")
+            .and_then(|rt| rt.block_on(run(cli)))
+    };
+    if let Err(e) = res {
         ui::error("ERROR", format!("{e:#}"));
         std::process::exit(1);
     }
 }
 
-async fn run(cli: Cli) -> Result<()> {
+fn load_ctx(cli: &Cli) -> Result<Ctx> {
     let cfg_path = resolve_config_path(cli.config.as_deref());
     let cfg = Config::load_or_create(&cfg_path)
         .with_context(|| format!("loading config {}", cfg_path.display()))?;
     let history = History::open(&History::default_path()).context("opening history")?;
-    let ctx = Ctx { cfg, cfg_path, history, quiet: cli.quiet };
+    Ok(Ctx { cfg, cfg_path, history, quiet: cli.quiet })
+}
+
+async fn run(cli: Cli) -> Result<()> {
+    let ctx = load_ctx(&cli)?;
 
     match cli.command {
         Command::SendLan(a) => commands::send_lan(ctx, a).await,
@@ -335,6 +360,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::History(a) => commands::history(ctx, a).await,
         Command::Daemon(a) => commands::daemon(ctx, a).await,
         Command::Gui(a) => commands::gui(ctx, a).await,
+        Command::App(_) => unreachable!("handled in main"),
         Command::Config(a) => commands::config(ctx, a).await,
     }
 }

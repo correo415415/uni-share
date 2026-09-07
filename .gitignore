@@ -1,0 +1,8 @@
+/target
+*.sqlite3
+*.sqlite3-*
+/config.toml
+/.fileshare
+*.part
+__pycache__/
+.uni-share-daemon.pid

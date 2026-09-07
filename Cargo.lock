@@ -3148,6 +3148,7 @@ dependencies = [
  "arboard",
  "axum",
  "axum-server",
+ "base64",
  "blake3",
  "bytes",
  "bytesize",

@@ -14,6 +14,7 @@ pub mod global;
 pub mod download;
 pub mod daemon;
 pub mod gui;
+pub mod ticket;
 
 /// Application name used for config dirs, mDNS service, user-agent…
 pub const APP_NAME: &str = "uni-share";

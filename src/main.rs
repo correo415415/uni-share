@@ -7,6 +7,7 @@ use uni_share::{logging, ui};
 
 mod commands;
 mod commands_lan;
+mod commands_global;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -211,6 +212,14 @@ pub struct Ctx {
     pub cfg_path: PathBuf,
     pub history: History,
     pub quiet: bool,
+}
+
+impl Ctx {
+    /// storage.to visitor token, generated and persisted on first use.
+    pub fn ensure_visitor_token(&mut self) -> Result<String> {
+        let path = self.cfg_path.clone();
+        self.cfg.ensure_visitor_token(&path)
+    }
 }
 
 #[tokio::main]

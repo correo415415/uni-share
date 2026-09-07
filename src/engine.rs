@@ -1,0 +1,1193 @@
+//! Headless application **engine** shared by every GUI front-end (native
+//! Slint window, local web UI) and reusable by the daemon.
+//!
+//! It owns:
+//! * the embedded LAN receiver (mDNS announce + TLS server) and its incoming
+//!   *offers* waiting for a user decision;
+//! * the list of [`Job`]s (LAN send/receive, link upload, download) with
+//!   byte-accurate progress, speed/ETA, current file, per-job log and
+//!   cancellation;
+//! * periodic LAN device discovery;
+//! * the live [`Config`] (editable at runtime and persisted).
+//!
+//! Hot upload/download loops only touch an `AtomicU64`; speed is derived from
+//! samples when a front-end calls [`Engine::tick`]. Front-ends never talk to
+//! the network layer directly — they call the async action methods here, so
+//! the Slint and web UIs behave identically.
+
+use crate::config::Config;
+use crate::fsutil::{collect_files, total_size};
+use crate::history::{History, Kind, Status};
+use crate::lan::client::{Sender, build_manifest, hash_all};
+use crate::lan::discovery::{Announcer, Device, discover, parse_target};
+use crate::lan::server::{Decision, IncomingOffer, Progress, ServerHandle, ServerOptions};
+use crate::lan::tls::Identity;
+use crate::ticket::{Source, Ticket, TicketFile};
+use anyhow::{Context, Result, bail, ensure};
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, VecDeque};
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
+use tokio::sync::{Mutex, RwLock, oneshot};
+use tokio::task::AbortHandle;
+
+/// Incoming LAN offer waiting for the user.
+#[derive(Clone, Serialize, Debug)]
+pub struct PendingOffer {
+    pub transfer_id: String,
+    pub sender: String,
+    pub sender_fingerprint: String,
+    pub peer: String,
+    pub name: String,
+    pub total_size: u64,
+    pub compressed: bool,
+    pub files: Vec<JobFile>,
+    pub received_at: i64,
+}
+
+#[derive(Clone, Serialize, Deserialize, Default, Debug, PartialEq, Eq)]
+pub struct JobFile {
+    pub path: String,
+    pub size: u64,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JobKind {
+    LanSend,
+    LanReceive,
+    GlobalUpload,
+    Download,
+}
+
+impl JobKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            JobKind::LanSend => "Envío LAN",
+            JobKind::LanReceive => "Recepción LAN",
+            JobKind::GlobalUpload => "Subida (link)",
+            JobKind::Download => "Descarga",
+        }
+    }
+    pub fn is_outgoing(self) -> bool {
+        matches!(self, JobKind::LanSend | JobKind::GlobalUpload)
+    }
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JobState {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl JobState {
+    pub fn label(self) -> &'static str {
+        match self {
+            JobState::Queued => "En cola",
+            JobState::Running => "En curso",
+            JobState::Completed => "Completada",
+            JobState::Failed => "Fallida",
+            JobState::Cancelled => "Cancelada",
+        }
+    }
+    pub fn is_active(self) -> bool {
+        matches!(self, JobState::Queued | JobState::Running)
+    }
+}
+
+#[derive(Clone, Serialize, Debug)]
+pub struct Job {
+    pub id: u64,
+    pub kind: JobKind,
+    pub name: String,
+    /// Target device / backend / source URL.
+    pub peer: String,
+    pub total: u64,
+    pub done: u64,
+    pub state: JobState,
+    pub message: String,
+    pub current_file: String,
+    pub link: Option<String>,
+    pub ticket_uri: Option<String>,
+    pub ticket_path: Option<String>,
+    pub dest: Option<String>,
+    pub files: Vec<JobFile>,
+    /// Unix ms.
+    pub started: i64,
+    pub finished: Option<i64>,
+    /// Bytes per second (≈4 s window).
+    pub speed: u64,
+    /// Seconds.
+    pub eta: Option<u64>,
+    pub log: Vec<String>,
+    #[serde(skip)]
+    samples: VecDeque<(Instant, u64)>,
+}
+
+impl Job {
+    pub fn is_active(&self) -> bool {
+        self.state.is_active()
+    }
+    pub fn percent(&self) -> f32 {
+        if self.total == 0 {
+            return if self.state == JobState::Completed { 100.0 } else { 0.0 };
+        }
+        (self.done as f64 / self.total as f64 * 100.0).min(100.0) as f32
+    }
+}
+
+/// Live handles for a running job (never serialised).
+struct JobHandle {
+    counter: Arc<AtomicU64>,
+    current_file: Arc<std::sync::Mutex<String>>,
+    abort: Option<AbortHandle>,
+}
+
+/// Shared progress sinks handed to the network layer.
+#[derive(Clone)]
+pub struct Sink {
+    pub counter: Arc<AtomicU64>,
+    pub current_file: Arc<std::sync::Mutex<String>>,
+}
+
+impl Sink {
+    pub fn add(&self, n: u64) {
+        self.counter.fetch_add(n, Ordering::Relaxed);
+    }
+    pub fn set(&self, n: u64) {
+        self.counter.store(n, Ordering::Relaxed);
+    }
+    pub fn file(&self, f: &str) {
+        if let Ok(mut g) = self.current_file.lock() {
+            if *g != f {
+                *g = f.to_string();
+            }
+        }
+    }
+}
+
+/// Aggregated snapshot for front-ends (cheap to clone).
+#[derive(Clone, Serialize, Debug)]
+pub struct Snapshot {
+    pub device_name: String,
+    pub fingerprint: String,
+    pub fingerprint_full: String,
+    pub lan_addr: String,
+    pub lan_port: u16,
+    pub local_ips: Vec<String>,
+    pub download_dir: PathBuf,
+    pub pin_required: bool,
+    pub auto_accept: bool,
+    pub pending: Vec<PendingOffer>,
+    pub jobs: Vec<Job>,
+    pub devices: Vec<Device>,
+    pub devices_scanned_ago: Option<u64>,
+    pub speed_down: u64,
+    pub speed_up: u64,
+    pub uptime: u64,
+    pub version: &'static str,
+}
+
+// ───────────────────────── requests ─────────────────────────
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct SendLanReq {
+    pub path: String,
+    /// `ip[:port]` or a discovered device name.
+    pub target: String,
+    #[serde(default)]
+    pub fingerprint: Option<String>,
+    #[serde(default)]
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub pin: Option<String>,
+    #[serde(default)]
+    pub compress: bool,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct SendGlobalReq {
+    pub path: String,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub expiry_days: Option<u32>,
+    #[serde(default)]
+    pub max_downloads: Option<u32>,
+    #[serde(default)]
+    pub compress: bool,
+    /// Also write a .unishare ticket next to the source.
+    #[serde(default)]
+    pub ticket: bool,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct DownloadReq {
+    /// URL, `unishare:` URI or path to a .unishare file.
+    pub url: String,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub dest: Option<String>,
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct TicketCreateReq {
+    pub links: Vec<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub verify_from: Option<String>,
+    #[serde(default)]
+    pub output: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct ConfigPatch {
+    pub device_name: Option<String>,
+    pub download_dir: Option<String>,
+    pub rate_limit_mbps: Option<u32>,
+    pub auto_accept: Option<bool>,
+    pub pin: Option<String>,
+    pub notifications: Option<bool>,
+    pub compress_folders: Option<bool>,
+    pub expiry_days: Option<u32>,
+    pub parallel_parts: Option<usize>,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct TicketCreated {
+    pub ticket: Ticket,
+    pub path: PathBuf,
+    pub uri: String,
+}
+
+// ───────────────────────── engine ─────────────────────────
+
+pub struct Engine {
+    pub cfg: RwLock<Config>,
+    pub cfg_path: PathBuf,
+    pub history: History,
+    pub identity: Identity,
+    pub lan_addr: SocketAddr,
+    pub started_at: Instant,
+    pending: RwLock<HashMap<String, (PendingOffer, oneshot::Sender<Decision>)>>,
+    /// transfer_id → job id for accepted LAN receptions.
+    receiving: RwLock<HashMap<String, u64>>,
+    jobs: RwLock<Vec<Job>>,
+    handles: RwLock<HashMap<u64, JobHandle>>,
+    next_job: AtomicU64,
+    visitor_token: Mutex<Option<String>>,
+    devices: RwLock<(Vec<Device>, Option<Instant>)>,
+    _announcer: Announcer,
+}
+
+impl Engine {
+    /// Start the LAN receiver + announcer and the background tasks.
+    pub async fn start(cfg: Config, cfg_path: PathBuf, history: History) -> Result<Arc<Self>> {
+        let identity = Identity::load_or_generate(&crate::config::data_dir(), &cfg.device_name)?;
+        tokio::fs::create_dir_all(&cfg.download_dir).await.ok();
+        let mut lan: ServerHandle = crate::lan::server::start(
+            identity.clone(),
+            ServerOptions {
+                device_name: cfg.device_name.clone(),
+                port: cfg.lan_port,
+                pin: cfg.pin.clone(),
+                force_overwrite: false,
+                dest_dir: cfg.download_dir.clone(),
+                rate_limit_mbps: cfg.rate_limit_mbps,
+            },
+        )
+        .await?;
+        let announcer = Announcer::start(&cfg.device_name, lan.addr.port(), &identity.fingerprint, cfg.pin.is_some())?;
+
+        let eng = Arc::new(Engine {
+            cfg_path,
+            history,
+            identity,
+            lan_addr: lan.addr,
+            started_at: Instant::now(),
+            pending: RwLock::new(HashMap::new()),
+            receiving: RwLock::new(HashMap::new()),
+            jobs: RwLock::new(Vec::new()),
+            handles: RwLock::new(HashMap::new()),
+            next_job: AtomicU64::new(0),
+            visitor_token: Mutex::new(cfg.global.storage_to_visitor_token.clone()),
+            devices: RwLock::new((Vec::new(), None)),
+            _announcer: announcer,
+            cfg: RwLock::new(cfg),
+        });
+
+        // Incoming offers → pending map (or auto-accept).
+        let e = eng.clone();
+        tokio::spawn(async move {
+            while let Some(IncomingOffer { transfer_id, manifest, peer, decision }) = lan.offers.recv().await {
+                let (auto, dest, notif) = {
+                    let c = e.cfg.read().await;
+                    (c.auto_accept, c.download_dir.clone(), c.notifications)
+                };
+                let files: Vec<JobFile> = manifest.files.iter().map(|f| JobFile { path: f.path.clone(), size: f.size }).collect();
+                if auto {
+                    e.accept_inner(&transfer_id, &manifest.name, &manifest.sender, manifest.total_size, files, dest, decision).await;
+                    continue;
+                }
+                let po = PendingOffer {
+                    transfer_id: transfer_id.clone(),
+                    sender: manifest.sender.clone(),
+                    sender_fingerprint: crate::lan::tls::short_fingerprint(&manifest.sender_fingerprint),
+                    peer: peer.ip().to_string(),
+                    name: manifest.name.clone(),
+                    total_size: manifest.total_size,
+                    compressed: manifest.compressed_archive,
+                    files,
+                    received_at: chrono::Utc::now().timestamp_millis(),
+                };
+                if notif {
+                    crate::ui::notify("uni-share: solicitud entrante", &format!("{} quiere enviarte {}", manifest.sender, manifest.name));
+                }
+                e.pending.write().await.insert(transfer_id, (po, decision));
+            }
+        });
+
+        // LAN reception progress → job counters.
+        let e = eng.clone();
+        let mut prx = lan.progress.clone();
+        tokio::spawn(async move {
+            while prx.changed().await.is_ok() {
+                let p: Progress = prx.borrow().clone();
+                let jid = e.receiving.read().await.get(&p.transfer_id).copied();
+                let Some(jid) = jid else { continue };
+                if let Some(sink) = e.sink(jid).await {
+                    sink.set(p.received);
+                    sink.file(&p.current_file);
+                }
+                if p.finished {
+                    e.receiving.write().await.remove(&p.transfer_id);
+                    match &p.error {
+                        Some(err) => e.finish_job(jid, JobState::Failed, format!("Error: {err}")).await,
+                        None => e.finish_job(jid, JobState::Completed, "Recibido y verificado (BLAKE3)").await,
+                    }
+                }
+            }
+        });
+
+        // Completed receptions → history + notification.
+        let e = eng.clone();
+        tokio::spawn(async move {
+            while let Some(done) = lan.completed.recv().await {
+                if let Ok(id) = e.history.start(Kind::LanReceive, &done.name, done.total, &done.sender, done.files_total as u32) {
+                    let _ = e.history.finish(id, if done.error.is_some() { Status::Failed } else { Status::Completed }, done.error.as_deref());
+                }
+                if e.cfg.read().await.notifications && done.error.is_none() {
+                    crate::ui::notify("uni-share: transferencia recibida", &done.name);
+                }
+            }
+        });
+
+        // Periodic discovery.
+        let e = eng.clone();
+        tokio::spawn(async move {
+            loop {
+                e.refresh_devices().await;
+                tokio::time::sleep(Duration::from_secs(12)).await;
+            }
+        });
+
+        Ok(eng)
+    }
+
+    // ───────── jobs ─────────
+
+    async fn new_job(&self, kind: JobKind, name: &str, peer: &str, total: u64, files: Vec<JobFile>) -> (u64, Sink) {
+        let id = self.next_job.fetch_add(1, Ordering::Relaxed) + 1;
+        let sink = Sink { counter: Arc::new(AtomicU64::new(0)), current_file: Arc::new(std::sync::Mutex::new(String::new())) };
+        let job = Job {
+            id,
+            kind,
+            name: name.into(),
+            peer: peer.into(),
+            total,
+            done: 0,
+            state: JobState::Running,
+            message: String::new(),
+            current_file: String::new(),
+            link: None,
+            ticket_uri: None,
+            ticket_path: None,
+            dest: None,
+            files,
+            started: chrono::Utc::now().timestamp_millis(),
+            finished: None,
+            speed: 0,
+            eta: None,
+            log: Vec::new(),
+            samples: VecDeque::new(),
+        };
+        {
+            let mut jobs = self.jobs.write().await;
+            jobs.insert(0, job);
+            jobs.truncate(300);
+        }
+        self.handles.write().await.insert(id, JobHandle { counter: sink.counter.clone(), current_file: sink.current_file.clone(), abort: None });
+        (id, sink)
+    }
+
+    async fn set_abort(&self, id: u64, abort: AbortHandle) {
+        if let Some(h) = self.handles.write().await.get_mut(&id) {
+            h.abort = Some(abort);
+        }
+    }
+
+    async fn sink(&self, id: u64) -> Option<Sink> {
+        self.handles.read().await.get(&id).map(|h| Sink { counter: h.counter.clone(), current_file: h.current_file.clone() })
+    }
+
+    pub async fn update_job(&self, id: u64, f: impl FnOnce(&mut Job)) {
+        if let Some(j) = self.jobs.write().await.iter_mut().find(|j| j.id == id) {
+            f(j);
+        }
+    }
+
+    pub async fn log(&self, id: u64, line: impl Into<String>) {
+        let line = format!("{} {}", chrono::Local::now().format("%H:%M:%S"), line.into());
+        tracing::info!(job = id, "{line}");
+        self.update_job(id, |j| {
+            j.log.push(line);
+            if j.log.len() > 200 {
+                j.log.remove(0);
+            }
+        })
+        .await;
+    }
+
+    async fn finish_job(&self, id: u64, state: JobState, message: impl Into<String>) {
+        let message = message.into();
+        self.update_job(id, |j| {
+            j.state = state;
+            j.message = message.clone();
+            j.finished = Some(chrono::Utc::now().timestamp_millis());
+            if state == JobState::Completed {
+                j.done = j.total.max(j.done);
+            }
+            j.speed = 0;
+            j.eta = None;
+        })
+        .await;
+        self.log(id, message).await;
+        if let Some(h) = self.handles.write().await.get_mut(&id) {
+            h.abort = None;
+        }
+    }
+
+    /// Pull counters into the job list and compute speed/ETA. Call before reading jobs.
+    pub async fn tick(&self) {
+        let now = Instant::now();
+        let handles = self.handles.read().await;
+        let mut jobs = self.jobs.write().await;
+        for j in jobs.iter_mut().filter(|j| j.is_active()) {
+            let Some(h) = handles.get(&j.id) else { continue };
+            j.done = h.counter.load(Ordering::Relaxed);
+            if let Ok(f) = h.current_file.lock() {
+                j.current_file = f.clone();
+            }
+            j.samples.push_back((now, j.done));
+            while j.samples.len() > 2 && now.duration_since(j.samples[0].0) > Duration::from_secs(4) {
+                j.samples.pop_front();
+            }
+            if let (Some(first), Some(last)) = (j.samples.front(), j.samples.back()) {
+                let dt = last.0.duration_since(first.0).as_secs_f64();
+                if dt > 0.2 {
+                    j.speed = ((last.1.saturating_sub(first.1)) as f64 / dt) as u64;
+                }
+            }
+            j.eta = if j.speed > 0 && j.total > j.done { Some((j.total - j.done) / j.speed) } else { None };
+        }
+    }
+
+    pub async fn jobs(&self) -> Vec<Job> {
+        self.jobs.read().await.clone()
+    }
+
+    pub async fn job(&self, id: u64) -> Option<Job> {
+        self.jobs.read().await.iter().find(|j| j.id == id).cloned()
+    }
+
+    pub async fn cancel_job(&self, id: u64) -> bool {
+        let abort = self.handles.write().await.get_mut(&id).and_then(|h| h.abort.take());
+        match abort {
+            Some(a) => {
+                a.abort();
+                self.finish_job(id, JobState::Cancelled, "Cancelado por el usuario").await;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub async fn remove_job(&self, id: u64) -> bool {
+        let mut jobs = self.jobs.write().await;
+        if let Some(pos) = jobs.iter().position(|j| j.id == id && !j.is_active()) {
+            jobs.remove(pos);
+            self.handles.write().await.remove(&id);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub async fn clear_finished(&self) -> usize {
+        let mut jobs = self.jobs.write().await;
+        let before = jobs.len();
+        let removed: Vec<u64> = jobs.iter().filter(|j| !j.is_active()).map(|j| j.id).collect();
+        jobs.retain(|j| j.is_active());
+        let mut h = self.handles.write().await;
+        for id in removed {
+            h.remove(&id);
+        }
+        before - jobs.len()
+    }
+
+    // ───────── offers ─────────
+
+    pub async fn pending(&self) -> Vec<PendingOffer> {
+        self.pending.read().await.values().map(|(p, _)| p.clone()).collect()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn accept_inner(
+        &self,
+        transfer_id: &str,
+        name: &str,
+        sender: &str,
+        total: u64,
+        files: Vec<JobFile>,
+        dest: PathBuf,
+        decision: oneshot::Sender<Decision>,
+    ) -> u64 {
+        let (jid, _) = self.new_job(JobKind::LanReceive, name, sender, total, files).await;
+        self.update_job(jid, |j| j.dest = Some(dest.display().to_string())).await;
+        self.receiving.write().await.insert(transfer_id.to_string(), jid);
+        self.log(jid, format!("Aceptado desde {sender} → {}", dest.display())).await;
+        if decision.send(Decision::Accept { dest_dir: dest }).is_err() {
+            self.finish_job(jid, JobState::Failed, "El emisor canceló antes de empezar").await;
+        }
+        jid
+    }
+
+    /// Accept a pending offer into `dest` (default: download dir). Returns the job id.
+    pub async fn accept_offer(&self, transfer_id: &str, dest: Option<PathBuf>) -> Result<u64> {
+        let dest = dest.unwrap_or(self.download_dir().await);
+        tokio::fs::create_dir_all(&dest).await.with_context(|| format!("creating {}", dest.display()))?;
+        let (p, tx) = self.pending.write().await.remove(transfer_id).context("offer not found")?;
+        Ok(self.accept_inner(transfer_id, &p.name, &p.sender, p.total_size, p.files.clone(), dest, tx).await)
+    }
+
+    pub async fn reject_offer(&self, transfer_id: &str) -> Result<()> {
+        let (p, tx) = self.pending.write().await.remove(transfer_id).context("offer not found")?;
+        let _ = tx.send(Decision::Reject { reason: "rechazada por el usuario".into() });
+        if let Ok(rid) = self.history.start(Kind::LanReceive, &p.name, p.total_size, &p.sender, p.files.len() as u32) {
+            let _ = self.history.finish(rid, Status::Rejected, None);
+        }
+        Ok(())
+    }
+
+    // ───────── devices / config ─────────
+
+    pub async fn refresh_devices(&self) -> Vec<Device> {
+        let list = discover(Duration::from_millis(1800), Some(&self.identity.fingerprint)).await.unwrap_or_default();
+        *self.devices.write().await = (list.clone(), Some(Instant::now()));
+        list
+    }
+
+    pub async fn devices(&self) -> Vec<Device> {
+        self.devices.read().await.0.clone()
+    }
+
+    pub async fn download_dir(&self) -> PathBuf {
+        self.cfg.read().await.download_dir.clone()
+    }
+
+    pub async fn config(&self) -> Config {
+        self.cfg.read().await.clone()
+    }
+
+    /// Apply and persist a settings patch. Returns `true` when a restart is
+    /// needed for the LAN receiver (name / PIN / port).
+    pub async fn patch_config(&self, p: ConfigPatch) -> Result<bool> {
+        let mut cfg: Config = self.cfg.read().await.clone();
+        if let Some(v) = p.device_name.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
+            cfg.device_name = v;
+        }
+        if let Some(v) = p.download_dir.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
+            cfg.download_dir = PathBuf::from(v);
+        }
+        if let Some(v) = p.rate_limit_mbps {
+            cfg.rate_limit_mbps = v;
+        }
+        if let Some(v) = p.auto_accept {
+            cfg.auto_accept = v;
+        }
+        if let Some(v) = p.pin {
+            cfg.pin = Some(v.trim().to_string()).filter(|v| !v.is_empty());
+        }
+        if let Some(v) = p.notifications {
+            cfg.notifications = v;
+        }
+        if let Some(v) = p.compress_folders {
+            cfg.compress_folders = v;
+        }
+        if let Some(v) = p.expiry_days {
+            cfg.global.expiry_days = v.clamp(1, 7);
+        }
+        if let Some(v) = p.parallel_parts {
+            cfg.global.parallel_parts = v.clamp(1, 16);
+        }
+        cfg.validate()?;
+        cfg.save(&self.cfg_path)?;
+        let restart = {
+            let cur = self.cfg.read().await;
+            cur.device_name != cfg.device_name || cur.pin != cfg.pin || cur.lan_port != cfg.lan_port
+        };
+        *self.cfg.write().await = cfg;
+        Ok(restart)
+    }
+
+    pub async fn snapshot(&self) -> Snapshot {
+        self.tick().await;
+        let jobs = self.jobs().await;
+        let (devices, scanned) = self.devices.read().await.clone();
+        let cfg = self.cfg.read().await;
+        let (mut down, mut up) = (0u64, 0u64);
+        for j in jobs.iter().filter(|j| j.is_active()) {
+            if j.kind.is_outgoing() {
+                up += j.speed;
+            } else {
+                down += j.speed;
+            }
+        }
+        Snapshot {
+            device_name: cfg.device_name.clone(),
+            fingerprint: crate::lan::tls::short_fingerprint(&self.identity.fingerprint),
+            fingerprint_full: self.identity.fingerprint.clone(),
+            lan_addr: self.lan_addr.to_string(),
+            lan_port: self.lan_addr.port(),
+            local_ips: local_ips(),
+            download_dir: cfg.download_dir.clone(),
+            pin_required: cfg.pin.is_some(),
+            auto_accept: cfg.auto_accept,
+            pending: self.pending().await,
+            jobs,
+            devices,
+            devices_scanned_ago: scanned.map(|t| t.elapsed().as_secs()),
+            speed_down: down,
+            speed_up: up,
+            uptime: self.started_at.elapsed().as_secs(),
+            version: crate::APP_VERSION,
+        }
+    }
+
+    async fn ensure_visitor_token(&self) -> Result<String> {
+        let mut vt = self.visitor_token.lock().await;
+        if let Some(t) = vt.clone().filter(|t| !t.is_empty()) {
+            return Ok(t);
+        }
+        let mut cfg = self.cfg.write().await;
+        let t = cfg.ensure_visitor_token(&self.cfg_path)?;
+        *vt = Some(t.clone());
+        Ok(t)
+    }
+
+    // ───────── actions ─────────
+
+    /// Send a file/folder to a LAN device. Returns the job id immediately.
+    pub async fn send_lan(self: &Arc<Self>, req: SendLanReq) -> Result<u64> {
+        let path = PathBuf::from(&req.path);
+        ensure!(path.exists(), "path not found: {}", req.path);
+        let lan_port = self.cfg.read().await.lan_port;
+        let mut fingerprint = req.fingerprint.clone().filter(|f| !f.is_empty());
+        let (ip, port) = match parse_target(&req.target, req.port.unwrap_or(lan_port)) {
+            Some(t) => t,
+            None => {
+                let dev = self
+                    .devices()
+                    .await
+                    .into_iter()
+                    .find(|d| d.name.eq_ignore_ascii_case(req.target.trim()))
+                    .context("target must be ip[:port] or a discovered device name")?;
+                fingerprint.get_or_insert(dev.fingerprint.clone());
+                (dev.best_addr().context("device has no address")?, dev.port)
+            }
+        };
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let (job, sink) = self.new_job(JobKind::LanSend, &name, &format!("{ip}:{port}"), 0, Vec::new()).await;
+        let e = self.clone();
+        let task = tokio::spawn(async move {
+            let res: Result<()> = async {
+                let (_tmp, files) = if req.compress && path.is_dir() {
+                    e.log(job, "Comprimiendo carpeta (tar.zst)…").await;
+                    let (t, f) = crate::lan::client::compress_to_temp(&path).await?;
+                    (Some(t), f)
+                } else {
+                    (None, collect_files(&path)?)
+                };
+                let total = total_size(&files);
+                let jf: Vec<JobFile> = files.iter().map(|f| JobFile { path: f.rel_path.clone(), size: f.size }).collect();
+                e.update_job(job, |j| {
+                    j.total = total;
+                    j.files = jf;
+                })
+                .await;
+                e.log(job, format!("Calculando BLAKE3 de {} archivo(s)…", files.len())).await;
+                let s2 = sink.clone();
+                let hashes = hash_all(&files, move |f| s2.file(f)).await?;
+                let (device_name, rate) = {
+                    let c = e.cfg.read().await;
+                    (c.device_name.clone(), c.rate_limit_mbps as u64 * 125_000)
+                };
+                let manifest = build_manifest(&device_name, &e.identity.fingerprint, &name, &files, &hashes);
+                let sender = Sender::new(ip, port, fingerprint.as_deref(), req.pin.clone().filter(|p| !p.is_empty()))?;
+                let info = sender.info().await?;
+                e.update_job(job, |j| j.peer = format!("{} ({ip})", info.name)).await;
+                e.log(job, format!("Oferta enviada a {} — esperando aceptación…", info.name)).await;
+                let rid = e.history.start(Kind::LanSend, &name, total, &info.name, files.len() as u32)?;
+                let s3 = sink.clone();
+                let progress: crate::lan::client::ProgressFn = Arc::new(move |n, f| {
+                    s3.add(n);
+                    s3.file(f);
+                });
+                let r = sender.send(&manifest, &files, &hashes, progress, Duration::from_secs(300), rate).await;
+                e.history.finish(rid, if r.is_ok() { Status::Completed } else { Status::Failed }, r.as_ref().err().map(|x| format!("{x:#}")).as_deref())?;
+                r.map(|_| ())
+            }
+            .await;
+            match res {
+                Ok(()) => e.finish_job(job, JobState::Completed, "Enviado — verificación BLAKE3 correcta en el receptor").await,
+                Err(err) => e.finish_job(job, JobState::Failed, format!("Error: {err:#}")).await,
+            }
+        });
+        self.set_abort(job, task.abort_handle()).await;
+        Ok(job)
+    }
+
+    /// Upload to storage.to and (optionally) write a `.unishare` ticket.
+    pub async fn send_global(self: &Arc<Self>, req: SendGlobalReq) -> Result<u64> {
+        let path = PathBuf::from(&req.path);
+        ensure!(path.exists(), "path not found: {}", req.path);
+        if let Some(p) = req.password.as_deref().filter(|p| !p.is_empty()) {
+            ensure!((4..=100).contains(&p.chars().count()), "password must be 4-100 characters");
+        }
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let (job, sink) = self.new_job(JobKind::GlobalUpload, &name, "storage.to", 0, Vec::new()).await;
+        let e = self.clone();
+        let task = tokio::spawn(async move {
+            let res: Result<()> = async {
+                let (_tmp, files) = if req.compress && path.is_dir() {
+                    e.log(job, "Comprimiendo carpeta (tar.zst)…").await;
+                    let (t, f) = crate::lan::client::compress_to_temp(&path).await?;
+                    (Some(t), f)
+                } else {
+                    (None, collect_files(&path)?)
+                };
+                let files: Vec<_> = files.into_iter().filter(|f| f.size > 0).collect();
+                ensure!(!files.is_empty(), "nothing to upload (empty files are skipped by storage.to)");
+                let total = total_size(&files);
+                let jf: Vec<JobFile> = files.iter().map(|f| JobFile { path: f.rel_path.clone(), size: f.size }).collect();
+                e.update_job(job, |j| {
+                    j.total = total;
+                    j.files = jf;
+                })
+                .await;
+                let hashes = if req.ticket {
+                    e.log(job, "Calculando BLAKE3 para el ticket…").await;
+                    let s2 = sink.clone();
+                    hash_all(&files, move |f| s2.file(f)).await?
+                } else {
+                    Vec::new()
+                };
+                let rid = e.history.start(Kind::GlobalUpload, &name, total, "storage.to", files.len() as u32)?;
+                let s3 = sink.clone();
+                let progress: crate::global::upload::ProgressFn = Arc::new(move |n| s3.add(n));
+                let (api, bearer, expiry, parallel, device_name) = {
+                    let c = e.cfg.read().await;
+                    (c.global.storage_to_api.clone(), c.global.storage_to_token.clone(), c.global.expiry_days, c.global.parallel_parts, c.device_name.clone())
+                };
+                let password = req.password.clone().filter(|p| !p.is_empty());
+                let opts = crate::global::upload::UploadOptions {
+                    expiry_days: Some(req.expiry_days.unwrap_or(expiry).clamp(1, 7)),
+                    parallel_parts: parallel,
+                    password: password.clone(),
+                    max_downloads: req.max_downloads.filter(|m| *m > 0),
+                };
+                let token = e.ensure_visitor_token().await?;
+                let client = crate::global::storage_to::Client::new(&api, &token, bearer.as_deref())?;
+                e.log(job, format!("Subiendo {} archivo(s) a storage.to…", files.len())).await;
+                let s4 = sink.clone();
+                let r = crate::global::upload::upload_entries(&client, &files, &opts, progress, move |f| s4.file(f)).await;
+                match &r {
+                    Ok(o) => {
+                        e.history.set_link(rid, &o.url, Some(&serde_json::json!({"owner_token": o.owner_token, "id": o.id, "kind": o.kind}).to_string()))?;
+                        e.history.finish(rid, Status::Completed, None)?;
+                    }
+                    Err(err) => e.history.finish(rid, Status::Failed, Some(&format!("{err:#}")))?,
+                }
+                let o = r?;
+                let mut ticket_uri = None;
+                let mut ticket_path = None;
+                if req.ticket {
+                    let expires = o.expires_at.as_deref().and_then(|x| chrono::DateTime::parse_from_rfc3339(x).ok()).map(|d| d.with_timezone(&chrono::Utc));
+                    let mut t = Ticket::from_upload(&name, &o.url, password.as_deref(), &device_name, &files, &hashes, expires);
+                    t.message = req.message.clone().filter(|m| !m.trim().is_empty());
+                    let out = path.parent().map(Path::to_path_buf).unwrap_or_default().join(t.default_filename());
+                    t.save(&out)?;
+                    ticket_uri = Some(t.to_uri_compact()?);
+                    ticket_path = Some(out.display().to_string());
+                    e.log(job, format!("Ticket .unishare guardado en {}", out.display())).await;
+                }
+                let url = o.url.clone();
+                e.update_job(job, |j| {
+                    j.link = Some(url);
+                    j.ticket_uri = ticket_uri;
+                    j.ticket_path = ticket_path;
+                })
+                .await;
+                e.log(job, format!("Link: {}", o.url)).await;
+                if e.cfg.read().await.notifications {
+                    crate::ui::notify("uni-share: subida completada", &o.url);
+                }
+                Ok(())
+            }
+            .await;
+            match res {
+                Ok(()) => e.finish_job(job, JobState::Completed, "Subida completada").await,
+                Err(err) => e.finish_job(job, JobState::Failed, format!("Error: {err:#}")).await,
+            }
+        });
+        self.set_abort(job, task.abort_handle()).await;
+        Ok(job)
+    }
+
+    /// Download from a link, `unishare:` URI or `.unishare` file.
+    pub async fn download(self: &Arc<Self>, req: DownloadReq) -> Result<u64> {
+        let src = req.url.trim().to_string();
+        ensure!(!src.is_empty(), "empty url");
+        let dest = req.dest.clone().filter(|d| !d.trim().is_empty()).map(PathBuf::from).unwrap_or(self.download_dir().await);
+        let is_ticket = crate::ticket::looks_like_ticket(&src);
+        let short = if is_ticket { "ticket".to_string() } else { src.clone() };
+        let (job, sink) = self.new_job(JobKind::Download, &short, &short, 0, Vec::new()).await;
+        self.update_job(job, |j| j.dest = Some(dest.display().to_string())).await;
+        let e = self.clone();
+        let task = tokio::spawn(async move {
+            let res: Result<String> = async {
+                tokio::fs::create_dir_all(&dest).await?;
+                let s2 = sink.clone();
+                let progress: crate::download::http::ProgressFn = Arc::new(move |n| s2.add(n));
+                let s3 = sink.clone();
+                let on_file = move |f: &str| s3.file(f);
+                let pw = req.password.clone().filter(|p| !p.is_empty());
+                let set_meta = |name: String, total: u64, files: Vec<JobFile>, peer: String| {
+                    let e = e.clone();
+                    async move {
+                        e.update_job(job, |j| {
+                            j.name = name;
+                            j.total = total;
+                            j.files = files;
+                            j.peer = peer;
+                        })
+                        .await
+                    }
+                };
+                if is_ticket {
+                    let t = crate::ticket::resolve(&src)?;
+                    let jf = t.files.iter().map(|f| JobFile { path: f.path.clone(), size: f.size }).collect();
+                    let srcs = t.sources.iter().map(|x| x.label()).collect::<Vec<_>>().join(", ");
+                    set_meta(t.name.clone(), t.total_size, jf, format!("ticket · {srcs}")).await;
+                    e.log(job, format!("Ticket «{}» de {} — fuentes: {srcs}", t.name, t.sender.as_deref().unwrap_or("?"))).await;
+                    let rid = e.history.start(Kind::Download, &t.name, t.total_size, &format!("ticket:{}", t.id), t.files.len() as u32)?;
+                    let e2 = e.clone();
+                    let r = crate::download::ticket::download_ticket(&t, &dest, req.force, progress, on_file, move |sx, prev| {
+                        let e3 = e2.clone();
+                        let msg = match prev {
+                            Some(err) => format!("Fuente anterior falló ({err:#}); probando {}", sx.label()),
+                            None => format!("Descargando desde {}", sx.label()),
+                        };
+                        tokio::spawn(async move { e3.log(job, msg).await });
+                    })
+                    .await;
+                    e.history.finish(rid, if r.is_ok() { Status::Completed } else { Status::Failed }, r.as_ref().err().map(|x| format!("{x:#}")).as_deref())?;
+                    let r = r?;
+                    Ok(format!("{} archivo(s) desde {} — BLAKE3 verificado: {}", r.saved.len(), r.source, r.verified))
+                } else if crate::download::swisstransfer::is_swisstransfer_url(&src) {
+                    let mut c = crate::download::swisstransfer::SwissTransferClient::new()?;
+                    let t = c.get_transfer(&src, pw.as_deref()).await?;
+                    let jf = t.files.iter().map(|f| JobFile { path: f.path.clone(), size: f.size }).collect();
+                    let title = t.title.clone().unwrap_or_else(|| t.link_id.clone());
+                    set_meta(title.clone(), t.total_size, jf, "SwissTransfer".into()).await;
+                    let rid = e.history.start(Kind::Download, &title, t.total_size, &src, t.files.len() as u32)?;
+                    let r = c.download_all(&t, &dest, req.force, progress, on_file).await;
+                    e.history.finish(rid, if r.is_ok() { Status::Completed } else { Status::Failed }, r.as_ref().err().map(|x| format!("{x:#}")).as_deref())?;
+                    Ok(format!("{} archivo(s) descargados", r?.len()))
+                } else if crate::global::storage_to::parse_share_url(&src).is_some() {
+                    let d = crate::download::storage_to::StorageDownloader::new()?;
+                    let info = d.info(&src).await?;
+                    if info.password_protected {
+                        d.verify_password(&info, pw.as_deref().context("la compartición requiere contraseña")?).await?;
+                    }
+                    let title = info.title.clone().unwrap_or_else(|| info.files[0].name.clone());
+                    let jf = info.files.iter().map(|f| JobFile { path: f.name.clone(), size: f.size }).collect();
+                    set_meta(title.clone(), info.total_size, jf, "storage.to".into()).await;
+                    let rid = e.history.start(Kind::Download, &title, info.total_size, &src, info.files.len() as u32)?;
+                    let r = d.download_all(&info, &dest, req.force, progress, on_file).await;
+                    e.history.finish(rid, if r.is_ok() { Status::Completed } else { Status::Failed }, r.as_ref().err().map(|x| format!("{x:#}")).as_deref())?;
+                    Ok(format!("{} archivo(s) descargados", r?.len()))
+                } else if src.starts_with("http://") || src.starts_with("https://") {
+                    let mut t = Ticket::new(src.rsplit('/').next().unwrap_or("download"));
+                    t.sources.push(Source::Http { url: src.clone(), filename: None });
+                    e.update_job(job, |j| j.peer = "HTTP".into()).await;
+                    let rid = e.history.start(Kind::Download, &t.name, 0, &src, 1)?;
+                    let r = crate::download::ticket::download_ticket(&t, &dest, req.force, progress, on_file, |_, _| {}).await;
+                    e.history.finish(rid, if r.is_ok() { Status::Completed } else { Status::Failed }, r.as_ref().err().map(|x| format!("{x:#}")).as_deref())?;
+                    Ok(format!("{} archivo(s) descargados", r?.saved.len()))
+                } else {
+                    bail!("URL no soportada (storage.to, SwissTransfer, HTTP directo, unishare: o fichero .unishare)")
+                }
+            }
+            .await;
+            match res {
+                Ok(m) => {
+                    if e.cfg.read().await.notifications {
+                        crate::ui::notify("uni-share: descarga completada", &m);
+                    }
+                    e.finish_job(job, JobState::Completed, m).await
+                }
+                Err(err) => e.finish_job(job, JobState::Failed, format!("Error: {err:#}")).await,
+            }
+        });
+        self.set_abort(job, task.abort_handle()).await;
+        Ok(job)
+    }
+
+    /// Build a `.unishare` ticket from existing links.
+    pub async fn create_ticket(&self, r: TicketCreateReq) -> Result<TicketCreated> {
+        let links: Vec<String> = r.links.iter().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+        ensure!(!links.is_empty(), "at least one link is required");
+        for l in &links {
+            ensure!(l.starts_with("http://") || l.starts_with("https://"), "not a URL: {l}");
+        }
+        let local = r.verify_from.clone().filter(|p| !p.trim().is_empty()).map(PathBuf::from);
+        let name = r
+            .name
+            .clone()
+            .filter(|n| !n.trim().is_empty())
+            .or_else(|| local.as_ref().and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string())))
+            .unwrap_or_else(|| links[0].trim_end_matches('/').rsplit('/').next().unwrap_or("share").to_string());
+        let mut t = Ticket::new(name);
+        t.sender = Some(self.cfg.read().await.device_name.clone());
+        t.message = r.message.clone().filter(|m| !m.trim().is_empty());
+        let pw = r.password.clone().filter(|p| !p.is_empty());
+        for l in &links {
+            t.sources.push(Source::from_url(l, pw.clone()));
+        }
+        if let Some(p) = &local {
+            ensure!(p.exists(), "verify_from path not found: {}", p.display());
+            let files = collect_files(p)?;
+            let hashes = hash_all(&files, |_| {}).await?;
+            t.files = files.iter().zip(hashes.iter()).map(|(f, h)| TicketFile { path: f.rel_path.clone(), size: f.size, blake3: Some(h.clone()) }).collect();
+            t.total_size = total_size(&files);
+        }
+        let out = match r.output.filter(|o| !o.trim().is_empty()) {
+            Some(o) => PathBuf::from(o),
+            None => self.download_dir().await.join(t.default_filename()),
+        };
+        if let Some(parent) = out.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        t.save(&out)?;
+        let uri = t.to_uri_compact()?;
+        Ok(TicketCreated { ticket: t, path: out, uri })
+    }
+
+    /// Parse a ticket from a URI, raw JSON or a file path.
+    pub fn parse_ticket(data: &str) -> Result<Ticket> {
+        let d = data.trim();
+        if Path::new(d).is_file() { Ticket::load(Path::new(d)) } else { Ticket::decode(d.as_bytes()) }
+    }
+}
+
+/// Non-loopback IPv4 addresses of this host (first = default route).
+pub fn local_ips() -> Vec<String> {
+    let mut v = Vec::new();
+    if let Ok(ip) = local_ip_address::local_ip() {
+        v.push(ip.to_string());
+    }
+    if let Ok(list) = local_ip_address::list_afinet_netifas() {
+        for (_, ip) in list {
+            if ip.is_ipv4() && !ip.is_loopback() && !v.contains(&ip.to_string()) {
+                v.push(ip.to_string());
+            }
+        }
+    }
+    v
+}
+
+/// Open a URL or folder with the platform default handler (best effort).
+pub fn open_in_system(target: &str) {
+    let t = target.to_string();
+    std::thread::spawn(move || {
+        #[cfg(target_os = "macos")]
+        let mut cmd = {
+            let mut c = std::process::Command::new("open");
+            c.arg(&t);
+            c
+        };
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/C", "start", "", &t]);
+            c
+        };
+        #[cfg(not(any(target_os = "macos", windows)))]
+        let mut cmd = {
+            let mut c = std::process::Command::new("xdg-open");
+            c.arg(&t);
+            c
+        };
+        let _ = cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+    });
+}
+
+/// Directory listing for built-in file pickers.
+#[derive(Serialize, Debug, Clone)]
+pub struct DirEntry {
+    pub name: String,
+    pub path: PathBuf,
+    pub dir: bool,
+    pub size: u64,
+    pub modified: Option<u64>,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct DirListing {
+    pub path: PathBuf,
+    pub parent: Option<PathBuf>,
+    pub entries: Vec<DirEntry>,
+    pub roots: Vec<PathBuf>,
+}
+
+pub fn list_dir(path: Option<&Path>, dirs_only: bool, show_hidden: bool) -> Result<DirListing> {
+    let path = match path.filter(|p| !p.as_os_str().is_empty()) {
+        Some(p) => p.to_path_buf(),
+        None => directories::UserDirs::new().map(|u| u.home_dir().to_path_buf()).unwrap_or_else(|| PathBuf::from("/")),
+    };
+    let path = if path.is_dir() { path } else { path.parent().map(Path::to_path_buf).unwrap_or(path) };
+    let rd = std::fs::read_dir(&path).with_context(|| format!("reading {}", path.display()))?;
+    let mut entries = Vec::new();
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if !show_hidden && name.starts_with('.') {
+            continue;
+        }
+        let Ok(md) = e.metadata() else { continue };
+        if dirs_only && !md.is_dir() {
+            continue;
+        }
+        entries.push(DirEntry {
+            name,
+            path: e.path(),
+            dir: md.is_dir(),
+            size: if md.is_dir() { 0 } else { md.len() },
+            modified: md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()),
+        });
+    }
+    entries.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(u) = directories::UserDirs::new() {
+        roots.push(u.home_dir().to_path_buf());
+        for d in [u.desktop_dir(), u.download_dir(), u.document_dir(), u.picture_dir(), u.video_dir()].into_iter().flatten() {
+            roots.push(d.to_path_buf());
+        }
+    }
+    #[cfg(windows)]
+    for l in b'C'..=b'Z' {
+        let d = PathBuf::from(format!("{}:\\", l as char));
+        if d.exists() {
+            roots.push(d);
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        roots.push(PathBuf::from("/"));
+        for m in ["/media", "/mnt", "/Volumes"] {
+            if Path::new(m).exists() {
+                roots.push(PathBuf::from(m));
+            }
+        }
+    }
+    Ok(DirListing { parent: path.parent().map(Path::to_path_buf), path, entries, roots })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn job_percent_and_labels() {
+        let mut j = Job {
+            id: 1,
+            kind: JobKind::Download,
+            name: "x".into(),
+            peer: String::new(),
+            total: 200,
+            done: 50,
+            state: JobState::Running,
+            message: String::new(),
+            current_file: String::new(),
+            link: None,
+            ticket_uri: None,
+            ticket_path: None,
+            dest: None,
+            files: vec![],
+            started: 0,
+            finished: None,
+            speed: 0,
+            eta: None,
+            log: vec![],
+            samples: VecDeque::new(),
+        };
+        assert_eq!(j.percent(), 25.0);
+        j.total = 0;
+        assert_eq!(j.percent(), 0.0);
+        j.state = JobState::Completed;
+        assert_eq!(j.percent(), 100.0);
+        assert!(JobKind::LanSend.is_outgoing() && !JobKind::Download.is_outgoing());
+        assert_eq!(serde_json::to_string(&JobState::Failed).unwrap(), "\"failed\"");
+    }
+
+    #[test]
+    fn list_dir_works() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"hi").unwrap();
+        std::fs::create_dir(tmp.path().join("sub")).unwrap();
+        std::fs::write(tmp.path().join(".hidden"), b"").unwrap();
+        let l = list_dir(Some(tmp.path()), false, false).unwrap();
+        assert_eq!(l.entries.len(), 2);
+        assert!(l.entries[0].dir, "dirs first");
+        let d = list_dir(Some(tmp.path()), true, false).unwrap();
+        assert_eq!(d.entries.len(), 1);
+        assert!(!l.roots.is_empty());
+    }
+}

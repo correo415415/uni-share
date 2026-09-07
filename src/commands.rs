@@ -1,5 +1,7 @@
 //! CLI subcommand implementations (thin glue over the library).
 
+pub use crate::commands_lan::{list_devices, receive, send_lan};
+
 use crate::*;
 use anyhow::{Result, bail};
 use console::style;
@@ -76,18 +78,6 @@ fn truncate(s: &str, n: usize) -> String {
         let cut: String = s.chars().take(n - 1).collect();
         format!("{cut}…")
     }
-}
-
-pub async fn list_devices(_ctx: Ctx, _a: ListDevicesArgs) -> Result<()> {
-    bail!("list-devices: not implemented yet (phase 2)")
-}
-
-pub async fn send_lan(_ctx: Ctx, _a: SendLanArgs) -> Result<()> {
-    bail!("send-lan: not implemented yet (phase 2)")
-}
-
-pub async fn receive(_ctx: Ctx, _a: ReceiveArgs) -> Result<()> {
-    bail!("receive: not implemented yet (phase 2)")
 }
 
 pub async fn send_global(_ctx: Ctx, _a: SendGlobalArgs) -> Result<()> {

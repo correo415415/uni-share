@@ -6,6 +6,7 @@ use uni_share::history::History;
 use uni_share::{logging, ui};
 
 mod commands;
+mod commands_lan;
 
 #[derive(Parser, Debug)]
 #[command(

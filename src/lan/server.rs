@@ -167,11 +167,11 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(ErrorBody { error: msg.into() })).into_response()
 }
 
-fn check_pin(state: &ServerState, headers: &HeaderMap) -> Result<(), Response> {
+fn check_pin(state: &ServerState, headers: &HeaderMap) -> Result<(), Box<Response>> {
     if let Some(pin) = &state.pin {
         let given = headers.get(HEADER_PIN).and_then(|v| v.to_str().ok()).unwrap_or("");
         if given != pin {
-            return Err(err(StatusCode::UNAUTHORIZED, "invalid or missing PIN"));
+            return Err(Box::new(err(StatusCode::UNAUTHORIZED, "invalid or missing PIN")));
         }
     }
     Ok(())
@@ -194,7 +194,7 @@ async fn offer(
     Json(manifest): Json<Manifest>,
 ) -> Response {
     if let Err(r) = check_pin(&s, &headers) {
-        return r;
+        return *r;
     }
     if let Err(e) = manifest.validate() {
         return err(StatusCode::BAD_REQUEST, e);
@@ -269,13 +269,13 @@ async fn offer_status(State(s): State<Arc<ServerState>>, AxPath(id): AxPath<Stri
     }
 }
 
-async fn get_transfer(s: &ServerState, id: &str) -> Result<Arc<Mutex<Transfer>>, Response> {
+async fn get_transfer(s: &ServerState, id: &str) -> Result<Arc<Mutex<Transfer>>, Box<Response>> {
     s.transfers
         .read()
         .await
         .get(id)
         .cloned()
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "unknown or not accepted transfer"))
+        .ok_or_else(|| Box::new(err(StatusCode::NOT_FOUND, "unknown or not accepted transfer")))
 }
 
 fn part_path(target: &std::path::Path) -> PathBuf {
@@ -287,7 +287,7 @@ fn part_path(target: &std::path::Path) -> PathBuf {
 async fn file_state(State(s): State<Arc<ServerState>>, AxPath((id, idx)): AxPath<(String, usize)>) -> Response {
     let t = match get_transfer(&s, &id).await {
         Ok(t) => t,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let t = t.lock().await;
     if idx >= t.manifest.files.len() {
@@ -315,7 +315,7 @@ async fn upload_file(
 ) -> Response {
     let t_arc = match get_transfer(&s, &id).await {
         Ok(t) => t,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     // Snapshot what we need, then release the lock while streaming.
     let (target, expected_size, expected_hash, rel, name, sender, total, files_total) = {
@@ -459,7 +459,7 @@ async fn upload_file(
 async fn complete(State(s): State<Arc<ServerState>>, AxPath(id): AxPath<String>) -> Response {
     let t_arc = match get_transfer(&s, &id).await {
         Ok(t) => t,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let progress = {
         let t = t_arc.lock().await;

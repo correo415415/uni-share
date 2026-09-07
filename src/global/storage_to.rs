@@ -2,7 +2,7 @@
 //!
 //! Verified live against the API on 2026-09-07:
 //! - `POST /upload/init`   → `{type:"single", upload_url, r2_key, headers}` (<50 MB)
-//!                         or `{type:"multipart", upload_id, r2_key, part_size, total_parts, initial_urls, owner_token}`
+//!   or `{type:"multipart", upload_id, r2_key, part_size, total_parts, initial_urls, owner_token}`
 //! - `PUT <presigned R2 url>` (parts return `ETag`)
 //! - `POST /upload/complete-multipart {upload_id, parts:[{partNumber, etag}]}`
 //! - `POST /upload/confirm` → `{file:{id,url,filename,size,expires_at}, owner_token}`

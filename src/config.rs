@@ -238,8 +238,7 @@ mod tests {
 
     #[test]
     fn rejects_bad_pin() {
-        let mut cfg = Config::default();
-        cfg.pin = Some("12".into());
+        let mut cfg = Config { pin: Some("12".into()), ..Config::default() };
         assert!(cfg.validate().is_err());
         cfg.pin = Some("1234".into());
         assert!(cfg.validate().is_ok());

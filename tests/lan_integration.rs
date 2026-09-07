@@ -90,7 +90,7 @@ async fn wrong_fingerprint_is_rejected_by_tls() {
     let (server, _id) = spawn_receiver(dst.path().to_path_buf(), None, false).await;
     let other = Identity::generate("Evil").unwrap();
     let sender = Sender::new("127.0.0.1".parse().unwrap(), server.addr.port(), Some(&other.fingerprint), None).unwrap();
-    let err = sender.info().await.err().expect("must fail");
+    let err = sender.info().await.expect_err("must fail");
     let msg = format!("{err:#}");
     assert!(msg.contains("fingerprint") || msg.contains("certificate") || msg.contains("tls"), "{msg}");
 }
@@ -113,12 +113,12 @@ async fn pin_required_and_rejection() {
 
     // No PIN → unauthorized.
     let no_pin = Sender::new("127.0.0.1".parse().unwrap(), port, Some(&id.fingerprint), None).unwrap();
-    let e = no_pin.offer(&manifest, Duration::from_secs(5)).await.err().unwrap();
+    let e = no_pin.offer(&manifest, Duration::from_secs(5)).await.expect_err("must fail");
     assert!(format!("{e}").contains("PIN"));
 
     // Right PIN but receiver rejects.
     let with_pin = Sender::new("127.0.0.1".parse().unwrap(), port, Some(&id.fingerprint), Some("1234".into())).unwrap();
-    let e = with_pin.offer(&manifest, Duration::from_secs(5)).await.err().unwrap();
+    let e = with_pin.offer(&manifest, Duration::from_secs(5)).await.expect_err("must fail");
     assert!(format!("{e}").contains("rejected"));
 }
 
@@ -140,7 +140,7 @@ async fn hash_mismatch_is_detected_and_file_discarded() {
     let bad = vec!["00".repeat(32)];
     let manifest = build_manifest("S", "", "f.txt", &files, &bad);
     let sender = Sender::new("127.0.0.1".parse().unwrap(), port, Some(&id.fingerprint), None).unwrap();
-    let err = sender.send(&manifest, &files, &bad, Arc::new(|_, _| {}), Duration::from_secs(5), 0).await.err().unwrap();
+    let err = sender.send(&manifest, &files, &bad, Arc::new(|_, _| {}), Duration::from_secs(5), 0).await.expect_err("must fail");
     assert!(format!("{err}").contains("integrity"), "{err}");
     assert!(!dst.path().join("f.txt").exists());
     assert!(!dst.path().join("f.txt.part").exists());

@@ -159,7 +159,7 @@ pub async fn discover(timeout: Duration, exclude_fingerprint: Option<&str>) -> R
     let _ = daemon.stop_browse(SERVICE_TYPE);
     let _ = daemon.shutdown();
     let mut list: Vec<Device> = found.into_values().collect();
-    list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    list.sort_by_key(|d| d.name.to_lowercase());
     Ok(list)
 }
 

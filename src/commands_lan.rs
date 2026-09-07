@@ -169,7 +169,7 @@ pub async fn send_lan(ctx: Ctx, a: SendLanArgs) -> Result<()> {
         Some(t) => match parse_target(t, ctx.cfg.lan_port) {
             Some((ip, port)) => (ip, port, None, t.clone()),
             None => {
-                let sp = ui::spinner(S, format!("Buscando «{t}»…"));
+                let sp = ui::spinner(S, &format!("Buscando «{t}»…"));
                 let devices = discover(Duration::from_secs(a.timeout), Some(&id.fingerprint)).await?;
                 sp.finish_and_clear();
                 let d = devices

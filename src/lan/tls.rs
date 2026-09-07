@@ -14,12 +14,17 @@ use rustls::{ClientConfig, DigitallySignedStruct, ServerConfig, SignatureScheme}
 use std::path::Path;
 use std::sync::Arc;
 
-#[derive(Clone)]
 pub struct Identity {
     pub cert_der: CertificateDer<'static>,
     pub key_der: PrivatePkcs8KeyDer<'static>,
     /// Lower-case hex SHA-256 of the DER certificate.
     pub fingerprint: String,
+}
+
+impl Clone for Identity {
+    fn clone(&self) -> Self {
+        Self { cert_der: self.cert_der.clone(), key_der: self.key_der.clone_key(), fingerprint: self.fingerprint.clone() }
+    }
 }
 
 impl std::fmt::Debug for Identity {

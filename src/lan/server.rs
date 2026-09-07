@@ -14,7 +14,7 @@ use axum::body::Body;
 use axum::extract::{Path as AxPath, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::StreamExt;
 use serde::Deserialize;
@@ -69,7 +69,7 @@ pub struct Transfer {
 }
 
 enum OfferState {
-    Pending(Manifest, SocketAddr),
+    Pending,
     Rejected(String),
     Accepted,
 }
@@ -95,7 +95,7 @@ pub struct ServerHandle {
     pub offers: mpsc::Receiver<IncomingOffer>,
     pub progress: watch::Receiver<Progress>,
     pub completed: mpsc::UnboundedReceiver<Progress>,
-    shutdown: Option<axum_server::Handle>,
+    shutdown: Option<axum_server::Handle<SocketAddr>>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -150,7 +150,7 @@ pub async fn start(identity: Identity, opts: ServerOptions) -> Result<ServerHand
     let listener = std::net::TcpListener::bind(bind).with_context(|| format!("binding {bind}"))?;
     let addr = listener.local_addr()?;
     let handle = axum_server::Handle::new();
-    let server = axum_server::from_tcp_rustls(listener, tls).handle(handle.clone());
+    let server = axum_server::from_tcp_rustls(listener, tls).context("tcp listener")?.handle(handle.clone());
     let task = tokio::spawn(async move {
         if let Err(e) = server.serve(app.into_make_service_with_connect_info::<SocketAddr>()).await {
             tracing::error!("lan server error: {e}");
@@ -202,7 +202,7 @@ async fn offer(
     s.offers
         .write()
         .await
-        .insert(transfer_id.clone(), OfferState::Pending(manifest.clone(), peer));
+        .insert(transfer_id.clone(), OfferState::Pending);
 
     let (tx, rx) = oneshot::channel();
     let incoming = IncomingOffer { transfer_id: transfer_id.clone(), manifest: manifest.clone(), peer, decision: tx };
@@ -260,7 +260,7 @@ async fn offer_status(State(s): State<Arc<ServerState>>, AxPath(id): AxPath<Stri
     let offers = s.offers.read().await;
     match offers.get(&id) {
         None => err(StatusCode::NOT_FOUND, "unknown offer"),
-        Some(OfferState::Pending(..)) => Json(OfferResponse { transfer_id: id, status: OfferStatus::Pending }).into_response(),
+        Some(OfferState::Pending) => Json(OfferResponse { transfer_id: id, status: OfferStatus::Pending }).into_response(),
         Some(OfferState::Rejected(reason)) => {
             Json(OfferResponse { transfer_id: id, status: OfferStatus::Rejected { reason: reason.clone() } }).into_response()
         }

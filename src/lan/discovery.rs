@@ -6,9 +6,9 @@
 //! version, port, TLS fingerprint, whether a PIN is required).
 
 use anyhow::{Context, Result};
-use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
@@ -45,7 +45,7 @@ pub struct Announcer {
 impl Announcer {
     pub fn start(device_name: &str, port: u16, fingerprint: &str, requires_pin: bool) -> Result<Self> {
         let daemon = ServiceDaemon::new().context("starting mDNS daemon")?;
-        let mut props = BTreeMap::new();
+        let mut props: HashMap<String, String> = HashMap::new();
         props.insert("name".to_string(), device_name.to_string());
         props.insert("fp".to_string(), fingerprint.to_string());
         props.insert("ver".to_string(), crate::APP_VERSION.to_string());
@@ -81,9 +81,9 @@ fn sanitize_instance(name: &str) -> String {
     if s.trim().is_empty() { "uni-share".into() } else { s }
 }
 
-fn device_from_info(info: &ServiceInfo) -> Device {
-    let prop = |k: &str| info.get_property_val_str(k).unwrap_or("").to_string();
-    let mut addrs: Vec<IpAddr> = info.get_addresses().iter().copied().collect();
+fn device_from_info(info: &ResolvedService) -> Device {
+    let prop = |k: &str| info.txt_properties.get_property_val_str(k).unwrap_or("").to_string();
+    let mut addrs: Vec<IpAddr> = info.get_addresses().iter().map(|a| a.to_ip_addr()).collect();
     addrs.sort();
     let name = {
         let n = prop("name");

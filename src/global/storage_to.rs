@@ -146,6 +146,7 @@ pub struct CollectionFile {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Envelope {
     #[serde(default)]
     success: bool,

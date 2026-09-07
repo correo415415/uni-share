@@ -4,6 +4,7 @@ pub use crate::commands_daemon::daemon;
 pub use crate::commands_download::download;
 pub use crate::commands_global::send_global;
 pub use crate::commands_lan::{list_devices, receive, send_lan};
+pub use crate::commands_ticket::{qr, ticket};
 
 use crate::*;
 use anyhow::Result;

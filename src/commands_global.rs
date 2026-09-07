@@ -45,6 +45,16 @@ pub async fn send_global(mut ctx: Ctx, a: SendGlobalArgs) -> Result<()> {
         max_downloads: a.max_downloads,
     };
     let backend_label = if backend == "smash" { "Smash" } else { "storage.to" };
+    let want_ticket = a.ticket.is_some() || a.ticket_qr;
+    // BLAKE3 digests for the ticket (computed up-front, cheap compared with the upload).
+    let hashes = if want_ticket {
+        let sp = ui::spinner(S, "Calculando BLAKE3 para el ticket…");
+        let h = uni_share::lan::client::hash_all(&files, |f| sp.set_message(f.to_string())).await?;
+        sp.finish_and_clear();
+        h
+    } else {
+        Vec::new()
+    };
     if !a.json {
         ui::info(S, format!("Subiendo {} ({} archivo(s), {}) a {}…", style(&name).bold(), files.len(), human_bytes(total), backend_label));
     }
@@ -74,8 +84,28 @@ pub async fn send_global(mut ctx: Ctx, a: SendGlobalArgs) -> Result<()> {
             let meta = serde_json::json!({ "owner_token": o.owner_token, "id": o.id, "kind": o.kind, "backend": backend }).to_string();
             ctx.history.set_link(rid, &o.url, Some(&meta))?;
             ctx.history.finish(rid, Status::Completed, None)?;
+
+            // Optional .unishare ticket next to the source (or at the given path).
+            let mut ticket_path: Option<std::path::PathBuf> = None;
+            let mut ticket_uri: Option<String> = None;
+            if want_ticket {
+                let expires = o.expires_at.as_deref().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()).map(|d| d.with_timezone(&chrono::Utc));
+                let t = uni_share::ticket::Ticket::from_upload(&name, &o.url, a.password.as_deref(), &ctx.cfg.device_name, &files, &hashes, expires);
+                let out = match a.ticket.as_deref() {
+                    Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+                    _ => a.path.parent().map(|d| d.to_path_buf()).unwrap_or_default().join(t.default_filename()),
+                };
+                t.save(&out)?;
+                ticket_uri = Some(t.to_uri_compact()?);
+                ticket_path = Some(out);
+            }
             if a.json {
-                println!("{}", serde_json::to_string_pretty(&o)?);
+                let mut v = serde_json::to_value(&o)?;
+                if let Some(p) = &ticket_path {
+                    v["ticket"] = serde_json::json!(p);
+                    v["ticket_uri"] = serde_json::json!(ticket_uri);
+                }
+                println!("{}", serde_json::to_string_pretty(&v)?);
                 return Ok(());
             }
             ui::ok(S, "Subida completada.");
@@ -89,8 +119,17 @@ pub async fn send_global(mut ctx: Ctx, a: SendGlobalArgs) -> Result<()> {
             if let Some(m) = a.max_downloads {
                 ui::info(S, format!("Máximo de descargas: {m}"));
             }
+            if let Some(p) = &ticket_path {
+                ui::info(S, format!("Ticket .unishare: {}", style(p.display()).bold()));
+            }
             if !a.no_qr {
-                ui::print_qr(S, &o.url);
+                match (&ticket_uri, a.ticket_qr) {
+                    (Some(u), true) => {
+                        ui::info(S, "QR del ticket (incluye contraseña y digests):");
+                        ui::print_qr(S, u);
+                    }
+                    _ => ui::print_qr(S, &o.url),
+                }
             }
             if !a.no_clipboard {
                 if ui::copy_to_clipboard(&o.url) {

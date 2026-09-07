@@ -16,6 +16,9 @@ pub async fn download(ctx: Ctx, a: DownloadArgs) -> Result<()> {
     let dest = a.output.clone().unwrap_or_else(|| ctx.cfg.download_dir.clone());
     tokio::fs::create_dir_all(&dest).await?;
 
+    if uni_share::ticket::looks_like_ticket(&a.url) {
+        return crate::commands_ticket::download_from_ticket(ctx, a, dest).await;
+    }
     if is_swisstransfer_url(&a.url) {
         if a.python {
             ui::info(S, "Delegando a swisstransfer-dl (Python)…");
@@ -32,7 +35,7 @@ pub async fn download(ctx: Ctx, a: DownloadArgs) -> Result<()> {
     if uni_share::global::smash::parse_share_url(&a.url).is_some() {
         bail!("Smash links must be downloaded from the browser (the Smash download API requires the recipient token); open {}", a.url);
     }
-    bail!("unsupported URL: {} (expected storage.to or swisstransfer.com)", a.url)
+    bail!("unsupported URL: {} (expected storage.to, swisstransfer.com, a unishare: URI or a .unishare file)", a.url)
 }
 
 async fn download_storage_to(ctx: Ctx, a: DownloadArgs, dest: std::path::PathBuf) -> Result<()> {

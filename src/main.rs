@@ -10,6 +10,7 @@ mod commands_lan;
 mod commands_global;
 mod commands_download;
 mod commands_daemon;
+mod commands_ticket;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -44,8 +45,12 @@ pub enum Command {
     SendGlobal(SendGlobalArgs),
     /// Listen for incoming LAN transfers
     Receive(ReceiveArgs),
-    /// Download from a storage.to or SwissTransfer link
+    /// Download from a storage.to / SwissTransfer link or a .unishare ticket
     Download(DownloadArgs),
+    /// Create, inspect or share .unishare tickets (portable download descriptors)
+    Ticket(TicketArgs),
+    /// Render a QR code in the terminal for any text/URL/ticket
+    Qr(QrArgs),
     /// Discover devices on the local network
     ListDevices(ListDevicesArgs),
     /// Show transfer history
@@ -104,6 +109,13 @@ pub struct SendGlobalArgs {
     /// Print machine-readable JSON result
     #[arg(long)]
     pub json: bool,
+    /// Also write a .unishare ticket (link + password + BLAKE3 digests) next to the source,
+    /// or to the given path
+    #[arg(long, value_name = "FILE", num_args = 0..=1, default_missing_value = "")]
+    pub ticket: Option<PathBuf>,
+    /// Print the QR of the ticket instead of the plain link (implies --ticket)
+    #[arg(long)]
+    pub ticket_qr: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -130,7 +142,7 @@ pub struct ReceiveArgs {
 
 #[derive(Args, Debug)]
 pub struct DownloadArgs {
-    /// storage.to or SwissTransfer URL
+    /// storage.to / SwissTransfer URL, `unishare:` URI or path to a .unishare file
     pub url: String,
     /// Destination directory
     #[arg(short, long)]
@@ -147,6 +159,77 @@ pub struct DownloadArgs {
     /// For SwissTransfer: delegate to python/swisstransfer_dl.py instead of the native Rust port
     #[arg(long)]
     pub python: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct TicketArgs {
+    #[command(subcommand)]
+    pub action: TicketAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TicketAction {
+    /// Build a ticket from one or more existing share links
+    Create(TicketCreateArgs),
+    /// Show the contents of a ticket (file or unishare: URI)
+    Show {
+        /// Path to .unishare file or unishare: URI
+        ticket: String,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print a ticket as a QR code / unishare: URI to share it
+    Qr {
+        /// Path to .unishare file or unishare: URI
+        ticket: String,
+        /// Only print the URI (no QR)
+        #[arg(long)]
+        uri_only: bool,
+    },
+    /// Convert a unishare: URI into a .unishare file
+    Save {
+        /// unishare: URI
+        uri: String,
+        /// Output file (default: <name>.unishare)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct TicketCreateArgs {
+    /// Share links (storage.to, SwissTransfer, direct HTTP). First one is preferred.
+    #[arg(required = true, num_args = 1..)]
+    pub links: Vec<String>,
+    /// Title of the share (default: derived from the first link)
+    #[arg(short, long)]
+    pub name: Option<String>,
+    /// Password embedded in the ticket for protected links
+    #[arg(short, long)]
+    pub password: Option<String>,
+    /// Free-text message for the recipient
+    #[arg(short, long)]
+    pub message: Option<String>,
+    /// Local copy of the shared file/folder: adds sizes and BLAKE3 digests so the
+    /// recipient can verify integrity
+    #[arg(long, value_name = "PATH")]
+    pub verify_from: Option<PathBuf>,
+    /// Output file (default: <name>.unishare in the current directory)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+    /// Also print a QR code of the ticket
+    #[arg(long)]
+    pub qr: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct QrArgs {
+    /// Text, URL, unishare: URI or path to a .unishare file
+    pub data: String,
+    /// Write the QR as SVG to this file instead of printing it
+    #[arg(long, value_name = "FILE")]
+    pub svg: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -246,6 +329,8 @@ async fn run(cli: Cli) -> Result<()> {
         Command::SendGlobal(a) => commands::send_global(ctx, a).await,
         Command::Receive(a) => commands::receive(ctx, a).await,
         Command::Download(a) => commands::download(ctx, a).await,
+        Command::Ticket(a) => commands::ticket(ctx, a).await,
+        Command::Qr(a) => commands::qr(ctx, a).await,
         Command::ListDevices(a) => commands::list_devices(ctx, a).await,
         Command::History(a) => commands::history(ctx, a).await,
         Command::Daemon(a) => commands::daemon(ctx, a).await,

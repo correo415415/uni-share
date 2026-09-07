@@ -85,6 +85,27 @@ pub fn qr_string(data: &str) -> Option<String> {
     Some(out)
 }
 
+/// Render a QR code as a standalone SVG (used by the GUI and `qr --svg`).
+pub fn qr_svg(data: &str) -> Option<String> {
+    let code = qrcode::QrCode::new(data.as_bytes()).ok()?;
+    let w = code.width();
+    let colors = code.to_colors();
+    let margin = 4usize;
+    let size = w + margin * 2;
+    let mut path = String::new();
+    for y in 0..w {
+        for x in 0..w {
+            if colors[y * w + x] == qrcode::Color::Dark {
+                path.push_str(&format!("M{} {}h1v1h-1z", x + margin, y + margin));
+            }
+        }
+    }
+    Some(format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {size} {size}\" shape-rendering=\"crispEdges\">\
+<rect width=\"100%\" height=\"100%\" fill=\"#fff\"/><path d=\"{path}\" fill=\"#000\"/></svg>"
+    ))
+}
+
 pub fn print_qr(section: &str, data: &str) {
     match qr_string(data) {
         Some(q) => {

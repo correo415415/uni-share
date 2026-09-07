@@ -148,6 +148,7 @@ pub async fn start(identity: Identity, opts: ServerOptions) -> Result<ServerHand
     let tls = axum_server::tls_rustls::RustlsConfig::from_config(identity.server_config()?);
     let bind: SocketAddr = format!("0.0.0.0:{}", opts.port).parse()?;
     let listener = std::net::TcpListener::bind(bind).with_context(|| format!("binding {bind}"))?;
+    listener.set_nonblocking(true).context("set_nonblocking")?;
     let addr = listener.local_addr()?;
     let handle = axum_server::Handle::new();
     let server = axum_server::from_tcp_rustls(listener, tls).context("tcp listener")?.handle(handle.clone());

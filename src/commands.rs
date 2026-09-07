@@ -6,7 +6,7 @@ pub use crate::commands_global::send_global;
 pub use crate::commands_lan::{list_devices, receive, send_lan};
 
 use crate::*;
-use anyhow::{Result, bail};
+use anyhow::Result;
 use console::style;
 use uni_share::fsutil::human_bytes;
 
@@ -83,6 +83,6 @@ fn truncate(s: &str, n: usize) -> String {
     }
 }
 
-pub async fn gui(_ctx: Ctx, _a: GuiArgs) -> Result<()> {
-    bail!("gui: not implemented yet (phase 5)")
+pub async fn gui(ctx: Ctx, a: GuiArgs) -> Result<()> {
+    uni_share::gui::run(ctx.cfg, ctx.cfg_path, ctx.history, uni_share::gui::GuiOptions { port: a.port, open_browser: !a.no_open }).await
 }

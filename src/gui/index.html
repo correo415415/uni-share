@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>uni-share</title>
+<style>
+  :root{--bg:#0f1115;--panel:#171a21;--border:#262b36;--text:#e6e8ee;--muted:#8b93a7;--accent:#4f8cff;--ok:#3ddc84;--warn:#ffb020;--err:#ff5c5c}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text)}
+  header{display:flex;align-items:center;gap:16px;padding:14px 22px;border-bottom:1px solid var(--border);background:var(--panel)}
+  header h1{font-size:18px;margin:0;letter-spacing:.3px}
+  header .meta{color:var(--muted);font-size:12px}
+  main{max-width:1180px;margin:0 auto;padding:20px;display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media (max-width:900px){main{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px}
+  .card h2{margin:0 0 12px;font-size:14px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted)}
+  .full{grid-column:1/-1}
+  input,select,button{font:inherit;border-radius:8px;border:1px solid var(--border);background:#0f1218;color:var(--text);padding:8px 10px}
+  input,select{width:100%}
+  button{cursor:pointer;background:var(--accent);border-color:transparent;color:#fff;font-weight:600}
+  button.secondary{background:#232833}
+  button.danger{background:var(--err)}
+  button.ok{background:var(--ok);color:#062}
+  .row{display:flex;gap:8px;margin-bottom:8px;align-items:center}
+  .row>*{flex:1}
+  .row>button{flex:0 0 auto}
+  .list{display:flex;flex-direction:column;gap:8px}
+  .item{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:#12151c}
+  .item .t{display:flex;justify-content:space-between;gap:10px;align-items:center}
+  .item .s{color:var(--muted);font-size:12px;margin-top:2px;word-break:break-all}
+  .bar{height:6px;background:#232833;border-radius:4px;overflow:hidden;margin-top:8px}
+  .bar>div{height:100%;background:var(--accent);transition:width .25s}
+  .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600}
+  .tag.completed{background:#123d2a;color:var(--ok)}.tag.failed{background:#4a1c1c;color:var(--err)}.tag.running{background:#1b2a4a;color:#8fb4ff}.tag.rejected{background:#4a3a12;color:var(--warn)}.tag.in_progress{background:#1b2a4a;color:#8fb4ff}
+  .offer{border-color:var(--warn);animation:pulse 1.6s infinite}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,176,32,.0)}50%{box-shadow:0 0 0 4px rgba(255,176,32,.18)}}
+  .files{max-height:140px;overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--muted);margin-top:6px}
+  a{color:#8fb4ff}
+  .empty{color:var(--muted);font-style:italic}
+  .hint{color:var(--muted);font-size:12px;margin-top:6px}
+  code{background:#0f1218;padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<header>
+  <h1>⇄ uni-share</h1>
+  <div class="meta" id="meta">cargando…</div>
+</header>
+<main>
+  <section class="card full" id="offersCard" style="display:none">
+    <h2>Solicitudes entrantes</h2>
+    <div class="list" id="offers"></div>
+  </section>
+
+  <section class="card full" id="recvCard" style="display:none">
+    <h2>Recibiendo</h2>
+    <div class="item"><div class="t"><b id="rName"></b><span id="rPct"></span></div><div class="s" id="rFile"></div><div class="bar"><div id="rBar" style="width:0%"></div></div></div>
+  </section>
+
+  <section class="card">
+    <h2>Enviar por LAN</h2>
+    <div class="row"><input id="lanPath" placeholder="Ruta del archivo o carpeta (en este equipo)"></div>
+    <div class="row"><select id="lanTarget"></select><button class="secondary" onclick="loadDevices()">↻ Buscar</button></div>
+    <div class="row"><input id="lanManual" placeholder="o IP[:puerto] manual"><input id="lanPin" placeholder="PIN (opcional)" style="max-width:140px"></div>
+    <div class="row"><button onclick="sendLan()">Enviar</button></div>
+    <div class="hint">Los dispositivos deben estar ejecutando <code>uni-share receive</code>, el daemon o esta GUI.</div>
+  </section>
+
+  <section class="card">
+    <h2>Enviar por Internet (link)</h2>
+    <div class="row"><input id="glPath" placeholder="Ruta del archivo o carpeta"></div>
+    <div class="row"><select id="glBackend"><option value="storage_to">storage.to (anónimo, 25 GB)</option><option value="smash">Smash (API key)</option></select><input id="glPass" placeholder="Contraseña (opcional)"></div>
+    <div class="row"><button onclick="sendGlobal()">Subir y generar link</button></div>
+    <div class="hint">Las carpetas se suben como colección preservando la jerarquía.</div>
+  </section>
+
+  <section class="card full">
+    <h2>Descargar desde link</h2>
+    <div class="row"><input id="dlUrl" placeholder="https://storage.to/… · https://storage.to/c/… · https://www.swisstransfer.com/dl/…"><input id="dlPass" placeholder="Contraseña" style="max-width:180px"><button onclick="download()">Descargar</button></div>
+    <div class="hint" id="dlHint"></div>
+  </section>
+
+  <section class="card full">
+    <h2>Actividad</h2>
+    <div class="list" id="jobs"><div class="empty">Sin actividad todavía.</div></div>
+  </section>
+
+  <section class="card full">
+    <h2>Historial</h2>
+    <div class="list" id="history"></div>
+  </section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const fmt=n=>{if(n==null)return'';const u=['B','KiB','MiB','GiB','TiB'];let i=0;n=Number(n);while(n>=1024&&i<u.length-1){n/=1024;i++}return (i?n.toFixed(1):n)+' '+u[i]};
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let devices=[];
+async function api(path,body){const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});const t=await r.text();let j={};try{j=JSON.parse(t)}catch{};if(!r.ok)throw new Error(j.error||t||r.status);return j}
+async function refresh(){
+  try{
+    const s=await api('/api/state');
+    $('meta').textContent=`${s.device_name} · huella ${s.fingerprint} · LAN ${s.lan_addr} · descargas en ${s.download_dir} · v${s.version}`;
+    $('dlHint').textContent=`Los archivos se guardan en ${s.download_dir}`;
+    if(!s.smash_configured){const o=$('glBackend').querySelector('option[value=smash]');o.textContent='Smash (configura smash_api_key)';}
+    // offers
+    $('offersCard').style.display=s.pending.length?'':'none';
+    $('offers').innerHTML=s.pending.map(p=>`<div class="item offer"><div class="t"><div><b>${esc(p.sender)}</b> <span class="s">(${esc(p.peer)})</span> quiere enviarte <b>${esc(p.name)}</b> — ${p.files.length} archivo(s), ${fmt(p.total_size)}</div>
+      <div><button class="ok" onclick="decide('${p.transfer_id}','accept')">Aceptar</button> <button class="danger" onclick="decide('${p.transfer_id}','reject')">Rechazar</button></div></div>
+      <div class="files">${p.files.slice(0,40).map(f=>esc(f[0])+'  ('+fmt(f[1])+')').join('<br>')}${p.files.length>40?'<br>… y '+(p.files.length-40)+' más':''}</div></div>`).join('');
+    // receiving
+    const r=s.receiving;$('recvCard').style.display=r.active?'':'none';
+    if(r.active){$('rName').textContent=`${r.name} ← ${r.sender}`;$('rFile').textContent=r.current_file;const pct=r.total?Math.round(100*r.received/r.total):0;$('rPct').textContent=`${fmt(r.received)} / ${fmt(r.total)} (${pct}%)`;$('rBar').style.width=pct+'%';}
+    // jobs
+    $('jobs').innerHTML=s.jobs.length?s.jobs.map(j=>{const pct=j.total?Math.min(100,Math.round(100*j.done/j.total)):(j.state==='completed'?100:0);
+      return `<div class="item"><div class="t"><div><span class="tag ${j.state}">${j.kind}</span> <b>${esc(j.name)}</b></div><div>${fmt(j.done)}${j.total?' / '+fmt(j.total):''}</div></div>
+      <div class="s">${esc(j.message)} ${j.link?`— <a href="${esc(j.link)}" target="_blank">${esc(j.link)}</a> <button class="secondary" onclick="navigator.clipboard.writeText('${esc(j.link)}')">copiar</button>`:''}</div>
+      ${j.state==='running'?`<div class="bar"><div style="width:${pct}%"></div></div>`:''}</div>`}).join(''):'<div class="empty">Sin actividad todavía.</div>';
+  }catch(e){$('meta').textContent='sin conexión con uni-share: '+e.message}
+}
+async function loadHistory(){try{const h=await api('/api/history');$('history').innerHTML=h.length?h.map(r=>`<div class="item"><div class="t"><div><span class="tag ${r.status}">${r.kind}</span> <b>${esc(r.name)}</b>${r.file_count>1?' ('+r.file_count+' archivos)':''}</div><div>${fmt(r.size)}</div></div><div class="s">${new Date(r.timestamp).toLocaleString()} · ${/^https?:/.test(r.peer_or_link)?`<a href="${esc(r.peer_or_link)}" target="_blank">${esc(r.peer_or_link)}</a>`:esc(r.peer_or_link)}${r.error?' · <span style="color:var(--err)">'+esc(r.error)+'</span>':''}</div></div>`).join(''):'<div class="empty">Vacío.</div>'}catch(e){}}
+async function loadDevices(){const sel=$('lanTarget');sel.innerHTML='<option>Buscando…</option>';try{devices=await api('/api/devices');sel.innerHTML=devices.length?devices.map((d,i)=>`<option value="${i}">${esc(d.name)} (${d.addresses.find(a=>!a.includes(':'))||d.addresses[0]}:${d.port})${d.requires_pin?' 🔒':''}</option>`).join(''):'<option value="">(ningún dispositivo encontrado)</option>'}catch(e){sel.innerHTML='<option value="">error: '+esc(e.message)+'</option>'}}
+async function decide(id,what){try{await api(`/api/offers/${id}/${what}`,{});refresh()}catch(e){alert(e.message)}}
+async function sendLan(){const path=$('lanPath').value.trim();if(!path)return alert('Indica una ruta');let body={path,pin:$('lanPin').value||null};const manual=$('lanManual').value.trim();
+  if(manual){body.target=manual}else{const d=devices[$('lanTarget').value];if(!d)return alert('Selecciona un dispositivo');body.target=(d.addresses.find(a=>!a.includes(':'))||d.addresses[0]);body.port=d.port;body.fingerprint=d.fingerprint}
+  try{await api('/api/send-lan',body);refresh()}catch(e){alert(e.message)}}
+async function sendGlobal(){const path=$('glPath').value.trim();if(!path)return alert('Indica una ruta');try{await api('/api/send-global',{path,backend:$('glBackend').value,password:$('glPass').value||null});refresh()}catch(e){alert(e.message)}}
+async function download(){const url=$('dlUrl').value.trim();if(!url)return alert('Indica un link');try{await api('/api/download',{url,password:$('dlPass').value||null});refresh()}catch(e){alert(e.message)}}
+refresh();loadHistory();loadDevices();setInterval(refresh,1000);setInterval(loadHistory,5000);
+</script>
+</body>
+</html>

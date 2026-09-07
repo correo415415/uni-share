@@ -64,6 +64,7 @@ mime_guess = "2"
 # --- integrity / crypto ---
 blake3 = { version = "1", features = ["rayon"] }
 hex = "0.4"
+ring = "0.17"
 rand = "0.9"
 crc32fast = "1"
 

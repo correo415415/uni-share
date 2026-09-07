@@ -8,6 +8,7 @@ use uni_share::{logging, ui};
 mod commands;
 mod commands_lan;
 mod commands_global;
+mod commands_download;
 
 #[derive(Parser, Debug)]
 #[command(

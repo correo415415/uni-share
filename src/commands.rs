@@ -1,5 +1,6 @@
 //! CLI subcommand implementations (thin glue over the library).
 
+pub use crate::commands_download::download;
 pub use crate::commands_global::send_global;
 pub use crate::commands_lan::{list_devices, receive, send_lan};
 
@@ -79,10 +80,6 @@ fn truncate(s: &str, n: usize) -> String {
         let cut: String = s.chars().take(n - 1).collect();
         format!("{cut}…")
     }
-}
-
-pub async fn download(_ctx: Ctx, _a: DownloadArgs) -> Result<()> {
-    bail!("download: not implemented yet (phase 4)")
 }
 
 pub async fn daemon(_ctx: Ctx, _a: DaemonArgs) -> Result<()> {

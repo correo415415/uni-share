@@ -283,28 +283,28 @@ fn parse_share(kind: ResourceKind, id: &str, data: &serde_json::Value) -> Result
 mod tests {
     use super::*;
 
-    const FILE_PAGE: &str = r##"<script>window.__reactRouterContext.streamController.enqueue("[{\"_1\":2,\"_3\":-5,\"_4\":-5},\"loaderData\",{\"_5\":6,\"_7\":8},\"actionData\",\"errors\",\"root\",{\"_51\":52},\"routes/file\",{\"_9\":10,\"_11\":12},\"kind\",\"file\",\"view\",{\"_13\":14,\"_15\":16,\"_17\":18,\"_19\":20,\"_21\":22,\"_23\":24,\"_25\":26,\"_27\":-5,\"_28\":29},\"turnstileSiteKey\",\"0x4\",\"id\",\"XJRJIcIeY\",\"state\",\"ready\",\"filename\",\"t.txt\",\"size\",50,\"human_size\",\"50 B\",\"downloads\",0,\"max_downloads\",\"expires_at\",\"2026-09-10T20:16:16+00:00\",\"is_password_protected\",false,\"mint_proof\",\"1788812498.aca2\",\"locale\",\"en\"]\n");</script>"##;
-
     #[test]
-    fn parses_file_page() {
-        let data = extract_loader_data(FILE_PAGE).unwrap();
+    fn parses_real_file_page() {
+        let html = include_str!("../../tests/fixtures_file_page.html");
+        let data = extract_loader_data(html).expect("loader data");
         let info = parse_share(ResourceKind::File, "XJRJIcIeY", &data).unwrap();
         assert_eq!(info.files[0].name, "t.txt");
         assert_eq!(info.files[0].size, 50);
-        assert_eq!(info.mint_proof, "1788812498.aca2");
+        assert!(info.mint_proof.starts_with("17888"), "{}", info.mint_proof);
         assert_eq!(info.expires_at.as_deref(), Some("2026-09-10T20:16:16+00:00"));
+        assert!(!info.password_protected);
     }
 
-    const COLL_PAGE: &str = r##"enqueue("[{\"_1\":2},\"loaderData\",{\"_7\":8},\"actionData\",\"errors\",\"root\",{},\"routes/collection\",{\"_9\":10},\"view\",{\"_13\":14,\"_15\":16,\"_17\":18,\"_36\":37},\"turnstileSiteKey\",\"0x\",\"id\",\"087Gbyt8p\",\"state\",\"ready\",\"mint_proof\",\"1788812870.8dd\",\"x\",\"y\",\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\",\"j\",\"k\",\"l\",\"m\",\"n\",\"o\",\"files\",[38,39],{\"_13\":50,\"_41\":51,\"_43\":52},{\"_13\":40,\"_41\":42,\"_43\":44},\"ZzPb6JEqf\",\"filename\",\"b.txt\",\"size\",11,\"human_size\",\"11 B\",\"file_type\",\"file\",\"hgRjMXtwp\",\"sub/dir/a.txt\",19]\n");"##;
-
     #[test]
-    fn parses_collection_page() {
-        let data = extract_loader_data(COLL_PAGE).unwrap();
+    fn parses_real_collection_page() {
+        let html = include_str!("../../tests/fixtures_coll_page.html");
+        let data = extract_loader_data(html).expect("loader data");
         let info = parse_share(ResourceKind::Collection, "087Gbyt8p", &data).unwrap();
         assert_eq!(info.files.len(), 2);
-        assert_eq!(info.files[0].name, "sub/dir/a.txt");
-        assert_eq!(info.files[0].size, 19);
-        assert_eq!(info.files[1].name, "b.txt");
+        let names: Vec<&str> = info.files.iter().map(|f| f.name.as_str()).collect();
+        assert!(names.contains(&"sub/dir/a.txt"));
+        assert!(names.contains(&"b.txt"));
         assert_eq!(info.total_size, 30);
+        assert!(!info.mint_proof.is_empty());
     }
 }

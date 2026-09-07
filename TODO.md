@@ -47,6 +47,28 @@ Leyenda: `[x]` hecho · `[~]` en progreso · `[ ]` pendiente
 - [x] Tests: hash, config, fs, protocolo, integración LAN loopback
 - [x] README final
 
+## Fase 6 — Formato `.unishare` (ticket) y QR
+- [x] Módulo `ticket`: contenedor binario (`UNISHARE` magic + versión + zstd + BLAKE3 del payload), JSON interno con fuentes múltiples (storage.to / SwissTransfer / HTTP), contraseña embebida, lista de archivos con tamaños y digests BLAKE3, remitente, mensaje, caducidad. Tests (roundtrip, corrupción, URI, compactación para QR).
+- [x] Forma URI `unishare:<base64url>` (para chats/QR) + versión compacta que cabe en un QR.
+- [x] `download` acepta ticket (fichero o URI): prueba las fuentes en orden y verifica BLAKE3 al terminar.
+- [x] `ticket create|show|qr|save`; `send-global --ticket [FILE]` y `--ticket-qr`.
+- [x] Comando `qr <texto|url|ticket>` (terminal y `--svg`).
+- [ ] Asociación de extensión `.unishare` (doble clic abre la GUI) en Linux (`.desktop` + MIME) y Windows (registro).
+- [ ] Ticket para transferencias LAN (`send-lan --ticket`: ip/puerto/fingerprint/PIN en QR para emparejar sin descubrimiento).
+- [ ] Firma opcional del ticket (Ed25519) para verificar remitente.
+
+## Fase 7 — GUI de escritorio profesional (estilo qBittorrent, identidad propia)
+- [ ] Backend GUI: jobs con velocidad/ETA/archivo actual/lista de archivos, pausar/cancelar, reintentar, eliminar; SSE o WebSocket en lugar de polling.
+- [ ] Backend GUI: explorador de ficheros del sistema (`/api/fs`), ajustes editables (`/api/config` GET/PUT), QR SVG (`/api/qr`), tickets (`/api/ticket/create|parse|download`), abrir carpeta de destino.
+- [ ] Frontend: layout tipo qBittorrent — barra de herramientas, panel lateral con filtros (Todas / Recibiendo / Enviando / Subidas / Descargas / Completadas / Fallidas / Dispositivos LAN / Tickets), tabla central ordenable con barras de progreso, panel inferior de detalles con pestañas (General / Archivos / Fuentes / Log), barra de estado con velocidades globales.
+- [ ] Frontend: estilo único (tema oscuro/claro, tipografía y paleta propias, iconografía SVG inline), atajos de teclado, arrastrar y soltar rutas/tickets, notificaciones en la app.
+- [ ] Frontend: diálogo "Nueva transferencia" (LAN / Global / Descarga / Ticket) con vista previa de árbol de archivos; diálogo "Compartir" con link, QR grande, copiar, guardar `.unishare`.
+- [ ] Frontend: aceptar/rechazar ofertas LAN entrantes con previsualización del árbol y elección de carpeta destino.
+- [ ] Ventana nativa (webview vía `tao`/`wry` o `tauri`) opcional en vez de abrir el navegador.
+
+## Fase 8 — Smash (aparcado)
+- [ ] Smash queda como backend **experimental**: oculto de la ayuda por defecto, sin más desarrollo hasta nueva orden. La API key nunca se versiona.
+
 ## Pendiente / mejoras conocidas
 - [ ] Cloudflare puede exigir captcha (Turnstile) en descargas de storage.to según reputación de IP: entonces se muestra un mensaje pidiendo abrir el link en el navegador
 - [ ] Descarga de links Smash (requiere token de destinatario del flujo web) — se indica abrir en navegador

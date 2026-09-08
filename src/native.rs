@@ -357,7 +357,7 @@ fn set_filters(win: &MainWindow, snap: Option<&Snapshot>) {
         FilterRow { id: "sending".into(), label: "Enviando LAN".into(), icon: "arrow-up".into(), count: count(&|j| j.kind == JobKind::LanSend) },
         FilterRow { id: "uploads".into(), label: "Subidas (links)".into(), icon: "globe".into(), count: count(&|j| j.kind == JobKind::GlobalUpload) },
         FilterRow { id: "downloads".into(), label: "Descargas".into(), icon: "download".into(), count: count(&|j| j.kind == JobKind::Download) },
-        FilterRow { id: "completed".into(), label: "Completadas".into(), icon: "check".into(), count: count(&|j| j.state == JobState::Completed) },
+        FilterRow { id: "completed".into(), label: "Completadas".into(), icon: "check-circle".into(), count: count(&|j| j.state == JobState::Completed) },
         FilterRow { id: "failed".into(), label: "Fallidas".into(), icon: "x-circle".into(), count: count(&|j| matches!(j.state, JobState::Failed | JobState::Cancelled)) },
     ];
     win.set_filters(ModelRc::new(VecModel::from(rows)));

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">uni-share</string>
+    <string name="notif_channel">Motor uni-share</string>
+    <string name="notif_title">uni-share activo</string>
+    <string name="notif_text">Visible en la red local · toca para abrir</string>
+    <string name="engine_error">No se pudo iniciar el motor de uni-share.\nRevisa logcat (etiqueta uni-share).</string>
+    <string name="retry">Reintentar</string>
+</resources>

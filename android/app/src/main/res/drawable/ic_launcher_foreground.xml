@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 256-unit logo scaled to 66 units and offset by 21 -->
+    <group android:scaleX="0.2578" android:scaleY="0.2578" android:translateX="21" android:translateY="21">
+        <path android:strokeColor="#4C8DFF" android:strokeWidth="22" android:strokeLineCap="round" android:strokeLineJoin="round" android:fillColor="#00000000"
+            android:pathData="M96 190 V70 M62 104 L96 70 L130 104" />
+        <path android:strokeColor="#4C8DFF" android:strokeWidth="22" android:strokeLineCap="round" android:strokeLineJoin="round" android:fillColor="#00000000"
+            android:pathData="M160 66 V186 M126 152 L160 186 L194 152" />
+    </group>
+</vector>

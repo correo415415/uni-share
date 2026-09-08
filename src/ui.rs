@@ -161,3 +161,19 @@ mod tests {
         assert!(q.contains('█'));
     }
 }
+
+/// Print a scan report: one summary line (green/yellow/red) plus per-file detail.
+pub fn scan_report(section: &str, report: &crate::scan::Report) {
+    use crate::scan::Severity;
+    match report.severity() {
+        Severity::Info => ok(section, report.summary()),
+        Severity::Warning => warn(section, report.summary()),
+        Severity::Danger => error(section, report.summary()),
+    }
+    for line in report.detail().lines() {
+        eprintln!("{} {}", tag(section), line);
+    }
+    if report.quarantined() > 0 {
+        info(section, format!("{} archivo(s) renombrados a *.unishare-quarantine; revísalos antes de restaurarlos", report.quarantined()));
+    }
+}

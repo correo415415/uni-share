@@ -841,6 +841,9 @@ fn wire_callbacks(win: &MainWindow, ctx: &UiCtx) {
             notifications: Some(w.get_s_notif()),
             compress_folders: Some(w.get_s_compress()),
             sign_tickets: Some(w.get_s_sign()),
+            scan_enabled: None,
+            scan_clamav: None,
+            scan_on_danger: None,
             expiry_days: w.get_s_expiry().trim().parse().ok(),
             parallel_parts: w.get_s_parallel().trim().parse().ok(),
         };

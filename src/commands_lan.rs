@@ -102,6 +102,7 @@ pub async fn receive(ctx: Ctx, a: ReceiveArgs) -> Result<()> {
 
     let history = ctx.history.clone();
     let notifications = ctx.cfg.notifications;
+    let scan_cfg = ctx.cfg.scan.clone();
     let quiet = ctx.quiet;
     let mut progress_rx = server.progress.clone();
     let mut bar: Option<indicatif::ProgressBar> = None;
@@ -167,6 +168,12 @@ pub async fn receive(ctx: Ctx, a: ReceiveArgs) -> Result<()> {
                 let where_ = done.dest_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
                 ui::ok(S, format!("Verificación BLAKE3 correcta. {} archivo(s) guardados en {}", done.files_total, style(&where_).bold()));
                 if let Some(rid) = record_id.take() { history.finish(rid, Status::Completed, None)?; }
+                if scan_cfg.enabled && !done.saved.is_empty() {
+                    let sp = ui::spinner(S, "Análisis de seguridad…");
+                    let report = uni_share::scan::scan_paths_async(done.saved.clone(), scan_cfg.clone()).await;
+                    sp.finish_and_clear();
+                    ui::scan_report(S, &report);
+                }
                 if notifications {
                     ui::notify("uni-share: transferencia completada", &format!("{} de {} guardado en {}", done.name, done.sender, where_));
                 }

@@ -133,6 +133,9 @@ pub struct Job {
     /// Seconds.
     pub eta: Option<u64>,
     pub log: Vec<String>,
+    /// Outcome of the safety scan (receptions/downloads), once finished.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan: Option<crate::scan::Severity>,
     #[serde(skip)]
     samples: VecDeque<(Instant, u64)>,
 }
@@ -193,6 +196,12 @@ pub struct Snapshot {
     /// Fingerprint of this device's Ed25519 ticket-signing key.
     pub signer_fingerprint: String,
     pub sign_tickets: bool,
+    pub scan_enabled: bool,
+    pub scan_clamav: bool,
+    pub scan_on_danger: crate::scan::DangerAction,
+    /// `Some(label)` when a ClamAV binary was found on this machine.
+    pub clamav: Option<String>,
+    pub notices: Vec<Notice>,
     pub download_dir: PathBuf,
     pub pin_required: bool,
     pub auto_accept: bool,
@@ -254,6 +263,11 @@ impl Snapshot {
             pairing_uri: Ticket::lan_pairing("Portátil de Ana", "192.168.1.78", 47820, &"3f".repeat(32), None).to_uri().unwrap_or_default(),
             signer_fingerprint: "9c1e:7a40:b2f3:0d58:e6a1:44c9:1b7d:f02e".into(),
             sign_tickets: true,
+            scan_enabled: true,
+            scan_clamav: true,
+            scan_on_danger: crate::scan::DangerAction::Quarantine,
+            clamav: None,
+            notices: vec![],
             download_dir: PathBuf::from("/home/user/Descargas"),
             pin_required: false,
             auto_accept: false,
@@ -358,6 +372,9 @@ pub struct TicketCreateReq {
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct ConfigPatch {
     pub device_name: Option<String>,
+    pub scan_enabled: Option<bool>,
+    pub scan_clamav: Option<bool>,
+    pub scan_on_danger: Option<crate::scan::DangerAction>,
     pub download_dir: Option<String>,
     pub rate_limit_mbps: Option<u32>,
     pub auto_accept: Option<bool>,
@@ -367,6 +384,14 @@ pub struct ConfigPatch {
     pub sign_tickets: Option<bool>,
     pub expiry_days: Option<u32>,
     pub parallel_parts: Option<usize>,
+}
+
+/// One-shot message for the GUIs (`kind`: `info` | `ok` | `warn` | `err`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct Notice {
+    pub id: u64,
+    pub text: String,
+    pub kind: String,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -394,6 +419,10 @@ pub struct Engine {
     handles: RwLock<HashMap<u64, JobHandle>>,
     next_job: AtomicU64,
     visitor_token: Mutex<Option<String>>,
+    /// Pending user-facing notices (scan results…) drained by the GUIs as toasts.
+    notices: Mutex<Vec<Notice>>,
+    /// ClamAV detection result at startup (`clamav (clamdscan 1.4.1)`).
+    clamav_label: Option<String>,
     devices: RwLock<(Vec<Device>, Option<Instant>)>,
     _announcer: Announcer,
 }
@@ -432,6 +461,8 @@ impl Engine {
             handles: RwLock::new(HashMap::new()),
             next_job: AtomicU64::new(0),
             visitor_token: Mutex::new(cfg.global.storage_to_visitor_token.clone()),
+            notices: Mutex::new(Vec::new()),
+            clamav_label: crate::scan::clamav::locate(cfg.scan.clamav_path.as_deref()).map(|b| crate::scan::clamav::describe(&b)),
             devices: RwLock::new((Vec::new(), None)),
             _announcer: announcer,
             cfg: RwLock::new(cfg),
@@ -492,7 +523,7 @@ impl Engine {
             }
         });
 
-        // Completed receptions → history + notification.
+        // Completed receptions → history + notification + safety scan.
         let e = eng.clone();
         tokio::spawn(async move {
             while let Some(done) = lan.completed.recv().await {
@@ -501,6 +532,10 @@ impl Engine {
                 }
                 if e.cfg.read().await.notifications && done.error.is_none() {
                     crate::ui::notify("uni-share: transferencia recibida", &done.name);
+                }
+                if done.error.is_none() && !done.saved.is_empty() {
+                    let jid = e.jobs.read().await.iter().rev().find(|j| j.kind == JobKind::LanReceive && j.name == done.name).map(|j| j.id);
+                    e.scan_saved(jid, done.saved.clone()).await;
                 }
             }
         });
@@ -542,6 +577,7 @@ impl Engine {
             speed: 0,
             eta: None,
             log: Vec::new(),
+            scan: None,
             samples: VecDeque::new(),
         };
         {
@@ -579,6 +615,58 @@ impl Engine {
             }
         })
         .await;
+    }
+
+    pub async fn push_notice(&self, text: impl Into<String>, kind: &str) {
+        let mut n = self.notices.lock().await;
+        let id = n.last().map(|x| x.id + 1).unwrap_or(1);
+        n.push(Notice { id, text: text.into(), kind: kind.into() });
+        if n.len() > 20 {
+            n.remove(0);
+        }
+    }
+
+    /// Drop notices the UI has already shown (`up_to` inclusive).
+    pub async fn ack_notices(&self, up_to: u64) {
+        self.notices.lock().await.retain(|n| n.id > up_to);
+    }
+
+    /// Run the local safety scanner on freshly written paths; results go to the
+    /// job log/message (when a job is known), the tracing log and the toast queue.
+    pub async fn scan_saved(&self, job: Option<u64>, paths: Vec<PathBuf>) -> Option<crate::scan::Report> {
+        let cfg = self.cfg.read().await.scan.clone();
+        if !cfg.enabled || paths.is_empty() {
+            return None;
+        }
+        if let Some(id) = job {
+            self.log(id, "Análisis de seguridad en curso…").await;
+        }
+        let report = crate::scan::scan_paths_async(paths, cfg).await;
+        let severity = report.severity();
+        let summary = report.summary();
+        if let Some(id) = job {
+            self.log(id, summary.clone()).await;
+            for line in report.detail().lines() {
+                self.log(id, line.trim_end()).await;
+            }
+            self.update_job(id, |j| {
+                j.scan = Some(severity);
+                if severity != crate::scan::Severity::Info {
+                    j.message = summary.clone();
+                }
+            })
+            .await;
+        }
+        match severity {
+            crate::scan::Severity::Info => tracing::info!("{summary}"),
+            _ => tracing::warn!("{summary}\n{}", report.detail()),
+        }
+        if severity == crate::scan::Severity::Danger {
+            self.push_notice(summary, "err").await;
+        } else if severity == crate::scan::Severity::Warning {
+            self.push_notice(summary, "warn").await;
+        }
+        Some(report)
     }
 
     async fn finish_job(&self, id: u64, state: JobState, message: impl Into<String>) {
@@ -760,6 +848,15 @@ impl Engine {
         if let Some(v) = p.sign_tickets {
             cfg.sign_tickets = v;
         }
+        if let Some(v) = p.scan_enabled {
+            cfg.scan.enabled = v;
+        }
+        if let Some(v) = p.scan_clamav {
+            cfg.scan.clamav = v;
+        }
+        if let Some(v) = p.scan_on_danger {
+            cfg.scan.on_danger = v;
+        }
         if let Some(v) = p.expiry_days {
             cfg.global.expiry_days = v.clamp(1, 7);
         }
@@ -808,6 +905,11 @@ impl Engine {
                 .unwrap_or_default(),
             signer_fingerprint: self.signing_key.fingerprint(),
             sign_tickets: cfg.sign_tickets,
+            scan_enabled: cfg.scan.enabled,
+            scan_clamav: cfg.scan.clamav,
+            scan_on_danger: cfg.scan.on_danger,
+            clamav: self.clamav_label.clone(),
+            notices: self.notices.lock().await.clone(),
             download_dir: cfg.download_dir.clone(),
             pin_required: cfg.pin.is_some(),
             auto_accept: cfg.auto_accept,
@@ -1327,6 +1429,7 @@ mod tests {
             speed: 0,
             eta: None,
             log: vec![],
+            scan: None,
             samples: VecDeque::new(),
         };
         assert_eq!(j.percent(), 25.0);

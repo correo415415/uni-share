@@ -9,6 +9,9 @@ const fmtTime = (ms) => ms ? new Date(ms).toLocaleTimeString([], { hour: '2-digi
 const pct = (j) => j.total ? Math.min(100, j.done / j.total * 100) : (j.state === 'completed' ? 100 : 0);
 const KIND = { lan_send: 'Envío LAN', lan_receive: 'Recepción LAN', global_upload: 'Subida (link)', download: 'Descarga' };
 const STATE = { running: 'En curso', queued: 'En cola', completed: 'Completada', failed: 'Fallida', cancelled: 'Cancelada' };
+const SCAN = { info: ['ok', 'Análisis OK', 'Análisis de seguridad sin hallazgos'], warning: ['warn', 'Avisos', 'El análisis de seguridad encontró avisos (ver registro)'], danger: ['danger', 'PELIGRO', 'El análisis de seguridad encontró archivos peligrosos (ver registro)'] };
+function scanBadge(j) { const s = j.scan && SCAN[j.scan]; return s ? ` <span class="badge scan ${s[0]}" title="${s[2]}">🛡 ${s[1]}</span>` : ''; }
+let lastNotice = Number(sessionStorage.lastNotice || 0);
 const ICON = {
   lan_send: '<svg viewBox="0 0 24 24"><path d="M12 19V7M7 12l5-5 5 5"/></svg>', lan_receive: '<svg viewBox="0 0 24 24"><path d="M12 5v12M7 12l5 5 5-5"/></svg>',
   global_upload: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 16V8M9 11l3-3 3 3"/></svg>', download: '<svg viewBox="0 0 24 24"><path d="M12 4v11M8 11l4 4 4-4M4 20h16"/></svg>',
@@ -82,7 +85,7 @@ function renderTable() {
     name: () => `<td class="name" title="${h(j.name)}"><span class="kind ${j.kind}">${ICON[j.kind] || ''}</span>${h(j.name)}</td>`,
     kind: () => `<td class="muted">${KIND[j.kind] || j.kind}</td>`, size: () => `<td class="mono">${j.total ? fmtB(j.total) : '—'}</td>`,
     progress: () => { const p = pct(j), ind = j.state === 'running' && !j.total; return `<td><div class="prog"><div class="bar ${j.state} ${ind ? 'indet' : ''}"><i style="width:${p.toFixed(1)}%"></i></div><span class="pct">${ind ? '…' : p.toFixed(p < 10 && p > 0 ? 1 : 0) + '%'}</span></div></td>`; },
-    state: () => `<td><span class="badge ${j.state}">${STATE[j.state] || j.state}</span></td>`,
+    state: () => `<td><span class="badge ${j.state}">${STATE[j.state] || j.state}</span>${scanBadge(j)}</td>`,
     speed: () => `<td class="mono">${j.state === 'running' && j.speed ? fmtRate(j.speed) : '—'}</td>`, eta: () => `<td class="mono">${j.state === 'running' ? fmtEta(j.eta) : '—'}</td>`,
     peer: () => `<td class="muted" title="${h(j.peer)}">${h(j.peer)}</td>`, started: () => `<td class="mono muted">${fmtTime(j.started)}</td>`,
   })[c]();
@@ -102,7 +105,7 @@ function renderDetails() {
   if (!j) { pane.innerHTML = `<div class="muted">Selecciona una transferencia para ver sus detalles.</div>`; return; }
   if (S.tab === 'general') {
     pane.innerHTML = `<div class="two"><dl class="kv"><dt>Nombre</dt><dd>${h(j.name)}</dd><dt>Tipo</dt><dd>${KIND[j.kind] || j.kind}</dd>
-      <dt>Estado</dt><dd><span class="badge ${j.state}">${STATE[j.state] || j.state}</span> <span class="muted">${h(j.message)}</span></dd>
+      <dt>Estado</dt><dd><span class="badge ${j.state}">${STATE[j.state] || j.state}</span>${scanBadge(j)} <span class="muted">${h(j.message)}</span></dd>
       <dt>Progreso</dt><dd class="mono">${fmtB(j.done)} / ${j.total ? fmtB(j.total) : '?'} (${pct(j).toFixed(1)}%)</dd>
       <dt>Velocidad</dt><dd class="mono">${j.state === 'running' ? fmtRate(j.speed) + ' · ETA ' + fmtEta(j.eta) : '—'}</dd><dt>Archivo actual</dt><dd class="mono">${h(j.current_file) || '—'}</dd></dl>
       <dl class="kv"><dt>${j.kind === 'lan_send' || j.kind === 'global_upload' ? 'Destino' : 'Origen'}</dt><dd>${h(j.peer)}</dd><dt>Carpeta</dt><dd>${j.dest ? `<a href="#" id="open-dest">${h(j.dest)}</a>` : '—'}</dd>
@@ -146,6 +149,8 @@ async function poll() {
       lastStates.set(j.id, j.state);
     }
     if (d.pending.length > lastPending) toast('Solicitud de transferencia entrante', 'info');
+    for (const n of d.notices || []) { if (n.id > lastNotice) { lastNotice = n.id; sessionStorage.lastNotice = n.id; toast(n.text, n.kind === 'warn' ? 'warn' : n.kind, n.kind === 'err' ? 12000 : 8000); } }
+    if ((d.notices || []).length && d.notices[d.notices.length - 1].id <= lastNotice) api('/api/notices/ack', { method: 'POST', body: { up_to: lastNotice } }).catch(() => {});
     lastPending = d.pending.length; S.data = d;
     if (S.sel && !d.jobs.some(j => j.id === S.sel)) S.sel = null;
   } catch { S.online = false; }
@@ -250,13 +255,17 @@ async function openSettings() {
     <div class="field"><label>Carpeta de descargas</label><div class="with-btn"><input type="text" id="s-dir" value="${h(c.download_dir)}"><button class="btn" id="s-browse">…</button></div></div>
     <div class="grid2"><div class="field"><label>Límite de velocidad (Mbit/s, 0 = sin límite)</label><input type="number" id="s-rate" min="0" value="${c.rate_limit_mbps}"></div><div class="field"><label>Partes paralelas (multipart)</label><input type="number" id="s-par" min="1" max="16" value="${c.global.parallel_parts}"></div></div>
     <label class="check"><input type="checkbox" id="s-auto" ${c.auto_accept ? 'checked' : ''}> Aceptar automáticamente las transferencias LAN entrantes</label><label class="check"><input type="checkbox" id="s-notif" ${c.notifications ? 'checked' : ''}> Notificaciones de escritorio</label><label class="check"><input type="checkbox" id="s-comp" ${c.compress_folders ? 'checked' : ''}> Comprimir carpetas (.tar.zst) por defecto</label><label class="check"><input type="checkbox" id="s-sign" ${c.sign_tickets ? 'checked' : ''}> Firmar los tickets con la clave Ed25519 de este dispositivo <span class="hint">(huella ${h(S.data.signer_fingerprint || '')})</span></label>
+    <h3>Seguridad</h3>
+    <label class="check"><input type="checkbox" id="s-scan" ${c.scan.enabled ? 'checked' : ''}> Analizar los archivos recibidos y descargados (100 % local: tipo real vs. extensión, ejecutables disfrazados, bombas ZIP/tar, macros, PDF con JavaScript, nombres engañosos…)</label>
+    <label class="check"><input type="checkbox" id="s-clam" ${c.scan.clamav ? 'checked' : ''}> Usar ClamAV si está instalado <span class="hint">(${S.data.clamav ? 'detectado: ' + h(S.data.clamav) : 'no detectado en este equipo'})</span></label>
+    <div class="field"><label>Si se detecta un archivo peligroso</label><select id="s-danger"><option value="quarantine" ${c.scan.on_danger === 'quarantine' ? 'selected' : ''}>Poner en cuarentena (renombrar a *.unishare-quarantine)</option><option value="report" ${c.scan.on_danger === 'report' ? 'selected' : ''}>Solo avisar</option><option value="delete" ${c.scan.on_danger === 'delete' ? 'selected' : ''}>Eliminar</option></select></div>
     <h3>Links (storage.to)</h3><div class="grid2"><div class="field"><label>Caducidad por defecto (días, 1-7)</label><input type="number" id="s-exp" min="1" max="7" value="${c.global.expiry_days}"></div><div class="field"><label>Puerto LAN (requiere reiniciar)</label><input type="text" readonly value="${c.lan_port}"></div></div>
     <h3>Interfaz</h3><div class="field"><label>Columnas visibles</label><div style="display:flex;flex-wrap:wrap;gap:10px">${Object.keys(COLS).map(k => `<label class="check"><input type="checkbox" data-col="${k}" ${S.cols.includes(k) ? 'checked' : ''}> ${COLS[k][0]}</label>`).join('')}</div></div>
     <div class="alert">Huella TLS de este equipo: <code class="mono">${h(S.data.fingerprint_full || '')}</code></div></div>
     <div class="m-foot"><span id="s-err" style="flex:1;color:var(--err)"></span><button class="btn" data-close>Cancelar</button><button class="btn primary" id="s-save">Guardar</button></div>`);
   $('#s-browse', m).onclick = () => pickPath({ dirsOnly: true, title: 'Carpeta de descargas' }).then(p => p && ($('#s-dir', m).value = p));
   $('#s-save', m).onclick = async () => { const v = (id) => $(id, m).value.trim(), c2 = (id) => $(id, m).checked;
-    try { const r = await api('/api/config', { method: 'PUT', body: { device_name: v('#s-name'), pin: v('#s-pin'), download_dir: v('#s-dir'), rate_limit_mbps: Number(v('#s-rate')) || 0, parallel_parts: Number(v('#s-par')) || 4, auto_accept: c2('#s-auto'), notifications: c2('#s-notif'), compress_folders: c2('#s-comp'), sign_tickets: c2('#s-sign'), expiry_days: Number(v('#s-exp')) || 7 } });
+    try { const r = await api('/api/config', { method: 'PUT', body: { device_name: v('#s-name'), pin: v('#s-pin'), download_dir: v('#s-dir'), rate_limit_mbps: Number(v('#s-rate')) || 0, parallel_parts: Number(v('#s-par')) || 4, auto_accept: c2('#s-auto'), notifications: c2('#s-notif'), compress_folders: c2('#s-comp'), sign_tickets: c2('#s-sign'), scan_enabled: c2('#s-scan'), scan_clamav: c2('#s-clam'), scan_on_danger: v('#s-danger'), expiry_days: Number(v('#s-exp')) || 7 } });
       S.cols = Object.keys(COLS).filter(k => $(`[data-col=${k}]`, m).checked); if (!S.cols.length) S.cols = ['name', 'progress', 'state']; localStorage.cols = JSON.stringify(S.cols);
       toast(r.restart_needed ? 'Guardado. Nombre/PIN/puerto se aplican al reiniciar la GUI.' : 'Ajustes guardados', 'ok', 5000); m.close(); render(); } catch (e) { $('#s-err', m).textContent = e.message; } };
 }

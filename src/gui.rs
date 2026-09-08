@@ -73,6 +73,8 @@ pub fn router(engine: Arc<Engine>) -> Router {
         .route("/api/open", post(api_open))
         .route("/api/qr", get(api_qr))
         .route("/api/config", get(api_config_get).put(api_config_put))
+        .route("/api/notices/ack", post(api_notices_ack))
+        .route("/api/scan", post(api_scan))
         .route("/api/ticket/parse", post(api_ticket_parse))
         .route("/api/ticket/create", post(api_ticket_create))
         .route("/api/ticket/file", get(api_ticket_file))
@@ -196,6 +198,27 @@ async fn api_config_get(State(e): St) -> Response {
 }
 async fn api_config_put(State(e): St, Json(p): Json<ConfigPatch>) -> Response {
     res_json(e.patch_config(p).await.map(|restart| serde_json::json!({ "ok": true, "restart_needed": restart })))
+}
+#[derive(Deserialize)]
+struct AckReq {
+    up_to: u64,
+}
+async fn api_notices_ack(State(e): St, Json(r): Json<AckReq>) -> Response {
+    e.ack_notices(r.up_to).await;
+    Json(serde_json::json!({ "ok": true })).into_response()
+}
+#[derive(Deserialize)]
+struct ScanReq {
+    paths: Vec<PathBuf>,
+    #[serde(default)]
+    quarantine: bool,
+}
+/// On-demand scan (report only unless `quarantine`), independent of the `[scan]` switch.
+async fn api_scan(State(e): St, Json(r): Json<ScanReq>) -> Response {
+    let mut cfg = e.config().await.scan;
+    cfg.enabled = true;
+    cfg.on_danger = if r.quarantine { crate::scan::DangerAction::Quarantine } else { crate::scan::DangerAction::Report };
+    Json(crate::scan::scan_paths_async(r.paths, cfg).await).into_response()
 }
 
 #[derive(Deserialize)]

@@ -28,6 +28,8 @@ export struct JobRow {
     files-count: int,
     finished-text: string,
     indeterminate: bool,
+    scan: string,        // "" | info | warning | danger
+    scan-label: string,
 }
 export struct FileRow { path: string, size-text: string }
 export struct DeviceRow { name: string, addr: string, fingerprint: string, pin: bool }
@@ -118,6 +120,10 @@ export component MainWindow inherits Window {
     in-out property <bool> s-notif;
     in-out property <bool> s-compress;
     in-out property <bool> s-sign;
+    in-out property <bool> s-scan;
+    in-out property <bool> s-clamav;
+    in-out property <int> s-danger;            // 0 quarantine, 1 report, 2 delete
+    in property <string> clamav-label;          // "" when not installed
     in property <string> signer-fingerprint;
     in property <string> signer-fingerprint-short;
     in-out property <string> fs-target-field;   // which field the fs dialog fills
@@ -340,7 +346,7 @@ export component MainWindow inherits Window {
                                                     ProgressBar { y: 13px; value: j.percent; state: j.state; indeterminate: j.indeterminate; horizontal-stretch: 1; }
                                                     Text { width: 44px; text: j.indeterminate ? "…" : round(j.percent) + "%"; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; horizontal-alignment: right; vertical-alignment: center; }
                                                 } }
-                                            Rectangle { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.09; clip: true; Badge { y: 7px; text: j.state-label; kind: j.state; } }
+                                            Rectangle { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.09; clip: true; HorizontalLayout { y: 7px; spacing: 4px; alignment: start; Badge { text: j.state-label; kind: j.state; } if j.scan != "": Badge { text: j.scan-label; kind: j.scan == "info" ? "completed" : j.scan == "warning" ? "warn" : "danger"; } } }
                                             Text { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.08; text: j.speed-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; vertical-alignment: center; }
                                             Text { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.06; text: j.eta-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; vertical-alignment: center; }
                                             Text { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.09; text: j.peer; color: Theme.fg3; vertical-alignment: center; overflow: elide; }
@@ -389,7 +395,7 @@ export component MainWindow inherits Window {
                                         VerticalLayout { spacing: 4px; horizontal-stretch: 1;
                                             KV { k: "Nombre"; v: root.sel().name; }
                                             KV { k: "Tipo"; v: root.sel().kind-label; }
-                                            HorizontalLayout { spacing: 12px; height: 22px; Text { text: "Estado"; color: Theme.fg3; width: 110px; vertical-alignment: center; } Badge { y: 2px; text: root.sel().state-label; kind: root.sel().state; } Text { text: root.sel().message; color: Theme.fg3; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; } }
+                                            HorizontalLayout { spacing: 12px; height: 22px; Text { text: "Estado"; color: Theme.fg3; width: 110px; vertical-alignment: center; } Badge { y: 2px; text: root.sel().state-label; kind: root.sel().state; } if root.sel().scan != "": Badge { y: 2px; text: root.sel().scan-label; kind: root.sel().scan == "info" ? "completed" : root.sel().scan == "warning" ? "warn" : "danger"; } Text { text: root.sel().message; color: Theme.fg3; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; } }
                                             KV { k: "Progreso"; v: root.sel().done-text + " / " + root.sel().size-text + "  (" + round(root.sel().percent) + "%)"; mono: true; }
                                             KV { k: "Velocidad"; v: root.sel().state == "running" ? root.sel().speed-text + " · ETA " + root.sel().eta-text : "—"; mono: true; }
                                             KV { k: "Archivo actual"; v: root.sel().current-file == "" ? "—" : root.sel().current-file; mono: true; }
@@ -528,6 +534,17 @@ export component MainWindow inherits Window {
             Check { text: "Notificaciones de escritorio"; checked <=> root.s-notif; }
             Check { text: "Comprimir carpetas (.tar.zst) por defecto"; checked <=> root.s-compress; }
             Check { text: "Firmar los tickets con la clave Ed25519 de este equipo (el destinatario puede verificar el remitente)"; checked <=> root.s-sign; }
+            Rectangle { height: 1px; background: Theme.line; }
+            Text { text: "Seguridad"; color: Theme.fg; font-size: Theme.fs; font-weight: 600; }
+            Check { text: "Analizar los archivos recibidos y descargados (100 % local: tipo real, ejecutables disfrazados, bombas ZIP/tar, macros, PDF con JavaScript…)"; checked <=> root.s-scan; }
+            HorizontalLayout { spacing: 8px; alignment: start;
+                Check { text: "Usar ClamAV si está instalado"; checked <=> root.s-clamav; }
+                Text { text: root.clamav-label == "" ? "— no detectado en este equipo" : "— detectado: " + root.clamav-label; color: Theme.fg3; font-size: Theme.fs-sm; vertical-alignment: center; }
+            }
+            HorizontalLayout { spacing: 12px; alignment: start;
+                Text { text: "Si se detecta un archivo peligroso:"; color: Theme.fg2; font-size: Theme.fs; vertical-alignment: center; }
+                Segmented { items: ["Cuarentena (*.unishare-quarantine)", "Solo avisar", "Eliminar"]; current <=> root.s-danger; }
+            }
             Rectangle { height: 58px; border-radius: Theme.radius; background: Theme.bg3; border-width: 1px; border-color: Theme.line;
                 VerticalLayout { padding-left: 12px; padding-right: 12px; spacing: 2px; alignment: center;
                     Text { text: "Huella TLS de este equipo: " + fingerprint-full; color: Theme.fg2; font-size: 12px; font-family: Theme.mono; overflow: elide; }

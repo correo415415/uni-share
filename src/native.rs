@@ -11,6 +11,7 @@
 use crate::config::Config;
 use crate::engine::{ConfigPatch, DownloadReq, Engine, JobKind, JobState, SendGlobalReq, SendLanReq, Snapshot, TicketCreateReq};
 use crate::fsutil::human_bytes;
+use crate::scan::{DangerAction, Severity};
 use crate::history::History;
 use anyhow::{Context, Result};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
@@ -34,6 +35,7 @@ enum Cmd {
     Accept(String, Option<PathBuf>),
     Reject(String),
     PatchConfig(ConfigPatch),
+    AckNotices(u64),
     LoadHistory,
 }
 
@@ -58,6 +60,7 @@ struct UiState {
     next_toast: i32,
     last_states: std::collections::HashMap<u64, JobState>,
     last_pending: usize,
+    last_notice: u64,
     snapshot: Option<Snapshot>,
 }
 
@@ -185,6 +188,7 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
         next_toast: 1,
         last_states: Default::default(),
         last_pending: 0,
+        last_notice: 0,
         snapshot: None,
     }));
     win.global::<Theme>().set_dark(!opts.light);
@@ -285,6 +289,10 @@ async fn handle_cmd(engine: &Arc<Engine>, cmd: Cmd, etx: &std::sync::mpsc::Sende
         }
         Cmd::Accept(id, dest) => engine.accept_offer(&id, dest).await.map(|_| Some(Evt::Toast("Recibiendo…".into(), "ok"))),
         Cmd::Reject(id) => engine.reject_offer(&id).await.map(|_| None),
+        Cmd::AckNotices(up_to) => {
+            engine.ack_notices(up_to).await;
+            Ok(None)
+        }
         Cmd::PatchConfig(p) => match engine.patch_config(p).await {
             Ok(restart) => {
                 let _ = etx.send(Evt::Config(engine.config().await));
@@ -401,6 +409,7 @@ fn render(ctx: &UiCtx) {
     win.set_local_ip(snap.local_ips.first().cloned().unwrap_or_default().into());
     win.set_pairing_uri(snap.pairing_uri.clone().into());
     win.set_signer_fingerprint(snap.signer_fingerprint.clone().into());
+    win.set_clamav_label(snap.clamav.clone().unwrap_or_default().into());
     // First 4 groups (64 bits) fit the sidebar card; the full value lives in Settings.
     win.set_signer_fingerprint_short(snap.signer_fingerprint.split(':').take(4).collect::<Vec<_>>().join(":").into());
     win.set_download_dir(snap.download_dir.display().to_string().into());
@@ -444,6 +453,8 @@ fn render(ctx: &UiCtx) {
                 files_count: j.files.len() as i32,
                 finished_text: j.finished.map(fmt_time).unwrap_or_else(|| "—".into()).into(),
                 indeterminate: j.state == JobState::Running && j.total == 0,
+                scan: j.scan.map(|s| match s { Severity::Info => "info", Severity::Warning => "warning", Severity::Danger => "danger" }).unwrap_or("").into(),
+                scan_label: j.scan.map(|s| match s { Severity::Info => "Análisis OK", Severity::Warning => "Avisos", Severity::Danger => "PELIGRO" }).unwrap_or("").into(),
             }
         })
         .collect();
@@ -507,6 +518,14 @@ fn handle_evt(ctx: &UiCtx, evt: Evt) {
                     notes.push(("Solicitud de transferencia entrante".into(), "info"));
                 }
                 st.last_pending = snap.pending.len();
+                let last_notice = st.last_notice;
+                for n in snap.notices.iter().filter(|n| n.id > last_notice) {
+                    st.last_notice = n.id;
+                    notes.push((n.text.clone(), match n.kind.as_str() { "ok" => "ok", "err" => "err", "warn" => "warn", _ => "info" }));
+                }
+                if st.last_notice > last_notice {
+                    ctx.send(Cmd::AckNotices(st.last_notice));
+                }
                 st.snapshot = Some(snap);
             }
             for (t, k) in notes {
@@ -563,6 +582,13 @@ fn handle_evt(ctx: &UiCtx, evt: Evt) {
                 w.set_s_notif(c.notifications);
                 w.set_s_compress(c.compress_folders);
                 w.set_s_sign(c.sign_tickets);
+                w.set_s_scan(c.scan.enabled);
+                w.set_s_clamav(c.scan.clamav);
+                w.set_s_danger(match c.scan.on_danger {
+                    DangerAction::Quarantine => 0,
+                    DangerAction::Report => 1,
+                    DangerAction::Delete => 2,
+                });
                 w.set_f_dest(c.download_dir.display().to_string().into());
             }
         }
@@ -841,9 +867,13 @@ fn wire_callbacks(win: &MainWindow, ctx: &UiCtx) {
             notifications: Some(w.get_s_notif()),
             compress_folders: Some(w.get_s_compress()),
             sign_tickets: Some(w.get_s_sign()),
-            scan_enabled: None,
-            scan_clamav: None,
-            scan_on_danger: None,
+            scan_enabled: Some(w.get_s_scan()),
+            scan_clamav: Some(w.get_s_clamav()),
+            scan_on_danger: Some(match w.get_s_danger() {
+                1 => DangerAction::Report,
+                2 => DangerAction::Delete,
+                _ => DangerAction::Quarantine,
+            }),
             expiry_days: w.get_s_expiry().trim().parse().ok(),
             parallel_parts: w.get_s_parallel().trim().parse().ok(),
         };

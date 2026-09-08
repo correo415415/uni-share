@@ -185,11 +185,11 @@ export component Badge inherits Rectangle {
     in property <string> kind: "running"; // running queued completed failed cancelled
     height: 20px; width: t.preferred-width + 14px; border-radius: Theme.radius-sm;
     background: kind == "running" ? Theme.info.with-alpha(0.14) : kind == "completed" ? Theme.ok.with-alpha(0.14)
-        : kind == "failed" ? Theme.err.with-alpha(0.14) : Theme.bg4;
+        : kind == "failed" ? Theme.err.with-alpha(0.14) : kind == "warn" ? Theme.warn.with-alpha(0.16) : kind == "danger" ? Theme.err : Theme.bg4;
     t := Text {
         width: parent.width; height: parent.height;
         text: root.text; font-size: Theme.fs-xs; font-weight: 500; vertical-alignment: center; horizontal-alignment: center;
-        color: kind == "running" ? Theme.info : kind == "completed" ? Theme.ok : kind == "failed" ? Theme.err : Theme.fg2;
+        color: kind == "running" ? Theme.info : kind == "completed" ? Theme.ok : kind == "failed" ? Theme.err : kind == "warn" ? Theme.warn : kind == "danger" ? #ffffff : Theme.fg2;
     }
 }
 
@@ -279,7 +279,7 @@ export component Toast inherits Rectangle {
     width: min(380px, t.preferred-width + 48px); height: t.preferred-height + 20px;
     border-radius: Theme.radius; background: Theme.bg2; border-width: 1px; border-color: Theme.line2;
     drop-shadow-blur: 18px; drop-shadow-color: Theme.shadow; drop-shadow-offset-y: 4px;
-    Rectangle { x: 0; width: 3px; height: parent.height; border-radius: 2px; background: kind == "ok" ? Theme.ok : kind == "err" ? Theme.err : Theme.info; }
+    Rectangle { x: 0; width: 3px; height: parent.height; border-radius: 2px; background: kind == "ok" ? Theme.ok : kind == "err" ? Theme.err : kind == "warn" ? Theme.warn : Theme.info; }
     t := Text { x: 14px; y: 10px; width: parent.width - 40px; text: root.text; color: Theme.fg; font-size: Theme.fs; wrap: word-wrap; }
     Button { icon: "x"; ghost: true; x: parent.width - 30px; y: 4px; width: 24px; height: 24px; clicked => { root.dismiss(); } }
 }

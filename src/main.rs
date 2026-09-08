@@ -299,6 +299,9 @@ pub struct AppArgs {
     /// Dialog to open on start (new, share, settings, fs, confirm)
     #[arg(long, value_name = "NAME")]
     pub dialog: Option<String>,
+    /// Pre-select job ID and details tab, e.g. `1:1` (tabs: 0 general, 1 files, 2 share, 3 log, 4 history)
+    #[arg(long, value_name = "ID[:TAB]")]
+    pub select: Option<String>,
 }
 
 #[derive(Args, Debug)]

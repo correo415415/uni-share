@@ -108,6 +108,8 @@ pub struct AppOptions {
     pub screenshot: Option<PathBuf>,
     /// Dialog to open before the screenshot ("new", "share", "settings", "fs", "confirm").
     pub dialog: Option<String>,
+    /// Pre-select a job id and details tab (0 general, 1 files, 2 share, 3 log, 4 history).
+    pub select: Option<(u64, i32)>,
 }
 
 /// Run the native window. Blocks until the window is closed.
@@ -175,7 +177,7 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
         query: String::new(),
         sort_key: "started".into(),
         sort_desc: true,
-        selected_job: None,
+        selected_job: opts.select.map(|(id, _)| id),
         dark: true,
         toasts: Vec::new(),
         next_toast: 1,
@@ -192,7 +194,14 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
         win.set_f_url(open.into());
         win.set_dialog("new".into());
     }
+    if let Some((_, tab)) = opts.select {
+        win.set_tab(tab);
+    }
     if let Some(d) = &opts.dialog {
+        if d == "fs" {
+            win.set_fs_dirs_only(false);
+            fs_load(&win, &cfg.download_dir.display().to_string(), false);
+        }
         if d == "share" {
             let data = "https://storage.to/c/G7pzkDNFy";
             win.set_share_what("link".into());

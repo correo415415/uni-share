@@ -92,8 +92,16 @@ pub async fn gui(ctx: Ctx, a: GuiArgs) -> Result<()> {
 /// owns its own runtime thread).
 #[cfg(feature = "slint")]
 pub fn app(ctx: Ctx, a: AppArgs) -> Result<()> {
+    use anyhow::Context as _;
     let Ctx { cfg, cfg_path, history, .. } = ctx;
-    uni_share::native::run(cfg, cfg_path, history, uni_share::native::AppOptions { open: a.open, demo: a.demo, screenshot: a.screenshot, dialog: a.dialog })
+    let select = match a.select.as_deref() {
+        None => None,
+        Some(s) => {
+            let (id, tab) = s.split_once(':').unwrap_or((s, "0"));
+            Some((id.parse::<u64>().context("--select: invalid job id")?, tab.parse::<i32>().context("--select: invalid tab")?))
+        }
+    };
+    uni_share::native::run(cfg, cfg_path, history, uni_share::native::AppOptions { open: a.open, demo: a.demo, screenshot: a.screenshot, dialog: a.dialog, select })
 }
 
 #[cfg(not(feature = "slint"))]

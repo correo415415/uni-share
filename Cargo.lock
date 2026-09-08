@@ -6296,6 +6296,7 @@ dependencies = [
  "hostname",
  "image",
  "indicatif",
+ "jni 0.21.1",
  "local-ip-address",
  "mdns-sd",
  "mime_guess",

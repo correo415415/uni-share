@@ -358,6 +358,12 @@ pub struct AppArgs {
     /// Start with the light theme
     #[arg(long)]
     pub light: bool,
+    /// With --demo: no jobs/offers/devices (fresh-install look, empty-state layout)
+    #[arg(long)]
+    pub empty: bool,
+    /// Initial window size, e.g. `1024x600` (layout review at small sizes)
+    #[arg(long, value_name = "WxH")]
+    pub size: Option<String>,
 }
 
 #[derive(Args, Debug)]

@@ -81,6 +81,7 @@ Decisión: Slint (Rust puro, renderizado propio con `winit`+`femtovg`/`skia`, si
 - [x] `uni-share app --demo` (snapshot realista sin red) + `--screenshot out.png` + `--dialog new|share|settings|fs|confirm` para revisar el diseño; el CI sube capturas a la release nightly.
 - [x] Revisión visual con las capturas del CI (10 vistas: principal, detalles ×4, diálogos ×5): iconos centrados, badges sin recorte, columnas proporcionales, tarjeta del equipo.
 - [x] Panic de zbus ("no reactor running") al arrancar con accesibilidad AT-SPI: `rfd` sin la feature `tokio` de zbus; `notify()` en hilo propio.
+- [x] Layout principal adaptable al tamaño de la ventana: la columna central declara `horizontal-stretch: 1; min-width: 0` (tabla, Flickables, detalles) y el estado vacío ya no fija su ancho preferido (antes, sin transferencias, la tabla quedaba a ~220 px y el resto de la ventana vacío). `--demo --empty --size WxH` + capturas `empty`/`empty-wide` en CI para vigilarlo.
 - [x] Captura del tema claro en CI (`--light`, 3 vistas) y paleta "Graphite" con contrastes revisados (acento único, sin degradados, bordes finos).
 - [x] Restyle profesional: tokens en `theme.slint` (radios 4/5/8, toolbar 46, fila 32, control 30), iconos vectoriales centrados (`swap`, `sun`, `gear` redibujado), badges rectangulares, columnas proporcionales.
 

@@ -117,6 +117,10 @@ pub struct AppOptions {
     pub select: Option<(u64, i32)>,
     /// Start with the light theme.
     pub light: bool,
+    /// Demo without jobs/offers/devices (empty-state layout).
+    pub empty: bool,
+    /// Initial window size in logical pixels.
+    pub size: Option<(u32, u32)>,
 }
 
 /// Run the native window. Blocks until the window is closed.
@@ -130,10 +134,17 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
     let etx2 = etx.clone();
     if opts.demo {
         // No network, no engine: a static snapshot that ticks its fake progress.
+        let empty = opts.empty;
         std::thread::Builder::new()
             .name("uni-share-demo".into())
             .spawn(move || {
                 let mut snap = Snapshot::demo();
+                if empty {
+                    snap.jobs.clear();
+                    snap.pending.clear();
+                    snap.devices.clear();
+                    snap.notices.clear();
+                }
                 let _ = etx2.send(Evt::Config(cfg2));
                 loop {
                     let _ = etx2.send(Evt::Snapshot(snap.clone()));
@@ -181,6 +192,9 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
 
     // ── window ──
     let win = MainWindow::new().context("creating window")?;
+    if let Some((w, h)) = opts.size {
+        win.window().set_size(slint::LogicalSize::new(w as f32, h as f32));
+    }
     win.set_version(format!("v{}", crate::APP_VERSION).into());
     win.set_download_dir(cfg.download_dir.display().to_string().into());
     win.set_f_dest(cfg.download_dir.display().to_string().into());

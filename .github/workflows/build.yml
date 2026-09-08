@@ -179,6 +179,8 @@ jobs:
           shot fs       --dialog fs
           shot confirm  --dialog confirm --select 1:0
           shot light-main     --light --select 1:0
+          shot empty          --empty --size 1024x600
+          shot empty-wide     --empty --size 1400x860
           shot light-new      --light --dialog new
           shot light-settings --light --dialog settings
           ls -la shots || true

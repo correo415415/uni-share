@@ -280,10 +280,14 @@ export component MainWindow inherits Window {
                 }
 
                 // ═══════════ main ═══════════
+                // Explicit stretch/min-width: a VerticalLayout inherits the *minimum* stretch of
+                // its children, so a single fixed-width child (e.g. the empty-state icon) would
+                // otherwise pin the whole column to its preferred width instead of filling the window.
                 VerticalLayout {
+                    horizontal-stretch: 1; min-width: 0px;
                     // offers + table
                     tbl := Rectangle {
-                        vertical-stretch: 1; background: Theme.bg; clip: true;
+                        vertical-stretch: 1; horizontal-stretch: 1; min-width: 0px; background: Theme.bg; clip: true;
                         // Columns are proportional stretch factors (see `col` below): no width
                         // bindings, so the layout solver never sees a loop and resizing is free.
                         VerticalLayout {
@@ -322,13 +326,16 @@ export component MainWindow inherits Window {
                             }
                             // rows
                             if jobs.length == 0 && offers.length == 0: Rectangle {
-                                VerticalLayout { alignment: center; spacing: 6px;
-                                    Icon { name: "inbox"; tint: Theme.fg3; size: 28px; x: (parent.width - 28px) / 2; }
-                                    Text { text: "No hay transferencias en esta vista."; color: Theme.fg3; horizontal-alignment: center; }
-                                    Text { text: "Pulsa N para empezar, o arrastra aquí un archivo o un ticket .unishare."; color: Theme.fg3; font-size: Theme.fs-sm; horizontal-alignment: center; }
+                                horizontal-stretch: 1; vertical-stretch: 1; min-width: 0px; preferred-width: 0px;
+                                // Explicit geometry so this layout never feeds its constraints back to the column.
+                                VerticalLayout { x: 0; y: 0; width: parent.width; height: parent.height; alignment: center; spacing: 6px;
+                                    Rectangle { height: 28px; Icon { name: "inbox"; tint: Theme.fg3; size: 28px; x: (parent.width - self.width) / 2; } }
+                                    Text { text: "No hay transferencias en esta vista."; color: Theme.fg3; horizontal-alignment: center; min-width: 0px; overflow: elide; }
+                                    Text { text: "Pulsa N para empezar, o arrastra aquí un archivo o un ticket .unishare."; color: Theme.fg3; font-size: Theme.fs-sm; horizontal-alignment: center; min-width: 0px; overflow: elide; }
                                 }
                             }
                             Flickable {
+                                horizontal-stretch: 1; min-width: 0px;
                                 viewport-width: self.width;
                                 viewport-height: rows.preferred-height;
                                 rows := VerticalLayout {
@@ -384,7 +391,7 @@ export component MainWindow inherits Window {
                     }
                     // details
                     Rectangle {
-                        height: root.details-collapsed ? 0px : root.details-h; background: Theme.bg2; clip: true;
+                        height: root.details-collapsed ? 0px : root.details-h; horizontal-stretch: 1; min-width: 0px; background: Theme.bg2; clip: true;
                         animate height { duration: 150ms; easing: ease-out; }
                         VerticalLayout {
                             Rectangle { height: 34px;
@@ -396,6 +403,7 @@ export component MainWindow inherits Window {
                                 }
                             }
                             Flickable {
+                                horizontal-stretch: 1; min-width: 0px;
                                 viewport-height: pane.preferred-height;
                                 pane := VerticalLayout {
                                     padding: 14px; spacing: 6px; alignment: start;

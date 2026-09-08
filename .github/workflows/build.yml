@@ -1,0 +1,188 @@
+# CI/CD en el runner local (self-hosted).
+#
+# - Sin actions/cache: el runner conserva ~/.cargo y ./target entre ejecuciones,
+#   así que la caché es el propio disco del runner.
+# - Cada push a `main` / `genspark_ai_developer` (o ejecución manual) compila:
+#     * uni-share            (features por defecto: CLI + GUI web)
+#     * uni-share-app        (--features slint: CLI + GUI web + app nativa)
+#   y publica los binarios en una *release* rodante `nightly-<rama>` (prerelease),
+#   sobrescribiendo los assets. Los tags `v*` generan una release normal.
+# - Los artefactos NO se guardan en Actions (sin espacio); solo en releases.
+
+name: build
+
+on:
+  push:
+    branches: [main, genspark_ai_developer]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      slint:
+        description: "Compilar también la app nativa (--features slint)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  build:
+    name: build & test (self-hosted)
+    runs-on: self-hosted
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal -c clippy -c rustfmt
+          fi
+          source "$HOME/.cargo/env"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          rustup update stable >/dev/null 2>&1 || true
+          rustup component add clippy rustfmt >/dev/null 2>&1 || true
+          rustc -Vv; cargo -V
+
+      - name: System libs (Linux, para Slint/rfd)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo -n"
+            $SUDO apt-get update -qq || true
+            DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq --no-install-recommends \
+              pkg-config libfontconfig1-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev \
+              libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libgtk-3-dev \
+              libdbus-1-dev || echo "::warning::No se pudieron instalar libs de sistema (¿sin sudo?)"
+          fi
+
+      - name: Metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ runner.os }}-${{ runner.arch }}" in
+            Linux-X64)   TARGET=x86_64-unknown-linux-gnu;  EXE="" ;;
+            Linux-ARM64) TARGET=aarch64-unknown-linux-gnu; EXE="" ;;
+            macOS-X64)   TARGET=x86_64-apple-darwin;       EXE="" ;;
+            macOS-ARM64) TARGET=aarch64-apple-darwin;      EXE="" ;;
+            Windows-X64) TARGET=x86_64-pc-windows-msvc;    EXE=".exe" ;;
+            *)           TARGET=$(rustc -vV | sed -n 's/^host: //p'); EXE="" ;;
+          esac
+          VERSION=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1)
+          SHORT=$(git rev-parse --short HEAD)
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"; PRERELEASE=false; NAME="uni-share ${TAG}"
+          else
+            BRANCH="${GITHUB_REF_NAME//\//-}"
+            TAG="nightly-${BRANCH}"; PRERELEASE=true; NAME="uni-share nightly (${BRANCH})"
+          fi
+          {
+            echo "target=$TARGET"; echo "exe=$EXE"; echo "version=$VERSION"; echo "short=$SHORT"
+            echo "tag=$TAG"; echo "prerelease=$PRERELEASE"; echo "name=$NAME"
+          } >> "$GITHUB_OUTPUT"
+          echo "target=$TARGET tag=$TAG version=$VERSION sha=$SHORT"
+
+      - name: fmt
+        shell: bash
+        run: cargo fmt --all -- --check || echo "::warning::cargo fmt reporta diferencias"
+
+      - name: clippy (default)
+        shell: bash
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: test (default)
+        shell: bash
+        run: cargo test --all-targets
+
+      - name: build release (default)
+        shell: bash
+        run: cargo build --release --locked
+
+      - name: build release (--features slint)
+        if: github.event_name != 'workflow_dispatch' || inputs.slint
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --features slint --target-dir target/slint
+
+      - name: Package
+        id: pkg
+        shell: bash
+        env:
+          TARGET: ${{ steps.meta.outputs.target }}
+          EXE: ${{ steps.meta.outputs.exe }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          SHORT: ${{ steps.meta.outputs.short }}
+        run: |
+          set -euo pipefail
+          rm -rf dist && mkdir -p dist
+          BASE="uni-share-${VERSION}-${TARGET}"
+          # CLI + GUI web
+          cp "target/release/uni-share${EXE}" "dist/uni-share-${TARGET}${EXE}"
+          if [ -f "target/slint/release/uni-share${EXE}" ]; then
+            cp "target/slint/release/uni-share${EXE}" "dist/uni-share-app-${TARGET}${EXE}"
+          fi
+          # Archivo completo (binarios + README + TODO + script python de fallback)
+          STAGE="dist/${BASE}"; mkdir -p "$STAGE/python"
+          cp dist/uni-share-*"${TARGET}"* "$STAGE"/ 2>/dev/null || true
+          cp README.md TODO.md "$STAGE"/; cp python/swisstransfer_dl.py python/requirements.txt "$STAGE/python/"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            (cd dist && 7z a -bd -y "${BASE}.zip" "${BASE}" >/dev/null)
+          else
+            tar -C dist -czf "dist/${BASE}.tar.gz" "${BASE}"
+          fi
+          rm -rf "$STAGE"
+          (cd dist && (sha256sum * 2>/dev/null || shasum -a 256 *) > "SHA256SUMS-${TARGET}.txt")
+          ls -la dist
+          {
+            echo "## uni-share ${VERSION} (${SHORT}) — ${TARGET}"
+            echo
+            echo "- \`uni-share-${TARGET}${EXE}\`: CLI + GUI web (\`uni-share gui\`)."
+            [ -f "dist/uni-share-app-${TARGET}${EXE}" ] && echo "- \`uni-share-app-${TARGET}${EXE}\`: igual + app nativa Slint (\`uni-share app\`)."
+            echo "- \`${BASE}.tar.gz\` / \`.zip\`: binarios + docs + script python de fallback."
+            echo
+            echo "Commit: ${GITHUB_SHA} · Rama/tag: ${GITHUB_REF_NAME} · Compilado en el runner local (${{ runner.os }}/${{ runner.arch }})."
+          } > dist/RELEASE_NOTES.md
+
+      - name: Release (rolling nightly o tag)
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.name }}
+          prerelease: ${{ steps.meta.outputs.prerelease == 'true' }}
+          make_latest: ${{ steps.meta.outputs.prerelease == 'false' }}
+          body_path: dist/RELEASE_NOTES.md
+          files: |
+            dist/uni-share-*
+            dist/SHA256SUMS-*.txt
+          fail_on_unmatched_files: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Las releases nightly reutilizan el tag: lo movemos al commit actual para
+      # que el release apunte siempre al último build.
+      - name: Mover tag nightly al HEAD
+        if: github.event_name != 'pull_request' && steps.meta.outputs.prerelease == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git tag -f "${{ steps.meta.outputs.tag }}" "$GITHUB_SHA"
+          git push -f origin "refs/tags/${{ steps.meta.outputs.tag }}"

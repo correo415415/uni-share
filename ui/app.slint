@@ -1,5 +1,13 @@
 // uni-share — native desktop window (Slint).
 import { Theme } from "theme.slint";
+// Bundled fonts (SIL OFL, see ui/fonts/): the UI renders identically on every
+// machine and never falls back to a badly hinted system font.
+import "fonts/Inter-Regular.ttf";
+import "fonts/Inter-Medium.ttf";
+import "fonts/Inter-SemiBold.ttf";
+import "fonts/Inter-Bold.ttf";
+import "fonts/JetBrainsMono-Regular.ttf";
+import "fonts/JetBrainsMono-Medium.ttf";
 import { Icon, Button, Input, TextArea, Check, Segmented, ProgressBar, Badge, SideItem, Tab, KV, FieldLabel, Hint, Dialog, Toast } from "widgets.slint";
 export { Theme }
 
@@ -46,7 +54,7 @@ export component MainWindow inherits Window {
     preferred-width: 1280px; preferred-height: 800px;
     background: Theme.bg;
     default-font-size: Theme.fs;
-    default-font-family: "Inter, Segoe UI, Noto Sans, DejaVu Sans, sans-serif";
+    default-font-family: "Inter";
     icon: @image-url("icon.png");
 
     // ---- state from Rust ----

@@ -82,7 +82,9 @@ bytesize = "2"
 regex = "1"
 
 # --- native desktop GUI (optional; `cargo build --features slint`) ---
-slint = { version = "1.9", optional = true, default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "accessibility"] }
+# Skia renderer: proper glyph hinting/subpixel positioning (femtovg's GPU atlas
+# smeared small text). femtovg stays as a fallback via SLINT_BACKEND=winit-femtovg.
+slint = { version = "1.9", optional = true, default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-skia", "renderer-femtovg", "accessibility"] }
 # rfd: keep zbus on its own async-io executor (the `tokio` feature would force every zbus
 # user — accesskit AT-SPI on the winit thread, notify-rust — to require a tokio reactor).
 rfd = { version = "0.15", optional = true, default-features = false, features = ["xdg-portal", "async-std"] }

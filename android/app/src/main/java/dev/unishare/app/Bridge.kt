@@ -30,11 +30,17 @@ class Bridge(private val activity: MainActivity, private val web: WebView) {
     @JavascriptInterface
     fun info(): String = JSONObject()
         .put("platform", "android")
-        .put("version", BuildConfig.VERSION_NAME)
+        .put("version", appVersion())
         .put("sdk", android.os.Build.VERSION.SDK_INT)
         .put("downloadTree", downloadTreeName() ?: JSONObject.NULL)
         .put("appDownloadDir", (activity.application as App).downloadDir.absolutePath)
         .toString()
+
+    private fun appVersion(): String = try {
+        activity.packageManager.getPackageInfo(activity.packageName, 0).versionName ?: ""
+    } catch (_: Exception) {
+        ""
+    }
 
     // -------------------------------------------------------------- SAF folder --
 

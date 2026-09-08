@@ -19,6 +19,8 @@ pub mod scan;
 pub mod signing;
 pub mod ticket;
 pub mod engine;
+#[cfg(target_os = "android")]
+pub mod android;
 #[cfg(feature = "slint")]
 pub mod native;
 

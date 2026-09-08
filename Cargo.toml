@@ -99,6 +99,7 @@ rustls-platform-verifier = "0.6"
 # --- Android: no OS trust-store bridge without a JVM → bundled Mozilla roots ---
 [target.'cfg(target_os = "android")'.dependencies]
 webpki-roots = "1"
+jni = "0.21"
 
 [features]
 default = []

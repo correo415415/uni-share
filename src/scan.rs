@@ -78,13 +78,13 @@ impl Severity {
 pub struct Finding {
     pub severity: Severity,
     /// Stable machine code, e.g. `magic_mismatch`, `zip_bomb`, `clamav`.
-    pub code: &'static str,
+    pub code: String,
     pub message: String,
 }
 
 impl Finding {
     fn new(severity: Severity, code: &'static str, message: impl Into<String>) -> Self {
-        Self { severity, code, message: message.into() }
+        Self { severity, code: code.into(), message: message.into() }
     }
 }
 

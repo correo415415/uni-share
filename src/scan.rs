@@ -990,7 +990,6 @@ pub mod clamav {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
     fn codes(fr: &FileReport) -> Vec<&str> {
         fr.findings.iter().map(|f| f.code.as_str()).collect()
@@ -1013,7 +1012,7 @@ mod tests {
             out.extend_from_slice(b"PK\x03\x04");
             out.extend_from_slice(&[20, 0]);
             out.extend_from_slice(&flags.to_le_bytes());
-            out.extend_from_slice(&[0u8; 8]); // method, time, date
+            out.extend_from_slice(&[0u8; 6]); // method, time, date
             out.extend_from_slice(&[0u8; 4]); // crc
             out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
             out.extend_from_slice(&unc.to_le_bytes());
@@ -1025,8 +1024,8 @@ mod tests {
             cd.extend_from_slice(b"PK\x01\x02");
             cd.extend_from_slice(&[20, 0, 20, 0]);
             cd.extend_from_slice(&flags.to_le_bytes());
-            cd.extend_from_slice(&[0u8; 8]);
-            cd.extend_from_slice(&[0u8; 4]);
+            cd.extend_from_slice(&[0u8; 6]); // method, time, date
+            cd.extend_from_slice(&[0u8; 4]); // crc
             cd.extend_from_slice(&(payload.len() as u32).to_le_bytes());
             cd.extend_from_slice(&unc.to_le_bytes());
             cd.extend_from_slice(&(n.len() as u16).to_le_bytes());
@@ -1212,7 +1211,15 @@ mod tests {
 
         // tar.zst goes through the zstd decoder
         let t = make_tar(|b| {
-            tar_file(b, "../escape.txt", 0o644, b"x");
+            // tar::Builder refuses `..` in paths, so write the raw name field.
+            let mut h = tar::Header::new_gnu();
+            let name = b"../escape.txt";
+            h.as_mut_bytes()[..name.len()].copy_from_slice(name);
+            h.set_size(1);
+            h.set_mode(0o644);
+            h.set_entry_type(tar::EntryType::Regular);
+            h.set_cksum();
+            b.append(&h, &b"x"[..]).unwrap();
         });
         let z = zstd::encode_all(&t[..], 3).unwrap();
         let r = scan_file(&write(d.path(), "esc.tar.zst", &z), None);
@@ -1255,9 +1262,11 @@ mod tests {
         assert!(codes(&r).contains(&"shortcut_exec"));
         assert_eq!(r.severity(), Severity::Danger);
 
-        // shebang script named as text → disguised executable (script kind, benign ext)
+        // shebang script named as text: .txt tolerates scripts, but the shebang is still reported
         let r = scan_file(&write(d.path(), "notas.txt", b"#!/bin/bash\nrm -rf ~\n"), None);
-        assert!(codes(&r).contains(&"disguised_executable"), "{:?}", r.findings);
+        assert_eq!(r.kind, "script");
+        assert!(codes(&r).contains(&"executable"), "{:?}", r.findings);
+        assert_eq!(r.severity(), Severity::Warning);
     }
 
     #[test]
@@ -1313,7 +1322,7 @@ mod tests {
     #[test]
     fn size_mismatch_and_clamav_absent_is_info() {
         let d = tempfile::tempdir().unwrap();
-        let p = write(d.path(), "data.bin", b"12345");
+        let p = write(d.path(), "data.dat", b"12345");
         let r = scan_file(&p, Some(10));
         assert!(codes(&r).contains(&"size_mismatch"));
         assert_eq!(r.severity(), Severity::Warning);
@@ -1332,6 +1341,7 @@ mod tests {
         // fake "clamscan" that reports an infection (unix only)
         #[cfg(unix)]
         {
+            use std::io::Write;
             use std::os::unix::fs::PermissionsExt;
             let fake = d.path().join("clamscan");
             let mut f = std::fs::File::create(&fake).unwrap();

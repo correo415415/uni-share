@@ -76,8 +76,9 @@ Decisión: Slint (Rust puro, renderizado propio con `winit`+`femtovg`/`skia`, si
 - [ ] Empaquetado: AppImage/.deb, .msi, .dmg (cargo-dist / cargo-bundle); iconos de la app.
 
 - [x] Atajos de teclado (N/L/U/D/T/,/Supr/flechas/Esc) y tema claro/oscuro.
-- [ ] Compilación verificada en CI (self-hosted) — en curso: errores de `.slint` corregidos (Icon, `color`, bucles de layout), puente `Send` corregido.
-- [ ] Prueba manual de la ventana (sandbox sin display): revisar alineaciones, tamaños de columnas y foco.
+- [x] Compilación verificada en CI (self-hosted), sin warnings: errores de `.slint` corregidos (Icon como caja, `tint`, columnas por `horizontal-stretch`), puente `Send` corregido.
+- [x] `uni-share app --demo` (snapshot realista sin red) + `--screenshot out.png` + `--dialog new|share|settings|fs|confirm` para revisar el diseño; el CI sube capturas a la release nightly.
+- [ ] Revisión visual con las capturas del CI: alineaciones, tamaños de columnas, foco, tema claro.
 
 ## Fase 7c — CI/CD en runner local
 - [x] Workflow `.github/workflows/build.yml` en `self-hosted`: fmt (aviso) → clippy `-D warnings` → tests → `cargo build --release` (default) → `--features slint` (target-dir separado).

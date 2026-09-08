@@ -401,6 +401,8 @@ fn render(ctx: &UiCtx) {
     win.set_local_ip(snap.local_ips.first().cloned().unwrap_or_default().into());
     win.set_pairing_uri(snap.pairing_uri.clone().into());
     win.set_signer_fingerprint(snap.signer_fingerprint.clone().into());
+    // First 4 groups (64 bits) fit the sidebar card; the full value lives in Settings.
+    win.set_signer_fingerprint_short(snap.signer_fingerprint.split(':').take(4).collect::<Vec<_>>().join(":").into());
     win.set_download_dir(snap.download_dir.display().to_string().into());
     win.set_pin_required(snap.pin_required);
     win.set_auto_accept(snap.auto_accept);

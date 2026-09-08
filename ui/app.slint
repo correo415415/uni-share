@@ -119,6 +119,7 @@ export component MainWindow inherits Window {
     in-out property <bool> s-compress;
     in-out property <bool> s-sign;
     in property <string> signer-fingerprint;
+    in property <string> signer-fingerprint-short;
     in-out property <string> fs-target-field;   // which field the fs dialog fills
     in-out property <bool> fs-dirs-only;
 
@@ -251,7 +252,10 @@ export component MainWindow inherits Window {
                                     }
                                 }
                                 Text { text: fingerprint; color: Theme.fg3; font-size: 11px; font-family: Theme.mono; }
-                                Text { text: "✎ " + signer-fingerprint; color: Theme.fg3; font-size: 11px; font-family: Theme.mono; overflow: elide; }
+                                HorizontalLayout { spacing: 4px;
+                                    Text { text: "Firma"; color: Theme.fg2; font-size: 12px; horizontal-stretch: 1; }
+                                    Text { text: signer-fingerprint-short; color: Theme.fg3; font-size: 11px; font-family: Theme.mono; overflow: elide; }
+                                }
                                 HorizontalLayout { Text { text: "LAN"; color: Theme.fg2; font-size: 12px; horizontal-stretch: 1; } Text { text: local-ip + ":" + lan-addr; color: Theme.fg3; font-size: 11px; font-family: Theme.mono; overflow: elide; } }
                                 HorizontalLayout { Text { text: pin-required ? "PIN requerido" : "Sin PIN"; color: Theme.fg2; font-size: 12px; horizontal-stretch: 1; } Text { text: auto-accept ? "auto-aceptar" : "confirmar"; color: Theme.fg2; font-size: 12px; } }
                             }

@@ -65,15 +65,25 @@ Leyenda: `[x]` hecho · `[~]` en progreso · `[ ]` pendiente
 
 ## Fase 7b — GUI nativa de escritorio con **Slint** (`uni-share app`)
 Decisión: Slint (Rust puro, renderizado propio con `winit`+`femtovg`/`skia`, sin webview ni Electron; binario único; estilo 100 % definido por nosotros, no por el toolkit). Comparte el `engine` con la GUI web, así que ambas se comportan igual y la lógica no se duplica.
-- [ ] Feature de cargo `slint` (opcional, para que `cargo build` siga funcionando sin dependencias gráficas) y subcomando `uni-share app`.
-- [ ] Sistema de diseño propio en `.slint`: paleta (grafito + acento teal/violeta), tipografía, radios, sombras, iconografía vectorial propia (Path), sin controles del estilo por defecto (fluent/material): botones, inputs, checkbox, segmented control, tabla, barra de progreso, badges, pestañas, tooltips, menú contextual, diálogos y toasts propios.
-- [ ] Ventana principal: barra de herramientas (Nueva / Enviar LAN / Compartir link / Descargar / Ticket / Cancelar / Limpiar / buscar / ajustes), panel lateral (filtros con contadores + dispositivos LAN en vivo + tarjeta "este equipo"), tabla central ordenable y redimensionable con progreso/velocidad/ETA, panel inferior de detalles con pestañas (General / Archivos / Compartir con QR / Registro / Historial), barra de estado con velocidades globales.
-- [ ] Ofertas LAN entrantes: banner con árbol de archivos, huella del emisor, aceptar (elegir carpeta) / rechazar; notificación del sistema.
-- [ ] Diálogos: Nueva transferencia (4 modos) con selector de archivos nativo (`rfd`) y vista previa; Compartir (QR renderizado en la propia ventana desde `qrcode`, copiar, guardar `.unishare`, guardar QR); Ajustes; confirmaciones.
-- [ ] Puente engine↔UI: tokio en hilo aparte, snapshot cada 500 ms → `VecModel` de Slint vía `invoke_from_event_loop`; acciones de la UI → canal mpsc hacia el engine.
-- [ ] Arrastrar y soltar (rutas y `.unishare`), atajos de teclado, tema claro/oscuro, bandeja del sistema (`tray-icon`) con "minimizar a bandeja" y menú rápido.
+- [x] Feature de cargo `slint` (opcional, para que `cargo build` siga funcionando sin dependencias gráficas) y subcomando `uni-share app`.
+- [x] Sistema de diseño propio en `.slint`: paleta (grafito + acento teal/violeta), tipografía, radios, sombras, iconografía vectorial propia (Path), sin controles del estilo por defecto (fluent/material): botones, inputs, checkbox, segmented control, tabla, barra de progreso, badges, pestañas, tooltips, menú contextual, diálogos y toasts propios.
+- [x] Ventana principal: barra de herramientas (Nueva / Enviar LAN / Compartir link / Descargar / Ticket / Cancelar / Limpiar / buscar / ajustes), panel lateral (filtros con contadores + dispositivos LAN en vivo + tarjeta "este equipo"), tabla central ordenable y redimensionable con progreso/velocidad/ETA, panel inferior de detalles con pestañas (General / Archivos / Compartir con QR / Registro / Historial), barra de estado con velocidades globales.
+- [x] Ofertas LAN entrantes: banner con árbol de archivos, huella del emisor, aceptar (elegir carpeta) / rechazar; notificación del sistema.
+- [x] Diálogos: Nueva transferencia (4 modos) con selector de archivos nativo (`rfd`) y vista previa; Compartir (QR renderizado en la propia ventana desde `qrcode`, copiar, guardar `.unishare`, guardar QR); Ajustes; confirmaciones.
+- [x] Puente engine↔UI: tokio en hilo aparte, snapshot cada 500 ms → `VecModel` de Slint vía `invoke_from_event_loop`; acciones de la UI → canal mpsc hacia el engine.
+- [ ] Arrastrar y soltar (rutas y `.unishare`), bandeja del sistema (`tray-icon`) con "minimizar a bandeja" y menú rápido.
 - [ ] Asociación de `.unishare` y `unishare:` al binario (Linux `.desktop` + MIME, Windows registro, macOS Info.plist) → abre la GUI con el ticket cargado.
 - [ ] Empaquetado: AppImage/.deb, .msi, .dmg (cargo-dist / cargo-bundle); iconos de la app.
+
+- [x] Atajos de teclado (N/L/U/D/T/,/Supr/flechas/Esc) y tema claro/oscuro.
+- [ ] Compilación verificada en CI (self-hosted) — en curso: errores de `.slint` corregidos (Icon, `color`, bucles de layout), puente `Send` corregido.
+- [ ] Prueba manual de la ventana (sandbox sin display): revisar alineaciones, tamaños de columnas y foco.
+
+## Fase 7c — CI/CD en runner local
+- [x] Workflow `.github/workflows/build.yml` en `self-hosted`: fmt (aviso) → clippy `-D warnings` → tests → `cargo build --release` (default) → `--features slint` (target-dir separado).
+- [x] Sin caché ni artefactos de Actions (sin espacio): el runner conserva `~/.cargo` y `target/`; los binarios van a una **release** rodante `nightly-<rama>` (prerelease, assets sobrescritos, tag movido al HEAD) y a releases normales en tags `v*`.
+- [x] Empaqueta `uni-share-<target>`, `uni-share-app-<target>` (con Slint), `uni-share-<ver>-<target>.tar.gz` (binarios + docs + script python) y `SHA256SUMS`.
+- [ ] Matriz Windows/macOS cuando haya runners de esas plataformas (el workflow ya detecta `runner.os`/`runner.arch`).
 
 ## Fase 8 — Smash (aparcado)
 - [ ] Smash queda como backend **experimental**: oculto de la ayuda por defecto, sin más desarrollo hasta nueva orden. La API key nunca se versiona.

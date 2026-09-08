@@ -146,3 +146,95 @@ async fn hash_mismatch_is_detected_and_file_discarded() {
     assert!(!dst.path().join("f.txt").exists());
     assert!(!dst.path().join("f.txt.part").exists());
 }
+
+/// A reception interrupted in one receiver process resumes in the next one:
+/// the resume record remembers destination and per-file state, and the `.part`
+/// prefix already on disk is not transferred again.
+#[tokio::test]
+async fn resume_across_receiver_restarts() {
+    use uni_share::lan::protocol::UploadResult;
+
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    make_tree(src.path());
+    let files = collect_files(&src.path().join("proj")).unwrap();
+    let hashes = hash_all(&files, |_| {}).await.unwrap();
+    let manifest = build_manifest("Sender", "sender-fp-1", "proj", &files, &hashes);
+    let big_idx = files.iter().position(|f| f.rel_path.ends_with("big.bin")).unwrap();
+    let small_idx = files.iter().position(|f| f.rel_path.ends_with("a.txt")).unwrap();
+
+    let id = Identity::generate("Receiver").unwrap();
+    let opts = |dest: PathBuf| ServerOptions {
+        device_name: "Receiver".into(),
+        port: 0,
+        pin: None,
+        force_overwrite: false,
+        dest_dir: dest,
+        rate_limit_mbps: 0,
+        state_dir: Some(state.path().to_path_buf()),
+    };
+
+    // ── run 1: accept, receive only a.txt, then "crash" ──
+    let mut server = start(id.clone(), opts(dst.path().to_path_buf())).await.unwrap();
+    let port = server.addr.port();
+    let dest1 = dst.path().to_path_buf();
+    tokio::spawn(async move {
+        if let Some(offer) = server.offers.recv().await {
+            assert!(offer.resume.is_none(), "first run must not offer a resume");
+            let _ = offer.decision.send(Decision::Accept { dest_dir: dest1 });
+        }
+        // Keep the server alive until the test drops the handle.
+        std::future::pending::<()>().await;
+    });
+    let sender = Sender::new("127.0.0.1".parse().unwrap(), port, Some(&id.fingerprint), None).unwrap();
+    let tid = sender.offer(&manifest, Duration::from_secs(5)).await.unwrap();
+    let progress: uni_share::lan::client::ProgressFn = Arc::new(|_, _| {});
+    let r = sender.upload_file(&tid, small_idx, &files[small_idx], &hashes[small_idx], &progress, 0).await.unwrap();
+    assert!(matches!(r, UploadResult::Ok { .. }));
+    // Simulate an interrupted big.bin: the receiver had written a 1 MiB prefix.
+    let big_src = std::fs::read(&files[big_idx].abs_path).unwrap();
+    std::fs::create_dir_all(dst.path().join("proj/sub")).unwrap();
+    std::fs::write(dst.path().join("proj/sub/big.bin.part"), &big_src[..1_048_576]).unwrap();
+    let rec_path = state.path().join("transfers");
+    assert_eq!(std::fs::read_dir(&rec_path).unwrap().count(), 1, "one resume record written");
+    // (server task is aborted when the runtime drops it at the end; we just start another one)
+
+    // ── run 2: same identity + state dir, fresh process, offer again ──
+    let other = tempfile::tempdir().unwrap(); // the user picks another folder: must be ignored
+    let mut server2 = start(id.clone(), opts(other.path().to_path_buf())).await.unwrap();
+    let port2 = server2.addr.port();
+    let (rtx, rrx) = tokio::sync::oneshot::channel();
+    let other_dir = other.path().to_path_buf();
+    tokio::spawn(async move {
+        if let Some(offer) = server2.offers.recv().await {
+            let _ = rtx.send(offer.resume.clone());
+            let _ = offer.decision.send(Decision::Accept { dest_dir: other_dir });
+        }
+        std::future::pending::<()>().await;
+    });
+    let sender2 = Sender::new("127.0.0.1".parse().unwrap(), port2, Some(&id.fingerprint), None).unwrap();
+    let sent = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let s2 = sent.clone();
+    let progress2: uni_share::lan::client::ProgressFn = Arc::new(move |n, _| {
+        s2.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+    });
+    let report = sender2.send(&manifest, &files, &hashes, progress2, Duration::from_secs(5), 0).await.unwrap();
+    assert_eq!(report.files, 3);
+
+    let resume = rrx.await.unwrap().expect("second run must detect the interrupted transfer");
+    assert_eq!(resume.dest_dir, dst.path());
+    assert_eq!(resume.files_done, 1);
+    assert_eq!(resume.bytes_done, files[small_idx].size + 1_048_576);
+
+    // Data landed in the ORIGINAL destination, complete and verified …
+    assert_eq!(std::fs::read(dst.path().join("proj/sub/big.bin")).unwrap(), big_src);
+    assert_eq!(std::fs::read(dst.path().join("proj/a.txt")).unwrap(), b"hello world");
+    assert!(!dst.path().join("proj/sub/big.bin.part").exists());
+    assert_eq!(std::fs::read_dir(other.path()).unwrap().count(), 0, "user-chosen folder ignored on resume");
+    // … only the missing bytes travelled (a.txt skipped, big.bin from 1 MiB) …
+    let expected = manifest.total_size - files[small_idx].size - 1_048_576;
+    assert_eq!(sent.load(std::sync::atomic::Ordering::Relaxed), expected);
+    // … and the record is gone.
+    assert_eq!(std::fs::read_dir(&rec_path).unwrap().count(), 0);
+}

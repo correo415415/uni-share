@@ -160,6 +160,21 @@ impl Sender {
         }
     }
 
+    /// Upload a single file of an accepted transfer (resumes from the receiver's
+    /// offset). Building block for custom flows and tests; `send` does the
+    /// whole manifest with retries.
+    pub async fn upload_file(
+        &self,
+        id: &str,
+        idx: usize,
+        entry: &FileEntry,
+        blake3_hex: &str,
+        progress: &ProgressFn,
+        rate_limit_bps: u64,
+    ) -> Result<UploadResult> {
+        self.upload_once(id, idx, entry, blake3_hex, progress, rate_limit_bps).await
+    }
+
     /// Full send: offer → upload all files (with per-file retry) → complete.
     pub async fn send(
         &self,

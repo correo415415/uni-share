@@ -984,3 +984,365 @@ pub mod clamav {
         }
     }
 }
+
+// ───────────────────────── tests ─────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn codes(fr: &FileReport) -> Vec<&str> {
+        fr.findings.iter().map(|f| f.code.as_str()).collect()
+    }
+
+    fn write(dir: &Path, name: &str, data: &[u8]) -> PathBuf {
+        let p = dir.join(name);
+        std::fs::write(&p, data).unwrap();
+        p
+    }
+
+    /// Minimal stored ZIP: (name, uncompressed_size_declared, flags, payload).
+    fn make_zip(entries: &[(&str, u32, u16, &[u8])]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut cd = Vec::new();
+        for (name, unc, flags, payload) in entries {
+            let off = out.len() as u32;
+            let n = name.as_bytes();
+            // local header
+            out.extend_from_slice(b"PK\x03\x04");
+            out.extend_from_slice(&[20, 0]);
+            out.extend_from_slice(&flags.to_le_bytes());
+            out.extend_from_slice(&[0u8; 8]); // method, time, date
+            out.extend_from_slice(&[0u8; 4]); // crc
+            out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            out.extend_from_slice(&unc.to_le_bytes());
+            out.extend_from_slice(&(n.len() as u16).to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes());
+            out.extend_from_slice(n);
+            out.extend_from_slice(payload);
+            // central directory entry
+            cd.extend_from_slice(b"PK\x01\x02");
+            cd.extend_from_slice(&[20, 0, 20, 0]);
+            cd.extend_from_slice(&flags.to_le_bytes());
+            cd.extend_from_slice(&[0u8; 8]);
+            cd.extend_from_slice(&[0u8; 4]);
+            cd.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            cd.extend_from_slice(&unc.to_le_bytes());
+            cd.extend_from_slice(&(n.len() as u16).to_le_bytes());
+            cd.extend_from_slice(&0u16.to_le_bytes()); // extra
+            cd.extend_from_slice(&0u16.to_le_bytes()); // comment
+            cd.extend_from_slice(&[0u8; 8]); // disk, int attr, ext attr
+            cd.extend_from_slice(&off.to_le_bytes());
+            cd.extend_from_slice(n);
+        }
+        let cd_off = out.len() as u32;
+        out.extend_from_slice(&cd);
+        out.extend_from_slice(b"PK\x05\x06");
+        out.extend_from_slice(&[0u8; 4]);
+        out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        out.extend_from_slice(&(cd.len() as u32).to_le_bytes());
+        out.extend_from_slice(&cd_off.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out
+    }
+
+    fn pe() -> Vec<u8> {
+        let mut v = b"MZ".to_vec();
+        v.resize(600, 0);
+        v
+    }
+
+    #[test]
+    fn sniffs_common_types() {
+        assert_eq!(sniff(b"MZ\x90\x00", &[]), "pe");
+        assert_eq!(sniff(b"\x7fELF\x02\x01", &[]), "elf");
+        assert_eq!(sniff(b"%PDF-1.7\n", &[]), "pdf");
+        assert_eq!(sniff(b"\x89PNG\r\n\x1a\nxxxx", &[]), "png");
+        assert_eq!(sniff(b"PK\x03\x04abc", b"[Content_Types].xml"), "ooxml");
+        assert_eq!(sniff(b"PK\x03\x04abc", b"META-INF/MANIFEST.MF"), "jar");
+        assert_eq!(sniff(b"PK\x03\x04abc", b"classes.dex"), "apk");
+        assert_eq!(sniff(b"PK\x03\x04abc", b"nothing"), "zip");
+        assert_eq!(sniff(b"#!/bin/sh\necho hi\n", &[]), "script");
+        assert_eq!(sniff(b"<?xml version=\"1.0\"?><svg xmlns=\"x\"></svg>", &[]), "svg");
+        assert_eq!(sniff(b"<!DOCTYPE html><html></html>", &[]), "html");
+        assert_eq!(sniff(b"hola mundo\n", &[]), "text");
+        assert_eq!(sniff(b"", &[]), "empty");
+        assert_eq!(sniff(&[0u8, 1, 2, 3, 0xff, 0xfe, 0, 0], &[]), "unknown");
+        assert_eq!(sniff(b"\x28\xb5\x2f\xfd\x00", &[]), "zstd");
+        assert_eq!(sniff(b"L\x00\x00\x00\x01\x14\x02\x00", &[]), "lnk");
+        assert_eq!(last_ext("Foto.JPG"), "jpg");
+        assert_eq!(last_ext("noext"), "");
+        assert_eq!(memfind(b"abcdef", b"cd"), Some(2));
+        assert_eq!(memfind(b"abc", b"zz"), None);
+    }
+
+    #[test]
+    fn disguised_executable_is_danger() {
+        let d = tempfile::tempdir().unwrap();
+        let p = write(d.path(), "vacaciones.jpg", &pe());
+        let r = scan_file(&p, None);
+        assert_eq!(r.kind, "pe");
+        assert_eq!(r.severity(), Severity::Danger);
+        assert!(codes(&r).contains(&"disguised_executable"));
+        // plain .exe: only warnings (extension + executable), no disguise
+        let p = write(d.path(), "setup.exe", &pe());
+        let r = scan_file(&p, None);
+        assert_eq!(r.severity(), Severity::Warning);
+        assert!(codes(&r).contains(&"executable"));
+        assert!(codes(&r).contains(&"dangerous_extension"));
+        assert!(!codes(&r).contains(&"disguised_executable"));
+        // genuine png is clean
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend_from_slice(&[0u8; 64]);
+        let r = scan_file(&write(d.path(), "ok.png", &png), None);
+        assert!(r.is_clean(), "{:?}", r.findings);
+        // extension mismatch that is not an executable → warning
+        let r = scan_file(&write(d.path(), "foto.png", b"%PDF-1.4\n%%EOF\n"), None);
+        assert!(codes(&r).contains(&"magic_mismatch"));
+        assert_eq!(r.severity(), Severity::Warning);
+    }
+
+    #[test]
+    fn name_tricks() {
+        let mut out = Vec::new();
+        check_name("informe.pdf.exe", &mut out);
+        assert!(out.iter().any(|f| f.code == "double_extension" && f.severity == Severity::Danger));
+        out.clear();
+        check_name("factura\u{202e}fdp.exe", &mut out);
+        assert!(out.iter().any(|f| f.code == "rtl_override" && f.severity == Severity::Danger));
+        out.clear();
+        check_name("archivo\u{200b}.txt", &mut out);
+        assert!(out.iter().any(|f| f.code == "zero_width"));
+        out.clear();
+        check_name("foto.jpg                                   .scr", &mut out);
+        assert!(out.iter().any(|f| f.code == "padded_name"));
+        out.clear();
+        check_name("CON.txt", &mut out);
+        assert!(out.iter().any(|f| f.code == "reserved_name"));
+        out.clear();
+        check_name("script.ps1", &mut out);
+        assert!(out.iter().any(|f| f.code == "dangerous_extension"));
+        out.clear();
+        check_name("notas.txt", &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn zip_checks() {
+        let d = tempfile::tempdir().unwrap();
+        // clean
+        let z = make_zip(&[("a.txt", 5, 0, b"hello"), ("dir/b.txt", 3, 0, b"abc")]);
+        let r = scan_file(&write(d.path(), "ok.zip", &z), None);
+        assert!(r.is_clean(), "{:?}", r.findings);
+        // bomb: 1 GiB declared from 100 bytes
+        let z = make_zip(&[("big.bin", 1 << 30, 0, &[0u8; 100])]);
+        let r = scan_file(&write(d.path(), "bomb.zip", &z), None);
+        assert!(codes(&r).contains(&"zip_bomb"));
+        assert_eq!(r.severity(), Severity::Danger);
+        // traversal + executable + nested + encrypted + macros
+        let z = make_zip(&[
+            ("../../etc/passwd", 4, 0, b"root"),
+            ("run.exe", 2, 0, b"MZ"),
+            ("inner.zip", 2, 0, b"PK"),
+            ("secret.txt", 2, 1, b"xx"),
+            ("word/vbaProject.bin", 2, 0, b"xx"),
+        ]);
+        let r = scan_file(&write(d.path(), "evil.zip", &z), None);
+        let c = codes(&r);
+        for want in ["zip_traversal", "archive_executable", "nested_archive", "encrypted_entries", "office_macro"] {
+            assert!(c.contains(&want), "missing {want} in {c:?}");
+        }
+        assert_eq!(r.severity(), Severity::Danger);
+        // truncated (no EOCD)
+        let r = scan_file(&write(d.path(), "trunc.zip", b"PK\x03\x04garbage-without-central-directory"), None);
+        assert!(codes(&r).contains(&"zip_truncated"));
+        // macro-enabled extension without vbaProject → warning hint; ooxml detection via [Content_Types].xml
+        let z = make_zip(&[("[Content_Types].xml", 3, 0, b"<x>"), ("word/document.xml", 3, 0, b"<w>")]);
+        let r = scan_file(&write(d.path(), "doc.docm", &z), None);
+        assert_eq!(r.kind, "ooxml");
+        assert!(codes(&r).contains(&"office_macro_ext"));
+        assert!(codes(&r).contains(&"dangerous_extension"));
+        let r = scan_file(&write(d.path(), "doc.docx", &z), None);
+        assert!(r.is_clean(), "{:?}", r.findings);
+    }
+
+    fn make_tar(build: impl FnOnce(&mut tar::Builder<Vec<u8>>)) -> Vec<u8> {
+        let mut b = tar::Builder::new(Vec::new());
+        build(&mut b);
+        b.into_inner().unwrap()
+    }
+
+    fn tar_file(b: &mut tar::Builder<Vec<u8>>, path: &str, mode: u32, data: &[u8]) {
+        let mut h = tar::Header::new_gnu();
+        h.set_size(data.len() as u64);
+        h.set_mode(mode);
+        h.set_entry_type(tar::EntryType::Regular);
+        h.set_cksum();
+        b.append_data(&mut h, path, data).unwrap();
+    }
+
+    #[test]
+    fn tar_checks() {
+        let d = tempfile::tempdir().unwrap();
+        let t = make_tar(|b| {
+            tar_file(b, "docs/readme.txt", 0o644, b"hi");
+        });
+        let r = scan_file(&write(d.path(), "ok.tar", &t), None);
+        assert_eq!(r.kind, "tar");
+        assert!(r.is_clean(), "{:?}", r.findings);
+
+        let t = make_tar(|b| {
+            tar_file(b, "bin/tool", 0o4755, b"\x7fELF");
+            tar_file(b, "x/installer.sh", 0o755, b"#!/bin/sh");
+            let mut h = tar::Header::new_gnu();
+            h.set_size(0);
+            h.set_mode(0o777);
+            h.set_entry_type(tar::EntryType::Symlink);
+            h.set_cksum();
+            b.append_link(&mut h, "link", "/etc/shadow").unwrap();
+        });
+        let r = scan_file(&write(d.path(), "evil.tar", &t), None);
+        let c = codes(&r);
+        for want in ["tar_setuid", "archive_executable", "tar_link_escape"] {
+            assert!(c.contains(&want), "missing {want} in {c:?}");
+        }
+        assert_eq!(r.severity(), Severity::Danger);
+
+        // tar.zst goes through the zstd decoder
+        let t = make_tar(|b| {
+            tar_file(b, "../escape.txt", 0o644, b"x");
+        });
+        let z = zstd::encode_all(&t[..], 3).unwrap();
+        let r = scan_file(&write(d.path(), "esc.tar.zst", &z), None);
+        assert_eq!(r.kind, "zstd");
+        assert!(codes(&r).contains(&"tar_traversal"), "{:?}", r.findings);
+    }
+
+    #[test]
+    fn document_checks() {
+        let d = tempfile::tempdir().unwrap();
+        let r = scan_file(&write(d.path(), "js.pdf", b"%PDF-1.7\n1 0 obj << /OpenAction << /S /JavaScript /JS (app.alert(1)) >> >>\n%%EOF"), None);
+        assert!(codes(&r).contains(&"pdf_javascript"));
+        assert!(!codes(&r).contains(&"pdf_openaction"));
+        assert_eq!(r.severity(), Severity::Danger);
+        let r = scan_file(&write(d.path(), "launch.pdf", b"%PDF-1.7\n<< /S /Launch /F (cmd.exe) >>\n%%EOF"), None);
+        assert!(codes(&r).contains(&"pdf_launch"));
+        let r = scan_file(&write(d.path(), "clean.pdf", b"%PDF-1.4\n1 0 obj << /Type /Catalog >>\n%%EOF"), None);
+        assert!(r.is_clean(), "{:?}", r.findings);
+
+        // OLE with VBA storage name in UTF-16LE
+        let mut ole = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1".to_vec();
+        ole.resize(512, 0);
+        ole.extend("_VBA_PROJECT".encode_utf16().flat_map(|c| c.to_le_bytes()));
+        ole.extend_from_slice(b"DDEAUTO c:\\\\windows\\\\system32\\\\cmd.exe");
+        let r = scan_file(&write(d.path(), "old.doc", &ole), None);
+        assert!(codes(&r).contains(&"office_macro"));
+        assert!(codes(&r).contains(&"office_dde"));
+
+        // SVG with script is danger, html with script only warning
+        let r = scan_file(&write(d.path(), "logo.svg", b"<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>"), None);
+        assert!(codes(&r).contains(&"html_script"));
+        assert_eq!(r.severity(), Severity::Danger);
+        let r = scan_file(&write(d.path(), "page.html", b"<!doctype html><html><script>x()</script><iframe src=x></iframe></html>"), None);
+        assert!(codes(&r).contains(&"html_script"));
+        assert!(codes(&r).contains(&"html_embed"));
+        assert_eq!(r.severity(), Severity::Warning);
+
+        // .desktop launcher executing a command
+        let r = scan_file(&write(d.path(), "Docs.desktop", b"[Desktop Entry]\nType=Application\nExec=sh -c 'curl x | sh'\n"), None);
+        assert!(codes(&r).contains(&"shortcut_exec"));
+        assert_eq!(r.severity(), Severity::Danger);
+
+        // shebang script named as text → disguised executable (script kind, benign ext)
+        let r = scan_file(&write(d.path(), "notas.txt", b"#!/bin/bash\nrm -rf ~\n"), None);
+        assert!(codes(&r).contains(&"disguised_executable"), "{:?}", r.findings);
+    }
+
+    #[test]
+    fn report_and_quarantine() {
+        let d = tempfile::tempdir().unwrap();
+        let bad = write(d.path(), "foto.jpg", &pe());
+        let _ok = write(d.path(), "ok.txt", b"hola\n");
+        let sub = d.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let bad2 = write(&sub, "readme.pdf.exe", b"MZ\0\0");
+
+        let cfg = ScanConfig { clamav: false, on_danger: DangerAction::Report, ..Default::default() };
+        let rep = scan_paths(&[d.path().to_path_buf()], &cfg);
+        assert_eq!(rep.files.len(), 3);
+        assert_eq!(rep.dangers(), 2);
+        assert_eq!(rep.quarantined(), 0);
+        assert!(!rep.is_clean());
+        assert_eq!(rep.engines, vec!["heuristics".to_string()]);
+        assert!(rep.summary().contains("2 peligroso"));
+        assert!(rep.detail().contains("disguised_executable"));
+        assert!(!rep.detail().contains("ok.txt"));
+        assert!(bad.exists() && bad2.exists());
+
+        let cfg = ScanConfig { clamav: false, on_danger: DangerAction::Quarantine, ..Default::default() };
+        let rep = scan_paths(&[bad.clone()], &cfg);
+        assert_eq!(rep.quarantined(), 1);
+        assert!(!bad.exists());
+        let q = rep.files[0].quarantined.clone().unwrap();
+        assert!(q.exists());
+        assert!(q.to_string_lossy().ends_with("foto.jpg.unishare-quarantine"));
+        // second quarantine of same name gets a numbered suffix
+        let bad_again = write(d.path(), "foto.jpg", &pe());
+        let q2 = quarantine(&bad_again).unwrap();
+        assert_ne!(q, q2);
+        assert!(q2.to_string_lossy().contains(".1.unishare-quarantine"));
+
+        let cfg = ScanConfig { clamav: false, on_danger: DangerAction::Delete, ..Default::default() };
+        scan_paths(&[bad2.clone()], &cfg);
+        assert!(!bad2.exists());
+
+        // clean report
+        let rep = scan_paths(&[d.path().join("ok.txt")], &cfg);
+        assert!(rep.is_clean());
+        assert!(rep.summary().contains("sin hallazgos"));
+        assert!(rep.detail().is_empty());
+
+        // JSON round-trip (used by `uni-share scan --json` and the GUI)
+        let js = serde_json::to_string(&rep).unwrap();
+        let back: Report = serde_json::from_str(&js).unwrap();
+        assert_eq!(back.files.len(), 1);
+    }
+
+    #[test]
+    fn size_mismatch_and_clamav_absent_is_info() {
+        let d = tempfile::tempdir().unwrap();
+        let p = write(d.path(), "data.bin", b"12345");
+        let r = scan_file(&p, Some(10));
+        assert!(codes(&r).contains(&"size_mismatch"));
+        assert_eq!(r.severity(), Severity::Warning);
+        let r = scan_file(&p, Some(5));
+        assert!(!codes(&r).contains(&"size_mismatch"));
+        let r = scan_file(&write(d.path(), "empty.txt", b""), None);
+        assert!(codes(&r).contains(&"empty"));
+        assert!(r.is_clean());
+
+        // pointing ClamAV to a non-existent binary → engine reports "no instalado", nothing dangerous
+        let cfg = ScanConfig { clamav: true, clamav_path: Some(d.path().join("nope/clamscan")), on_danger: DangerAction::Report, ..Default::default() };
+        let rep = scan_paths(&[p.clone()], &cfg);
+        assert!(rep.engines.iter().any(|e| e.contains("no instalado")));
+        assert!(rep.is_clean());
+
+        // fake "clamscan" that reports an infection (unix only)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let fake = d.path().join("clamscan");
+            let mut f = std::fs::File::create(&fake).unwrap();
+            f.write_all(b"#!/bin/sh\necho \"$3: Eicar-Test-Signature FOUND\"\nexit 1\n").unwrap();
+            drop(f);
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let cfg = ScanConfig { clamav: true, clamav_path: Some(fake), on_danger: DangerAction::Report, ..Default::default() };
+            let rep = scan_paths(&[p], &cfg);
+            let f = &rep.files[0];
+            assert!(f.findings.iter().any(|x| x.code == "clamav" && x.message.contains("Eicar-Test-Signature")), "{:?}", f.findings);
+            assert_eq!(rep.dangers(), 1);
+        }
+    }
+}

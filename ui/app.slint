@@ -279,7 +279,7 @@ export component MainWindow inherits Window {
                                 Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
                                 HorizontalLayout {
                                     padding-left: 10px; padding-right: 10px;
-                                    for c in [ { k: "name", l: "Nombre", w: 0.30 }, { k: "kind", l: "Tipo", w: 0.10 }, { k: "size", l: "Tamaño", w: 0.08 }, { k: "progress", l: "Progreso", w: 0.20 }, { k: "state", l: "Estado", w: 0.09 }, { k: "speed", l: "Velocidad", w: 0.08 }, { k: "eta", l: "ETA", w: 0.06 }, { k: "peer", l: "Origen / destino", w: 0.09 } ]: Rectangle {
+                                    for c in [ { k: "name", l: "Nombre", w: 0.30 }, { k: "kind", l: "Tipo", w: 0.10 }, { k: "size", l: "Tamaño", w: 0.08 }, { k: "progress", l: "Progreso", w: 0.20 }, { k: "state", l: "Estado", w: 0.09 }, { k: "speed", l: "Velocidad", w: 0.08 }, { k: "eta", l: "ETA", w: 0.06 }, { k: "peer", l: "Origen", w: 0.09 } ]: Rectangle {
                                         min-width: 0px; preferred-width: 0px; horizontal-stretch: c.w; clip: true;
                                         HorizontalLayout { spacing: 4px; alignment: start;
                                             Text { text: c.l; color: hta.has-hover ? Theme.fg : Theme.fg3; font-size: Theme.fs-sm; font-weight: 600; vertical-alignment: center; }
@@ -325,7 +325,7 @@ export component MainWindow inherits Window {
                                                     ProgressBar { y: 13px; value: j.percent; state: j.state; indeterminate: j.indeterminate; horizontal-stretch: 1; }
                                                     Text { width: 44px; text: j.indeterminate ? "…" : round(j.percent) + "%"; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; horizontal-alignment: right; vertical-alignment: center; }
                                                 } }
-                                            Rectangle { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.09; clip: true; Badge { y: 8px; text: j.state-label; kind: j.state; } }
+                                            Rectangle { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.09; clip: true; Badge { y: 7px; text: j.state-label; kind: j.state; } }
                                             Text { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.08; text: j.speed-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; vertical-alignment: center; }
                                             Text { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.06; text: j.eta-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; vertical-alignment: center; }
                                             Text { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.09; text: j.peer; color: Theme.fg3; vertical-alignment: center; overflow: elide; }

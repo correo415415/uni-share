@@ -181,10 +181,11 @@ export component ProgressBar inherits Rectangle {
 export component Badge inherits Rectangle {
     in property <string> text;
     in property <string> kind: "running"; // running queued completed failed cancelled
-    height: 18px; width: t.preferred-width + 16px; border-radius: 9px;
+    height: 20px; width: t.preferred-width + 16px; border-radius: 10px;
     background: kind == "running" ? Theme.info.with-alpha(0.15) : kind == "completed" ? Theme.ok.with-alpha(0.15)
         : kind == "failed" ? Theme.err.with-alpha(0.15) : kind == "cancelled" ? Theme.warn.with-alpha(0.15) : Theme.bg4;
     t := Text {
+        width: parent.width; height: parent.height;
         text: root.text; font-size: 11px; font-weight: 600; vertical-alignment: center; horizontal-alignment: center;
         color: kind == "running" ? Theme.info : kind == "completed" ? Theme.ok : kind == "failed" ? Theme.err : kind == "cancelled" ? Theme.warn : Theme.fg2;
     }

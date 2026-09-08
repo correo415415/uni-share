@@ -59,7 +59,6 @@ struct UiState {
     last_states: std::collections::HashMap<u64, JobState>,
     last_pending: usize,
     snapshot: Option<Snapshot>,
-    confirm: Option<Box<dyn Fn(&UiCtx)>>,
 }
 
 #[derive(Clone)]
@@ -159,7 +158,6 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
         last_states: Default::default(),
         last_pending: 0,
         snapshot: None,
-        confirm: None,
     }));
     let ctx = UiCtx { win: win.as_weak(), tx: tx.clone(), etx: etx.clone(), st: st.clone() };
     wire_callbacks(&win, &ctx);

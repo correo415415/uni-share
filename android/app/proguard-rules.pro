@@ -1,0 +1,1 @@
+-keep class dev.unishare.app.Native { *; }

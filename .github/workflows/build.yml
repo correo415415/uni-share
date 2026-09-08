@@ -1,0 +1,275 @@
+# CI/CD en el runner local (self-hosted).
+#
+# - Sin actions/cache: el runner conserva ~/.cargo y ./target entre ejecuciones,
+#   así que la caché es el propio disco del runner.
+# - Cada push a `main` / `genspark_ai_developer` (o ejecución manual) compila:
+#     * uni-share            (features por defecto: CLI + GUI web)
+#     * uni-share-app        (--features slint: CLI + GUI web + app nativa)
+#   y publica los binarios en una *release* rodante `nightly-<rama>` (prerelease),
+#   sobrescribiendo los assets. Los tags `v*` generan una release normal.
+# - Los artefactos NO se guardan en Actions (sin espacio); solo en releases.
+
+name: build
+
+on:
+  push:
+    branches: [main, genspark_ai_developer]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      slint:
+        description: "Compilar también la app nativa (--features slint)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  build:
+    name: build & test (self-hosted)
+    # Los PR de ramas del propio repo ya se compilan en el evento `push`; así no se
+    # ejecuta el mismo commit dos veces en el runner.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: self-hosted
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal -c clippy -c rustfmt
+          fi
+          source "$HOME/.cargo/env"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          rustup update stable >/dev/null 2>&1 || true
+          rustup component add clippy rustfmt >/dev/null 2>&1 || true
+          rustc -Vv; cargo -V
+
+      - name: System libs (Linux, para Slint/rfd)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo -n"
+            $SUDO apt-get update -qq || true
+            DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq --no-install-recommends \
+              pkg-config libfontconfig1-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev \
+              libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libgtk-3-dev \
+              libdbus-1-dev clang ninja-build python3 || echo "::warning::No se pudieron instalar libs de sistema (¿sin sudo?)"
+          fi
+
+      - name: Metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ runner.os }}-${{ runner.arch }}" in
+            Linux-X64)   TARGET=x86_64-unknown-linux-gnu;  EXE="" ;;
+            Linux-ARM64) TARGET=aarch64-unknown-linux-gnu; EXE="" ;;
+            macOS-X64)   TARGET=x86_64-apple-darwin;       EXE="" ;;
+            macOS-ARM64) TARGET=aarch64-apple-darwin;      EXE="" ;;
+            Windows-X64) TARGET=x86_64-pc-windows-msvc;    EXE=".exe" ;;
+            *)           TARGET=$(rustc -vV | sed -n 's/^host: //p'); EXE="" ;;
+          esac
+          VERSION=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1)
+          SHORT=$(git rev-parse --short HEAD)
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"; PRERELEASE=false; NAME="uni-share ${TAG}"
+          else
+            BRANCH="${GITHUB_REF_NAME//\//-}"
+            TAG="nightly-${BRANCH}"; PRERELEASE=true; NAME="uni-share nightly (${BRANCH})"
+          fi
+          {
+            echo "target=$TARGET"; echo "exe=$EXE"; echo "version=$VERSION"; echo "short=$SHORT"
+            echo "tag=$TAG"; echo "prerelease=$PRERELEASE"; echo "name=$NAME"
+          } >> "$GITHUB_OUTPUT"
+          echo "target=$TARGET tag=$TAG version=$VERSION sha=$SHORT"
+
+      - name: Cargo.lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Si Cargo.toml cambió sin regenerar el lock (sandbox sin toolchain), lo regeneramos
+          # aquí y lo devolvemos al repo; en caso contrario, `--locked` garantiza builds reproducibles.
+          if cargo metadata --locked --format-version 1 >/dev/null 2>&1; then
+            echo "LOCKED=--locked" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Cargo.lock desactualizado: se regenera"
+            cargo generate-lockfile
+            echo "LOCKED=" >> "$GITHUB_ENV"
+            if [ "${{ github.event_name }}" = "push" ]; then
+              git config user.name "github-actions[bot]"; git config user.email "github-actions[bot]@users.noreply.github.com"
+              git add Cargo.lock && git commit -qm "chore: update Cargo.lock [skip ci]" && git push origin "HEAD:${GITHUB_REF_NAME}" || echo "::warning::no se pudo subir Cargo.lock"
+            fi
+          fi
+
+      - name: fmt
+        shell: bash
+        run: cargo fmt --all -- --check || echo "::warning::cargo fmt reporta diferencias"
+
+      - name: clippy (default)
+        shell: bash
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: test (default)
+        shell: bash
+        run: cargo test --all-targets
+
+      - name: build release (default)
+        shell: bash
+        run: cargo build --release $LOCKED
+
+      - name: build release (--features slint)
+        if: github.event_name != 'workflow_dispatch' || inputs.slint
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release $LOCKED --features slint --target-dir target/slint
+
+      - name: Screenshots de la app (demo, sin red)
+        if: runner.os == 'Linux' && (github.event_name != 'workflow_dispatch' || inputs.slint)
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          BIN=target/slint/release/uni-share
+          [ -x "$BIN" ] || { echo "sin binario slint"; exit 0; }
+          mkdir -p shots
+          export UNI_SHARE_HOME="$RUNNER_TEMP/uni-share-shots"
+          RUN="$BIN"
+          if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+            if command -v xvfb-run >/dev/null 2>&1; then RUN="xvfb-run -a -s '-screen 0 1400x900x24' $BIN"; else echo "::warning::sin DISPLAY ni xvfb-run: no hay capturas"; exit 0; fi
+          fi
+          shot() {
+            local name="$1"; shift
+            if RUST_BACKTRACE=1 timeout 60 bash -c "$RUN app --demo --screenshot shots/app-$name.png $*" > "shots/$name.log" 2>&1; then
+              rm -f "shots/$name.log"
+            else
+              echo "::warning::captura $name falló (exit $?)"; tail -40 "shots/$name.log"
+            fi
+          }
+          shot main
+          shot details-general --select 1:0
+          shot details-files   --select 1:1
+          shot details-failed  --select 5:0
+          shot details-received --select 4:0
+          shot details-share   --select 3:2
+          shot details-log     --select 1:3
+          shot new      --dialog new
+          shot share    --dialog share
+          shot settings --dialog settings
+          shot fs       --dialog fs
+          shot confirm  --dialog confirm --select 1:0
+          shot light-main     --light --select 1:0
+          shot light-new      --light --dialog new
+          shot light-settings --light --dialog settings
+          ls -la shots || true
+
+      # Android: solo si el runner tiene SDK + NDK (ANDROID_HOME / ANDROID_NDK_HOME o
+      # ~/Android/Sdk). No falla el build si faltan: se avisa y se sigue.
+      - name: Android (cargo-ndk + APK debug, si hay SDK/NDK)
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
+          if [ -z "${ANDROID_NDK_HOME:-}" ] && [ -d "$ANDROID_HOME/ndk" ]; then
+            export ANDROID_NDK_HOME="$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)"
+          fi
+          if [ ! -d "$ANDROID_HOME/platforms" ] || [ -z "${ANDROID_NDK_HOME:-}" ] || [ ! -d "$ANDROID_NDK_HOME" ]; then
+            echo "::notice::Android SDK/NDK no encontrados en el runner (ANDROID_HOME=$ANDROID_HOME); se omite la APK."
+            exit 0
+          fi
+          echo "SDK: $ANDROID_HOME · NDK: $ANDROID_NDK_HOME"
+          command -v cargo-ndk >/dev/null 2>&1 || cargo install cargo-ndk --locked
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android >/dev/null 2>&1 || true
+          android/build-android.sh --apk
+          mkdir -p dist-android
+          cp android/app/build/outputs/apk/debug/app-debug.apk "dist-android/uni-share-${{ steps.meta.outputs.version }}-android-debug.apk"
+          ls -la dist-android
+
+      - name: Package
+        id: pkg
+        shell: bash
+        env:
+          TARGET: ${{ steps.meta.outputs.target }}
+          EXE: ${{ steps.meta.outputs.exe }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          SHORT: ${{ steps.meta.outputs.short }}
+        run: |
+          set -euo pipefail
+          rm -rf dist && mkdir -p dist
+          BASE="uni-share-${VERSION}-${TARGET}"
+          # APK (si el paso Android la generó)
+          cp dist-android/*.apk dist/ 2>/dev/null || true
+          # CLI + GUI web
+          cp "target/release/uni-share${EXE}" "dist/uni-share-${TARGET}${EXE}"
+          if [ -f "target/slint/release/uni-share${EXE}" ]; then
+            cp "target/slint/release/uni-share${EXE}" "dist/uni-share-app-${TARGET}${EXE}"
+          fi
+          # Archivo completo (binarios + README + TODO + script python de fallback)
+          STAGE="dist/${BASE}"; mkdir -p "$STAGE/python"
+          cp dist/uni-share-*"${TARGET}"* "$STAGE"/ 2>/dev/null || true
+          cp README.md TODO.md "$STAGE"/; cp python/swisstransfer_dl.py python/requirements.txt "$STAGE/python/"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            (cd dist && 7z a -bd -y "${BASE}.zip" "${BASE}" >/dev/null)
+          else
+            tar -C dist -czf "dist/${BASE}.tar.gz" "${BASE}"
+          fi
+          rm -rf "$STAGE"
+          (cd dist && (sha256sum * 2>/dev/null || shasum -a 256 *) > "SHA256SUMS-${TARGET}.txt")
+          ls -la dist
+          {
+            echo "## uni-share ${VERSION} (${SHORT}) — ${TARGET}"
+            echo
+            echo "- \`uni-share-${TARGET}${EXE}\`: CLI + GUI web (\`uni-share gui\`)."
+            [ -f "dist/uni-share-app-${TARGET}${EXE}" ] && echo "- \`uni-share-app-${TARGET}${EXE}\`: igual + app nativa Slint (\`uni-share app\`)."
+            echo "- \`${BASE}.tar.gz\` / \`.zip\`: binarios + docs + script python de fallback."
+            ls dist/*.apk >/dev/null 2>&1 && echo "- \`$(basename dist/*.apk)\`: app Android (debug, WebView sobre el core Rust)."
+            echo
+            echo "Commit: ${GITHUB_SHA} · Rama/tag: ${GITHUB_REF_NAME} · Compilado en el runner local (${{ runner.os }}/${{ runner.arch }})."
+          } > dist/RELEASE_NOTES.md
+
+      - name: Release (rolling nightly o tag)
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.name }}
+          prerelease: ${{ steps.meta.outputs.prerelease == 'true' }}
+          make_latest: ${{ steps.meta.outputs.prerelease == 'false' }}
+          body_path: dist/RELEASE_NOTES.md
+          files: |
+            dist/uni-share-*
+            dist/SHA256SUMS-*.txt
+            shots/*.png
+          fail_on_unmatched_files: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Las releases nightly reutilizan el tag: lo movemos al commit actual para
+      # que el release apunte siempre al último build.
+      - name: Mover tag nightly al HEAD
+        if: github.event_name != 'pull_request' && steps.meta.outputs.prerelease == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git tag -f "${{ steps.meta.outputs.tag }}" "$GITHUB_SHA"
+          git push -f origin "refs/tags/${{ steps.meta.outputs.tag }}"

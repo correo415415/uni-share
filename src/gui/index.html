@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="es" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>uni-share</title>
+<link rel="stylesheet" href="/app.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256'%3E%3Crect width='256' height='256' rx='58' fill='%231b1e21'/%3E%3Cg fill='none' stroke='%234c8dff' stroke-width='22' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M96 190V70M62 104l34-34 34 34'/%3E%3Cpath d='M160 66v120M126 152l34 34 34-34'/%3E%3C/g%3E%3C/svg%3E">
+</head>
+<body>
+<div id="app">
+  <header class="toolbar">
+    <div class="brand"><div class="logo" title="uni-share"><svg viewBox="0 0 24 24"><path d="M8.5 19.5V5M4.5 9l4-4 4 4"/><path d="M15.5 4.5V19M11.5 15l4 4 4-4"/></svg></div><div class="name">uni-share<small id="ver"></small></div></div>
+    <div class="tb-sep"></div>
+    <button class="btn primary" id="b-new" title="Nueva transferencia (N)"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Nueva</button>
+    <button class="btn" id="b-sendlan" title="Enviar por LAN (L)"><svg viewBox="0 0 24 24"><path d="M12 20V8M6 14l6-6 6 6M4 4h16"/></svg>Enviar LAN</button>
+    <button class="btn" id="b-upload" title="Subir y obtener link (U)"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>Compartir link</button>
+    <button class="btn" id="b-download" title="Descargar de link / ticket (D)"><svg viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg>Descargar</button>
+    <button class="btn" id="b-ticket" title="Crear ticket .unishare (T)"><svg viewBox="0 0 24 24"><path d="M4 7a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 000 4v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2a2 2 0 000-4z"/><path d="M12 5v14" stroke-dasharray="2 2"/></svg>Ticket</button>
+    <div class="tb-sep"></div>
+    <button class="btn icon" id="b-cancel" title="Cancelar seleccionado (Supr)" disabled><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
+    <button class="btn icon" id="b-clear" title="Limpiar finalizadas"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
+    <div class="tb-spacer"></div>
+    <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input id="q" placeholder="Filtrar transferencias…  (/)" autocomplete="off"></div>
+    <button class="btn icon ghost" id="b-theme" title="Tema claro/oscuro"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 109 9 7 7 0 01-9-9z"/></svg></button>
+    <button class="btn icon ghost" id="b-settings" title="Ajustes (,)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg></button>
+  </header>
+  <aside class="sidebar">
+    <div class="side-h">Transferencias</div>
+    <div id="filters"></div>
+    <div class="side-h">Dispositivos LAN <button class="btn icon ghost" id="b-scan" title="Buscar de nuevo"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 11-2.3-5.7M20 4v5h-5"/></svg></button></div>
+    <div id="devices"></div>
+    <div class="me" id="me"></div>
+  </aside>
+  <section class="main" id="main">
+    <div class="tablewrap" id="tablewrap">
+      <div class="offers" id="offers"></div>
+      <table class="jobs"><thead><tr id="thead"></tr></thead><tbody id="rows"></tbody></table>
+      <div class="empty" id="empty" hidden><div><div class="big">⇅</div>No hay transferencias en esta vista.<br><span class="muted">Pulsa <kbd>N</kbd> para empezar, o arrastra un archivo o un ticket <kbd>.unishare</kbd> aquí.</span></div></div>
+    </div>
+    <div class="splitter" id="splitter" title="Arrastra para redimensionar · doble clic para ocultar"></div>
+    <div class="details">
+      <div class="tabs" id="tabs">
+        <div class="tab active" data-tab="general">General</div><div class="tab" data-tab="files">Archivos</div><div class="tab" data-tab="share">Compartir</div><div class="tab" data-tab="log">Registro</div>
+        <div class="tb-spacer"></div><div class="tab" data-tab="history">Historial</div>
+      </div>
+      <div class="pane" id="pane"></div>
+    </div>
+  </section>
+  <footer class="statusbar">
+    <span class="conn" id="conn"><i></i><span>conectado</span></span>
+    <span class="sp down"><svg viewBox="0 0 24 24"><path d="M12 4v14M6 12l6 6 6-6"/></svg><span id="sp-down">0 B/s</span></span>
+    <span class="sp up"><svg viewBox="0 0 24 24"><path d="M12 20V6M6 12l6-6 6 6"/></svg><span id="sp-up">0 B/s</span></span>
+    <span id="st-active" class="muted"></span>
+    <span class="tb-spacer"></span>
+    <span id="st-lan" class="mono muted"></span>
+    <span id="st-dir" class="muted" title="Carpeta de descargas"></span>
+  </footer>
+</div>
+<div class="toasts" id="toasts"></div>
+<div id="modals"></div>
+<script src="/app.js"></script>
+</body>
+</html>

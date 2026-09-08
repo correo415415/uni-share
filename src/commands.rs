@@ -145,3 +145,46 @@ pub fn app(ctx: Ctx, a: AppArgs) -> Result<()> {
 pub fn app(_ctx: Ctx, _a: AppArgs) -> Result<()> {
     anyhow::bail!("this build has no native GUI: rebuild with `cargo build --release --features slint` (or use `uni-share gui` for the browser UI)")
 }
+
+/// `uni-share scan <paths…>` — exit code 0 clean, 1 warnings, 2 dangers.
+pub async fn scan(ctx: Ctx, a: ScanArgs) -> Result<()> {
+    use uni_share::scan::{DangerAction, Severity, scan_paths_async};
+    const S: &str = "SCAN";
+    for p in &a.paths {
+        anyhow::ensure!(p.exists(), "path not found: {}", p.display());
+    }
+    let mut cfg = ctx.cfg.scan.clone();
+    cfg.enabled = true;
+    if a.no_clamav {
+        cfg.clamav = false;
+    }
+    // Explicit command: never touch files unless asked.
+    cfg.on_danger = if a.quarantine {
+        DangerAction::Quarantine
+    } else if a.delete {
+        DangerAction::Delete
+    } else {
+        DangerAction::Report
+    };
+    let sp = if a.json || ctx.quiet { None } else { Some(ui::spinner(S, "Analizando…")) };
+    let report = scan_paths_async(a.paths.clone(), cfg).await;
+    if let Some(sp) = sp {
+        sp.finish_and_clear();
+    }
+    if a.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        ui::scan_report(S, &report);
+        if a.verbose {
+            for f in report.files.iter().filter(|f| f.is_clean()) {
+                eprintln!("{} {} [{}] {}", ui::tag(S), style("ok").green(), f.kind, f.path.display());
+            }
+        }
+        ui::info(S, format!("{} archivo(s) en {} ms · motores: {}", report.files.len(), report.duration_ms, report.engines.join(", ")));
+    }
+    match report.severity() {
+        Severity::Info => Ok(()),
+        Severity::Warning => std::process::exit(1),
+        Severity::Danger => std::process::exit(2),
+    }
+}

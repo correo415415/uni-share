@@ -65,6 +65,33 @@ pub enum Command {
     Config(ConfigArgs),
     /// Register the .unishare file type and unishare: links to open the desktop app (per user)
     Associate(AssociateArgs),
+    /// Run the local safety scanner on files or folders (heuristics + ClamAV when installed)
+    Scan(ScanArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ScanArgs {
+    /// Files or folders to analyse (folders are walked recursively)
+    #[arg(required = true, value_name = "PATH")]
+    pub paths: Vec<PathBuf>,
+    /// Print the full report as JSON (stdout)
+    #[arg(long)]
+    pub json: bool,
+    /// Do not use ClamAV even if it is installed
+    #[arg(long)]
+    pub no_clamav: bool,
+    /// Only report: never rename or delete dangerous files (default for this command)
+    #[arg(long, conflicts_with_all = ["quarantine", "delete"])]
+    pub report: bool,
+    /// Rename dangerous files to *.unishare-quarantine
+    #[arg(long, conflicts_with = "delete")]
+    pub quarantine: bool,
+    /// Delete dangerous files
+    #[arg(long)]
+    pub delete: bool,
+    /// Show clean files too
+    #[arg(short, long)]
+    pub verbose: bool,
 }
 
 #[derive(Args, Debug)]
@@ -420,5 +447,6 @@ async fn run(cli: Cli) -> Result<()> {
         Command::App(_) => unreachable!("handled in main"),
         Command::Config(a) => commands::config(ctx, a).await,
         Command::Associate(a) => commands::associate(ctx, a).await,
+        Command::Scan(a) => commands::scan(ctx, a).await,
     }
 }

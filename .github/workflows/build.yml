@@ -39,6 +39,9 @@ env:
 jobs:
   build:
     name: build & test (self-hosted)
+    # Los PR de ramas del propio repo ya se compilan en el evento `push`; así no se
+    # ejecuta el mismo commit dos veces en el runner.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: self-hosted
     timeout-minutes: 120
     steps:

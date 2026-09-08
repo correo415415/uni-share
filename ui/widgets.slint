@@ -2,13 +2,24 @@
 import { Theme } from "theme.slint";
 
 // ───────────────────────── icons (vector paths, 24x24 grid) ─────────────────────────
-export component Icon inherits Path {
+// A 24x24 vector glyph. Behaves like a fixed-size box (default 16px) so it can
+// live inside layouts; `size` sets both dimensions, the path is centred inside.
+export component Icon inherits Rectangle {
     in property <string> name;
     in property <color> color: Theme.fg2;
-    width: 16px; height: 16px;
-    viewbox-width: 24; viewbox-height: 24;
-    stroke: color; stroke-width: 1.8px; fill: transparent;
-    commands: name == "plus" ? "M12 5 V19 M5 12 H19"
+    in property <length> size: 16px;
+    in property <length> stroke-width: 1.8px;
+    width: size;
+    preferred-height: size; min-height: size;
+    background: transparent;
+    Path {
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        width: root.size; height: root.size;
+        viewbox-width: 24; viewbox-height: 24;
+        stroke: root.color; stroke-width: root.stroke-width; fill: transparent;
+        commands: root.commands;
+    }
+    property <string> commands: name == "plus" ? "M12 5 V19 M5 12 H19"
         : name == "send" ? "M12 20 V8 M6 14 L12 8 L18 14 M4 4 H20"
         : name == "upload" ? "M12 16 V4 M7 9 L12 4 L17 9 M4 20 H20"
         : name == "download" ? "M12 4 V16 M7 11 L12 16 L17 11 M4 20 H20"
@@ -62,7 +73,7 @@ export component Button inherits Rectangle {
     HorizontalLayout {
         padding-left: text == "" ? 0px : 11px; padding-right: text == "" ? 0px : 11px;
         spacing: 6px; alignment: center;
-        if icon != "": Icon { name: icon; color: primary ? Theme.on-accent : (danger ? Theme.err : Theme.fg); vertical-alignment: center; }
+        if icon != "": Icon { name: icon; color: primary ? Theme.on-accent : (danger ? Theme.err : Theme.fg); }
         t := Text { text: root.text; color: primary ? Theme.on-accent : (danger ? Theme.err : Theme.fg); font-size: Theme.fs; font-weight: primary ? 600 : 500; vertical-alignment: center; visible: text != ""; }
     }
     ta := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { root.clicked(); } }
@@ -99,7 +110,7 @@ export component Input inherits Rectangle {
     if te.text == "" && placeholder != "": Text {
         x: 10px; text: placeholder; color: Theme.fg3; font-size: Theme.fs; vertical-alignment: center; height: parent.height;
     }
-    public function focus() { te.focus(); }
+    public function focus-input() { te.focus(); }
 }
 
 export component TextArea inherits Rectangle {
@@ -127,7 +138,7 @@ export component Check inherits Rectangle {
             width: 16px; height: 16px; y: 4px; border-radius: 4px;
             background: checked ? Theme.accent : Theme.bg3; border-width: 1px; border-color: checked ? Theme.accent : Theme.line2;
             animate background { duration: 100ms; }
-            if checked: Icon { name: "check"; color: Theme.on-accent; width: 12px; height: 12px; stroke-width: 2.4px; x: 2px; y: 2px; }
+            if checked: Icon { name: "check"; color: Theme.on-accent; size: 12px; stroke-width: 2.4px; x: 2px; y: 2px; }
         }
         lbl := Text { text: root.text; color: Theme.fg2; font-size: Theme.fs; vertical-alignment: center; }
     }
@@ -191,7 +202,7 @@ export component SideItem inherits Rectangle {
     border-width: 1px; border-color: active ? Theme.sel-line : transparent;
     HorizontalLayout {
         padding-left: 9px; padding-right: 9px; spacing: 9px;
-        if icon != "": Icon { name: icon; width: 15px; height: 15px; color: active ? Theme.fg : Theme.fg2; vertical-alignment: center; }
+        if icon != "": Icon { name: icon; size: 15px; color: active ? Theme.fg : Theme.fg2; }
         Text { text: root.text; color: active ? Theme.fg : Theme.fg2; font-size: Theme.fs; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
         if count >= 0: Rectangle {
             width: max(20px, ct.preferred-width + 12px); height: 18px; y: 7px; border-radius: 9px; background: Theme.bg4;

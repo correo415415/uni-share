@@ -46,6 +46,7 @@ async function openScanned(text) {
 function androidEvent(kind, payload) {
   if (kind === 'toast') return toast(String(payload), 'info');
   if (kind === 'folder') { toast(payload ? `Carpeta de descargas: ${payload}` : 'Se usará la carpeta privada de la app', 'ok'); if (S.tab === 'settings') render(); return; }
+  if (kind === 'picked') { const f = pickWaiter; pickWaiter = null; if (f) f(String(payload)); else openNew('lan', { path: String(payload) }); return; }
   if (kind === 'exported') return toast(`«${payload.name}»: ${payload.files} archivo(s) copiados a ${payload.folder}`, 'ok', 6000);
 }
 function exportToSaf(j) { if (!mobile || !j.saved || !j.saved.length) return; try { Android.exportJob(j.id, JSON.stringify(j.saved), j.name); } catch { /* bridge unavailable */ } }
@@ -608,8 +609,11 @@ function previewTicket(text, el) {
   }, 250);
 }
 
-/** Server-side path picker (the engine reads local files). Resolves with a path or null. */
+let pickWaiter = null;
+/** Path picker. On Android (files) → system document picker via the bridge, result comes back through androidEvent('picked').
+    Otherwise → server-side browser (the engine reads local files). Resolves with a path or null. */
 function pickPath({ dirsOnly = false, start = '', title } = {}) {
+  if (mobile && !dirsOnly) return new Promise(res => { pickWaiter = res; try { Android.pickFiles(); } catch { pickWaiter = null; res(null); } });
   return new Promise(res => {
     let out = null; let cur = start || '';
     const list = h('div', { class: 'list' }); const crumb = h('div', { class: 'linkbox', style: 'margin-bottom:10px' }); const roots = h('div', { class: 'chips' });

@@ -25,6 +25,10 @@ use std::sync::Arc;
 pub const INDEX_HTML: &str = include_str!("gui/index.html");
 pub const APP_CSS: &str = include_str!("gui/app.css");
 pub const APP_JS: &str = include_str!("gui/app.js");
+/// Phone GUI (the Android shell loads `/m`): same engine and API, layout designed for thumbs.
+pub const M_HTML: &str = include_str!("gui/mobile/index.html");
+pub const M_CSS: &str = include_str!("gui/mobile/m.css");
+pub const M_JS: &str = include_str!("gui/mobile/m.js");
 
 type St = State<Arc<Engine>>;
 
@@ -57,6 +61,9 @@ pub fn router(engine: Arc<Engine>) -> Router {
         .route("/", get(|| async { Html(INDEX_HTML) }))
         .route("/app.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], APP_CSS) }))
         .route("/app.js", get(|| async { ([(header::CONTENT_TYPE, "application/javascript; charset=utf-8")], APP_JS) }))
+        .route("/m", get(|| async { Html(M_HTML) }))
+        .route("/m/m.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], M_CSS) }))
+        .route("/m/m.js", get(|| async { ([(header::CONTENT_TYPE, "application/javascript; charset=utf-8")], M_JS) }))
         .route("/api/state", get(api_state))
         .route("/api/events", get(api_events))
         .route("/api/devices", get(api_devices))

@@ -133,7 +133,10 @@ export component Check inherits Rectangle {
     in-out property <bool> checked;
     in property <string> text;
     callback toggled(bool);
-    height: 24px; width: box.width + 8px + lbl.preferred-width;
+    // Grows with the label but never beyond the parent: long labels wrap.
+    height: max(24px, lbl.preferred-height + 4px);
+    preferred-width: box.width + 8px + lbl.preferred-width;
+    min-width: 0px;
     HorizontalLayout {
         spacing: 8px; alignment: start;
         box := Rectangle {
@@ -142,7 +145,7 @@ export component Check inherits Rectangle {
             animate background { duration: 100ms; }
             if checked: Icon { name: "check"; tint: Theme.on-accent; size: 12px; stroke-width: 2.4px; x: 2px; y: 2px; }
         }
-        lbl := Text { text: root.text; color: Theme.fg2; font-size: Theme.fs; vertical-alignment: center; }
+        lbl := Text { text: root.text; color: Theme.fg2; font-size: Theme.fs; vertical-alignment: center; wrap: word-wrap; horizontal-stretch: 1; min-width: 0px; }
     }
     TouchArea { mouse-cursor: pointer; clicked => { root.checked = !root.checked; root.toggled(root.checked); } }
 }

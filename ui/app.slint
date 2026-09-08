@@ -265,13 +265,13 @@ export component MainWindow inherits Window {
                                         pqa := TouchArea { mouse-cursor: pointer; clicked => { root.open-pairing(); } }
                                     }
                                 }
-                                Text { text: fingerprint; color: Theme.fg3; font-size: 11px; font-family: Theme.mono; }
+                                Text { text: fingerprint; color: Theme.fg3; font-size: 11px; font-family: Theme.mono; overflow: elide; }
                                 HorizontalLayout { spacing: 4px;
-                                    Text { text: "Firma"; color: Theme.fg2; font-size: 12px; horizontal-stretch: 1; }
-                                    Text { text: signer-fingerprint-short; color: Theme.fg3; font-size: 11px; font-family: Theme.mono; overflow: elide; }
+                                    Text { text: "Firma"; color: Theme.fg2; font-size: 12px; width: 44px; }
+                                    Text { text: signer-fingerprint-short; color: Theme.fg3; font-size: 11px; font-family: Theme.mono; overflow: elide; horizontal-alignment: right; horizontal-stretch: 1; min-width: 0px; }
                                 }
-                                HorizontalLayout { Text { text: "LAN"; color: Theme.fg2; font-size: 12px; horizontal-stretch: 1; } Text { text: local-ip + ":" + lan-addr; color: Theme.fg3; font-size: 11px; font-family: Theme.mono; overflow: elide; } }
-                                HorizontalLayout { Text { text: pin-required ? "PIN requerido" : "Sin PIN"; color: Theme.fg2; font-size: 12px; horizontal-stretch: 1; } Text { text: auto-accept ? "auto-aceptar" : "confirmar"; color: Theme.fg2; font-size: 12px; } }
+                                HorizontalLayout { spacing: 4px; Text { text: "LAN"; color: Theme.fg2; font-size: 12px; width: 44px; } Text { text: local-ip + ":" + lan-addr; color: Theme.fg3; font-size: 11px; font-family: Theme.mono; overflow: elide; horizontal-alignment: right; horizontal-stretch: 1; min-width: 0px; } }
+                                HorizontalLayout { spacing: 4px; Text { text: pin-required ? "PIN requerido" : "Sin PIN"; color: Theme.fg2; font-size: 12px; overflow: elide; horizontal-stretch: 1; min-width: 0px; } Text { text: auto-accept ? "auto-aceptar" : "confirmar"; color: Theme.fg2; font-size: 12px; } }
                             }
                         }
                     }
@@ -355,8 +355,8 @@ export component MainWindow inherits Window {
                                                     Text { width: 44px; text: j.indeterminate ? "…" : round(j.percent) + "%"; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; horizontal-alignment: right; vertical-alignment: center; }
                                                 } }
                                             Rectangle { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.09; clip: true; HorizontalLayout { y: 7px; spacing: 4px; alignment: start; Badge { text: j.state-label; kind: j.state; } if j.scan != "": Badge { text: j.scan-label; kind: j.scan == "info" ? "completed" : j.scan == "warning" ? "warn" : "danger"; } } }
-                                            Text { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.08; text: j.speed-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; vertical-alignment: center; }
-                                            Text { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.06; text: j.eta-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; vertical-alignment: center; }
+                                            Text { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.08; text: j.speed-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; vertical-alignment: center; overflow: elide; }
+                                            Text { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.06; text: j.eta-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; vertical-alignment: center; overflow: elide; }
                                             Text { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.09; text: j.peer; color: Theme.fg3; vertical-alignment: center; overflow: elide; }
                                         }
                                         rta := TouchArea {
@@ -525,8 +525,8 @@ export component MainWindow inherits Window {
         }
     }
 
-    if root.dialog == "settings": Dialog { title: "Ajustes"; dialog-width: 720px; close => { root.dialog = ""; }
-        VerticalLayout { padding: 18px; spacing: 12px;
+    if root.dialog == "settings": Dialog { title: "Ajustes"; dialog-width: 760px; close => { root.dialog = ""; }
+        VerticalLayout { padding: 18px; spacing: 10px;
             Text { text: "DISPOSITIVO"; color: Theme.fg3; font-size: Theme.fs-xs; font-weight: 700; letter-spacing: 0.7px; }
             HorizontalLayout { spacing: 12px;
                 VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "Nombre visible en la LAN"; } Input { text <=> root.s-name; } }
@@ -545,18 +545,15 @@ export component MainWindow inherits Window {
             Rectangle { height: 1px; background: Theme.line; }
             Text { text: "Seguridad"; color: Theme.fg; font-size: Theme.fs; font-weight: 600; }
             Check { text: "Analizar los archivos recibidos y descargados (100 % local: tipo real, ejecutables disfrazados, bombas ZIP/tar, macros, PDF con JavaScript…)"; checked <=> root.s-scan; }
-            HorizontalLayout { spacing: 8px; alignment: start;
-                Check { text: "Usar ClamAV si está instalado"; checked <=> root.s-clamav; }
-                Text { text: root.clamav-label == "" ? "— no detectado en este equipo" : "— detectado: " + root.clamav-label; color: Theme.fg3; font-size: Theme.fs-sm; vertical-alignment: center; }
-            }
-            HorizontalLayout { spacing: 12px; alignment: start;
-                Text { text: "Si se detecta un archivo peligroso:"; color: Theme.fg2; font-size: Theme.fs; vertical-alignment: center; }
+            Check { text: root.clamav-label == "" ? "Usar ClamAV si está instalado (no detectado en este equipo)" : "Usar ClamAV si está instalado (detectado: " + root.clamav-label + ")"; checked <=> root.s-clamav; }
+            VerticalLayout { spacing: 5px;
+                FieldLabel { text: "Si se detecta un archivo peligroso"; }
                 Segmented { items: ["Cuarentena (*.unishare-quarantine)", "Solo avisar", "Eliminar"]; current <=> root.s-danger; }
             }
             Rectangle { height: 58px; border-radius: Theme.radius; background: Theme.bg3; border-width: 1px; border-color: Theme.line;
                 VerticalLayout { padding-left: 12px; padding-right: 12px; spacing: 2px; alignment: center;
-                    Text { text: "Huella TLS de este equipo: " + fingerprint-full; color: Theme.fg2; font-size: 12px; font-family: Theme.mono; overflow: elide; }
-                    Text { text: "Huella de firma de tickets (Ed25519): " + signer-fingerprint; color: Theme.fg2; font-size: 12px; font-family: Theme.mono; overflow: elide; }
+                    Text { text: "Huella TLS de este equipo: " + fingerprint-full; color: Theme.fg2; font-size: 12px; font-family: Theme.mono; overflow: elide; min-width: 0px; }
+                    Text { text: "Huella de firma de tickets (Ed25519): " + signer-fingerprint; color: Theme.fg2; font-size: 12px; font-family: Theme.mono; overflow: elide; min-width: 0px; }
                 }
             }
             HorizontalLayout { spacing: 8px; alignment: end; Text { text: root.dialog-error; color: Theme.err; vertical-alignment: center; horizontal-stretch: 1; } Button { text: "Cancelar"; clicked => { root.dialog = ""; } } Button { text: "Guardar"; primary: true; clicked => { root.submit-settings(); } } }

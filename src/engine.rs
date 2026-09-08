@@ -249,6 +249,7 @@ impl Snapshot {
                 "Manifiesto aceptado (3 archivos, 1.9 GiB)".into(),
                 format!("Enviando {}…", files.first().map(|f| f.0).unwrap_or("")),
             ],
+            scan: (matches!(kind, JobKind::LanReceive | JobKind::Download) && state == JobState::Completed).then_some(crate::scan::Severity::Info),
             samples: VecDeque::new(),
         };
         let gib = 1024u64 * 1024 * 1024;

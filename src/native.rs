@@ -30,6 +30,7 @@ enum Cmd {
     CreateTicket(TicketCreateReq),
     Cancel(u64),
     Remove(u64),
+    RescanJob(u64),
     ClearFinished,
     Rescan,
     Accept(String, Option<PathBuf>),
@@ -282,6 +283,14 @@ async fn handle_cmd(engine: &Arc<Engine>, cmd: Cmd, etx: &std::sync::mpsc::Sende
             engine.remove_job(id).await;
             Ok(None)
         }
+        Cmd::RescanJob(id) => engine.rescan_job(id).await.map(|r| {
+            let kind = match r.severity() {
+                Severity::Danger => "err",
+                Severity::Warning => "warn",
+                Severity::Info => "ok",
+            };
+            Some(Evt::Toast(r.summary(), kind))
+        }),
         Cmd::ClearFinished => Ok(Some(Evt::Toast(format!("{} eliminada(s)", engine.clear_finished().await), "info"))),
         Cmd::Rescan => {
             engine.refresh_devices().await;
@@ -705,6 +714,8 @@ fn wire_callbacks(win: &MainWindow, ctx: &UiCtx) {
     win.on_cancel_job(move |id| c.send(Cmd::Cancel(id as u64)));
     let c = ctx.clone();
     win.on_remove_job(move |id| c.send(Cmd::Remove(id as u64)));
+    let c = ctx.clone();
+    win.on_rescan_job(move |id| c.send(Cmd::RescanJob(id as u64)));
     let c = ctx.clone();
     win.on_clear_finished(move || c.send(Cmd::ClearFinished));
     let c = ctx.clone();

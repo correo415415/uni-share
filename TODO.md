@@ -110,7 +110,7 @@ Objetivo: el mismo engine Rust en el móvil sin reescribir la lógica. Decisión
 - [x] Política ante peligro: cuarentena (`*.unishare-quarantine`, 0600, sufijo numerado), solo avisar, eliminar. `Report` con `summary()`/`detail()`/JSON.
 - [x] Integración: `[scan]` en config; `Progress.saved` en el servidor LAN; `receive` (CLI) y engine (recepciones y descargas) → registro del job, `Job.scan`, `Notice` → toasts; `download`/ticket (CLI); `uni-share scan` (exit 0/1/2, `--json`, `--no-clamav`, `--quarantine|--delete`); `POST /api/scan`; ajustes «Seguridad» en GUI web y Slint con estado de ClamAV; badge 🛡 en tabla/detalle.
 - [x] Tests: sniffing, ejecutables disfrazados y doble extensión, trucos de nombre, ZIP (bomba/traversal/anidado/cifrado/macros/truncado/OOXML), tar + tar.zst (setuid/traversal/enlace/exec), PDF/OLE/SVG/HTML/.desktop, informe + cuarentena/eliminación + JSON, tamaño, ClamAV ausente y falso `clamscan` que reporta EICAR.
-- [ ] Escaneo bajo demanda desde el menú contextual de un job (botón «Analizar de nuevo» → `/api/scan`).
+- [x] Escaneo bajo demanda: `Engine::rescan_job` (recuerda `Job.saved`; fallback a `dest` + lista de archivos), `POST /api/jobs/{id}/scan` → `{severity, summary, detail, report}`; web: menú contextual «Analizar de nuevo» + enlace ↻ en Detalles; nativa: botón 🛡 junto al estado. Funciona aunque `[scan] enabled = false`.
 - [ ] YARA opcional (crate `yara-x`) con reglas del usuario en `<data_dir>/rules/`.
 - [ ] Recorrer gzip-tar (`.tgz`) sin añadir `flate2`: hoy solo se avisa del tipo.
 

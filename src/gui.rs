@@ -63,6 +63,7 @@ pub fn router(engine: Arc<Engine>) -> Router {
         .route("/api/offers/{id}/accept", post(api_accept))
         .route("/api/offers/{id}/reject", post(api_reject))
         .route("/api/jobs/{id}/cancel", post(api_job_cancel))
+        .route("/api/jobs/{id}/scan", post(api_job_scan))
         .route("/api/jobs/{id}", axum::routing::delete(api_job_remove))
         .route("/api/jobs/clear-finished", post(api_jobs_clear))
         .route("/api/send-lan", post(api_send_lan))
@@ -121,6 +122,11 @@ async fn api_reject(State(e): St, AxPath(id): AxPath<String>) -> Response {
 }
 async fn api_job_cancel(State(e): St, AxPath(id): AxPath<u64>) -> Response {
     if e.cancel_job(id).await { StatusCode::OK.into_response() } else { json_err(StatusCode::CONFLICT, "job is not running") }
+}
+async fn api_job_scan(State(e): St, AxPath(id): AxPath<u64>) -> Response {
+    res_json(e.rescan_job(id).await.map(|r| {
+        serde_json::json!({ "severity": r.severity(), "summary": r.summary(), "detail": r.detail(), "report": r })
+    }))
 }
 async fn api_job_remove(State(e): St, AxPath(id): AxPath<u64>) -> Response {
     if e.remove_job(id).await { StatusCode::OK.into_response() } else { json_err(StatusCode::CONFLICT, "job not found or still active") }

@@ -105,12 +105,13 @@ function renderDetails() {
   if (!j) { pane.innerHTML = `<div class="muted">Selecciona una transferencia para ver sus detalles.</div>`; return; }
   if (S.tab === 'general') {
     pane.innerHTML = `<div class="two"><dl class="kv"><dt>Nombre</dt><dd>${h(j.name)}</dd><dt>Tipo</dt><dd>${KIND[j.kind] || j.kind}</dd>
-      <dt>Estado</dt><dd><span class="badge ${j.state}">${STATE[j.state] || j.state}</span>${scanBadge(j)} <span class="muted">${h(j.message)}</span></dd>
+      <dt>Estado</dt><dd><span class="badge ${j.state}">${STATE[j.state] || j.state}</span>${scanBadge(j)}${canRescan(j) ? ' <a href="#" id="rescan" class="muted" title="Volver a analizar los archivos guardados">↻ analizar</a>' : ''} <span class="muted">${h(j.message)}</span></dd>
       <dt>Progreso</dt><dd class="mono">${fmtB(j.done)} / ${j.total ? fmtB(j.total) : '?'} (${pct(j).toFixed(1)}%)</dd>
       <dt>Velocidad</dt><dd class="mono">${j.state === 'running' ? fmtRate(j.speed) + ' · ETA ' + fmtEta(j.eta) : '—'}</dd><dt>Archivo actual</dt><dd class="mono">${h(j.current_file) || '—'}</dd></dl>
       <dl class="kv"><dt>${j.kind === 'lan_send' || j.kind === 'global_upload' ? 'Destino' : 'Origen'}</dt><dd>${h(j.peer)}</dd><dt>Carpeta</dt><dd>${j.dest ? `<a href="#" id="open-dest">${h(j.dest)}</a>` : '—'}</dd>
       <dt>Archivos</dt><dd>${j.files.length || '—'}</dd><dt>Inicio</dt><dd class="mono">${fmtTime(j.started)}</dd><dt>Fin</dt><dd class="mono">${fmtTime(j.finished)}</dd>
       <dt>Link</dt><dd>${j.link ? `<a href="${h(j.link)}" target="_blank" rel="noopener">${h(j.link)}</a>` : '—'}</dd></dl></div>`;
+    const rs = $('#rescan'); if (rs) rs.onclick = (e) => { e.preventDefault(); rescanJob(j); };
     const od = $('#open-dest'); if (od) od.onclick = (e) => { e.preventDefault(); api('/api/open', { method: 'POST', body: { path: j.dest } }).catch(er => toast(er.message, 'err')); };
   } else if (S.tab === 'files') {
     pane.innerHTML = j.files.length ? `<table class="filelist"><thead><tr><th>Ruta</th><th style="text-align:right">Tamaño</th></tr></thead><tbody>${j.files.slice(0, 3000).map(f => `<tr><td title="${h(f.path)}">${h(f.path)}</td><td class="sz">${fmtB(f.size)}</td></tr>`).join('')}</tbody></table>` : `<div class="muted">Sin lista de archivos.</div>`;
@@ -273,13 +274,23 @@ async function openSettings() {
 function contextMenu(x, y, j) {
   $$('.ctx').forEach(e => e.remove()); if (!j) return;
   const el = document.createElement('div'); el.className = 'ctx'; const act = j.state === 'running' || j.state === 'queued';
-  el.innerHTML = `<div data-a="details">Detalles <kbd class="k">Enter</kbd></div><div data-a="share" class="${j.link || j.ticket_uri ? '' : 'dis'}">Compartir / QR…</div><div data-a="copy" class="${j.link ? '' : 'dis'}">Copiar link</div><div data-a="open" class="${j.dest ? '' : 'dis'}">Abrir carpeta</div><hr><div data-a="cancel" class="${act ? '' : 'dis'}">Cancelar <kbd class="k">Supr</kbd></div><div data-a="remove" class="${act ? 'dis' : ''}">Quitar de la lista</div>`;
+  el.innerHTML = `<div data-a="details">Detalles <kbd class="k">Enter</kbd></div><div data-a="share" class="${j.link || j.ticket_uri ? '' : 'dis'}">Compartir / QR…</div><div data-a="copy" class="${j.link ? '' : 'dis'}">Copiar link</div><div data-a="open" class="${j.dest ? '' : 'dis'}">Abrir carpeta</div><div data-a="scan" class="${canRescan(j) ? '' : 'dis'}">Analizar de nuevo (seguridad)</div><hr><div data-a="cancel" class="${act ? '' : 'dis'}">Cancelar <kbd class="k">Supr</kbd></div><div data-a="remove" class="${act ? 'dis' : ''}">Quitar de la lista</div>`;
   el.style.left = Math.min(x, innerWidth - 210) + 'px'; el.style.top = Math.min(y, innerHeight - 220) + 'px'; document.body.appendChild(el);
   const off = () => { el.remove(); document.removeEventListener('mousedown', outside); }, outside = (e) => { if (!el.contains(e.target)) off(); }; setTimeout(() => document.addEventListener('mousedown', outside), 0);
   el.onclick = (e) => { const a = e.target.closest('[data-a]')?.dataset.a; if (!a) return; off();
     if (a === 'details') { S.tab = 'general'; $('#main').classList.remove('details-collapsed'); render(); } if (a === 'share') openShare(j); if (a === 'copy') copy(j.link);
-    if (a === 'open') api('/api/open', { method: 'POST', body: { path: j.dest } }).catch(er => toast(er.message, 'err')); if (a === 'cancel') cancelSel();
+    if (a === 'open') api('/api/open', { method: 'POST', body: { path: j.dest } }).catch(er => toast(er.message, 'err')); if (a === 'cancel') cancelSel(); if (a === 'scan') rescanJob(j);
     if (a === 'remove') api(`/api/jobs/${j.id}`, { method: 'DELETE' }).then(() => { S.sel = null; }).catch(er => toast(er.message, 'err')); };
+}
+const canRescan = (j) => j && (j.kind === 'lan_receive' || j.kind === 'download') && j.state === 'completed';
+function rescanJob(j) {
+  if (!canRescan(j)) return;
+  toast('Analizando archivos…', 'info', 3000);
+  api(`/api/jobs/${j.id}/scan`, { method: 'POST' }).then(r => {
+    const sev = r.severity || 'info';
+    toast(r.summary || 'Análisis terminado', sev === 'danger' ? 'err' : sev === 'warning' ? 'warn' : 'ok', sev === 'info' ? 4500 : 9000);
+    if (sev !== 'info') S.tab = 'log'; poll();
+  }).catch(er => toast(er.message, 'err'));
 }
 function cancelSel() { const j = job(S.sel); if (!j) return; confirmDlg(`¿Cancelar «${j.name}»?`).then(ok => ok && api(`/api/jobs/${j.id}/cancel`, { method: 'POST' }).then(() => toast('Cancelada', 'info')).catch(e => toast(e.message, 'err'))); }
 

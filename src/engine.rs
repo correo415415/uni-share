@@ -136,6 +136,9 @@ pub struct Job {
     /// Outcome of the safety scan (receptions/downloads), once finished.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scan: Option<crate::scan::Severity>,
+    /// Files written to disk by this job (receptions/downloads) — lets the user re-scan later.
+    #[serde(skip)]
+    saved: Vec<PathBuf>,
     #[serde(skip)]
     samples: VecDeque<(Instant, u64)>,
 }
@@ -250,6 +253,7 @@ impl Snapshot {
                 format!("Enviando {}…", files.first().map(|f| f.0).unwrap_or("")),
             ],
             scan: (matches!(kind, JobKind::LanReceive | JobKind::Download) && state == JobState::Completed).then_some(crate::scan::Severity::Info),
+            saved: Vec::new(),
             samples: VecDeque::new(),
         };
         let gib = 1024u64 * 1024 * 1024;
@@ -579,6 +583,7 @@ impl Engine {
             eta: None,
             log: Vec::new(),
             scan: None,
+            saved: Vec::new(),
             samples: VecDeque::new(),
         };
         {
@@ -635,10 +640,45 @@ impl Engine {
     /// Run the local safety scanner on freshly written paths; results go to the
     /// job log/message (when a job is known), the tracing log and the toast queue.
     pub async fn scan_saved(&self, job: Option<u64>, paths: Vec<PathBuf>) -> Option<crate::scan::Report> {
+        if let Some(id) = job {
+            let p = paths.clone();
+            self.update_job(id, |j| j.saved = p).await;
+        }
         let cfg = self.cfg.read().await.scan.clone();
         if !cfg.enabled || paths.is_empty() {
             return None;
         }
+        self.scan_with(job, paths, cfg).await
+    }
+
+    /// On-demand re-scan of everything a finished job wrote to disk, regardless of the
+    /// `[scan] enabled` switch (report-only unless the policy says quarantine/delete).
+    pub async fn rescan_job(&self, id: u64) -> Result<crate::scan::Report> {
+        let job = self.job(id).await.context("transferencia no encontrada")?;
+        if job.is_active() {
+            bail!("la transferencia todavía está en curso");
+        }
+        let mut paths = job.saved.clone();
+        if paths.is_empty() {
+            // Older jobs / LAN receptions without a recorded file list: fall back to dest + file names.
+            if let Some(dest) = job.dest.as_deref() {
+                let dest = PathBuf::from(dest);
+                paths = job.files.iter().map(|f| dest.join(&f.path)).filter(|p| p.exists()).collect();
+                if paths.is_empty() && !job.files.is_empty() && dest.join(&job.name).exists() {
+                    paths.push(dest.join(&job.name));
+                }
+            }
+        }
+        if paths.is_empty() {
+            bail!("no hay archivos guardados que analizar para esta transferencia");
+        }
+        let mut cfg = self.cfg.read().await.scan.clone();
+        cfg.enabled = true;
+        self.log(id, "Análisis de seguridad bajo demanda…").await;
+        Ok(self.scan_with(Some(id), paths, cfg).await.expect("scan enabled"))
+    }
+
+    async fn scan_with(&self, job: Option<u64>, paths: Vec<PathBuf>, cfg: crate::scan::ScanConfig) -> Option<crate::scan::Report> {
         if let Some(id) = job {
             self.log(id, "Análisis de seguridad en curso…").await;
         }
@@ -1435,6 +1475,7 @@ mod tests {
             eta: None,
             log: vec![],
             scan: None,
+            saved: Vec::new(),
             samples: VecDeque::new(),
         };
         assert_eq!(j.percent(), 25.0);

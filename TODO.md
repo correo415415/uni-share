@@ -53,9 +53,9 @@ Leyenda: `[x]` hecho · `[~]` en progreso · `[ ]` pendiente
 - [x] `download` acepta ticket (fichero o URI): prueba las fuentes en orden y verifica BLAKE3 al terminar.
 - [x] `ticket create|show|qr|save`; `send-global --ticket [FILE]` y `--ticket-qr`.
 - [x] Comando `qr <texto|url|ticket>` (terminal y `--svg`).
-- [ ] Asociación de extensión `.unishare` (doble clic abre la GUI) en Linux (`.desktop` + MIME) y Windows (registro).
-- [ ] Ticket para transferencias LAN (`send-lan --ticket`: ip/puerto/fingerprint/PIN en QR para emparejar sin descubrimiento).
-- [ ] Firma opcional del ticket (Ed25519) para verificar remitente.
+- [x] Asociación de extensión `.unishare` y esquema `unishare:` (doble clic abre la GUI): `uni-share associate [--remove|--status|--exe]` — Linux XDG (MIME XML con glob+magic, `.desktop`, iconos, `xdg-mime default`), Windows HKCU (`reg.exe`); la app acepta `file://` y previsualiza el ticket al abrir.
+- [x] Ticket de emparejamiento LAN (`Source::Lan{host,port,fingerprint,pin,name}`): `receive --qr [--ticket FILE]` imprime QR/URI; `send-lan --to <ticket>` y el campo "dirección manual" de las GUIs lo aceptan (huella TLS fijada desde la primera conexión, PIN prellenado, sin mDNS). Botón "QR de emparejamiento" en la tarjeta del equipo (web y nativa). Los caminos de descarga rechazan tickets de emparejamiento con pista. Test E2E.
+- [x] Firma opcional Ed25519 (`ring`, sin crates nuevos): clave persistente `signing.key`, `Ticket.signer/signature` sobre el JSON canónico, `verify_signature()` → sin firma / válida (huella del firmante) / **inválida**; `sign_tickets` en config (por defecto sí), `ticket create --sign/--no-sign`, `send-global --no-sign`, `ticket sign`, `ticket identity`, `ticket show` verifica; `download`/`send-lan`/engine rechazan firmas inválidas; GUIs muestran huella de firma, ajuste y estado en la previsualización. La forma compacta para QR va sin firma (el `.unishare` completo la conserva).
 
 ## Fase 7 — GUI (web, portable) sobre un *engine* compartido
 - [x] `engine.rs`: núcleo sin UI compartido por todos los front-ends — receptor LAN embebido + anuncio mDNS, ofertas pendientes (aceptar con carpeta destino / rechazar), jobs (envío LAN, recepción LAN, subida link, descarga) con progreso por bytes, velocidad, ETA, archivo actual, lista de archivos, log por job, cancelación; descubrimiento periódico; config editable en caliente y persistida; creación/parseo de tickets; listado de directorios para selectores.
@@ -72,7 +72,7 @@ Decisión: Slint (Rust puro, renderizado propio con `winit`+`femtovg`/`skia`, si
 - [x] Diálogos: Nueva transferencia (4 modos) con selector de archivos nativo (`rfd`) y vista previa; Compartir (QR renderizado en la propia ventana desde `qrcode`, copiar, guardar `.unishare`, guardar QR); Ajustes; confirmaciones.
 - [x] Puente engine↔UI: tokio en hilo aparte, snapshot cada 500 ms → `VecModel` de Slint vía `invoke_from_event_loop`; acciones de la UI → canal mpsc hacia el engine.
 - [ ] Arrastrar y soltar (rutas y `.unishare`), bandeja del sistema (`tray-icon`) con "minimizar a bandeja" y menú rápido.
-- [ ] Asociación de `.unishare` y `unishare:` al binario (Linux `.desktop` + MIME, Windows registro, macOS Info.plist) → abre la GUI con el ticket cargado.
+- [x] Asociación de `.unishare` y `unishare:` al binario (Linux `.desktop` + MIME, Windows registro) → abre la GUI con el ticket cargado (los de emparejamiento abren «Enviar por LAN»). Pendiente macOS Info.plist (requiere bundle).
 - [ ] Empaquetado: AppImage/.deb, .msi, .dmg (cargo-dist / cargo-bundle); iconos de la app.
 
 - [x] Atajos de teclado (N/L/U/D/T/,/Supr/flechas/Esc) y tema claro/oscuro.
@@ -80,7 +80,8 @@ Decisión: Slint (Rust puro, renderizado propio con `winit`+`femtovg`/`skia`, si
 - [x] `uni-share app --demo` (snapshot realista sin red) + `--screenshot out.png` + `--dialog new|share|settings|fs|confirm` para revisar el diseño; el CI sube capturas a la release nightly.
 - [x] Revisión visual con las capturas del CI (10 vistas: principal, detalles ×4, diálogos ×5): iconos centrados, badges sin recorte, columnas proporcionales, tarjeta del equipo.
 - [x] Panic de zbus ("no reactor running") al arrancar con accesibilidad AT-SPI: `rfd` sin la feature `tokio` de zbus; `notify()` en hilo propio.
-- [ ] Captura del tema claro en CI (`--light`) y ajuste de contrastes.
+- [x] Captura del tema claro en CI (`--light`, 3 vistas) y paleta "Graphite" con contrastes revisados (acento único, sin degradados, bordes finos).
+- [x] Restyle profesional: tokens en `theme.slint` (radios 4/5/8, toolbar 46, fila 32, control 30), iconos vectoriales centrados (`swap`, `sun`, `gear` redibujado), badges rectangulares, columnas proporcionales.
 
 ## Fase 7c — CI/CD en runner local
 - [x] Workflow `.github/workflows/build.yml` en `self-hosted`: fmt (aviso) → clippy `-D warnings` → tests → `cargo build --release` (default) → `--features slint` (target-dir separado).
@@ -94,7 +95,7 @@ Decisión: Slint (Rust puro, renderizado propio con `winit`+`femtovg`/`skia`, si
 ## Pendiente / mejoras conocidas
 - [ ] Cloudflare puede exigir captcha (Turnstile) en descargas de storage.to según reputación de IP: entonces se muestra un mensaje pidiendo abrir el link en el navegador
 - [ ] Descarga de links Smash (requiere token de destinatario del flujo web) — se indica abrir en navegador
-- [ ] Reanudación LAN entre ejecuciones distintas del receptor (ahora reanuda dentro de la misma sesión/transfer id)
+- [x] Reanudación LAN entre ejecuciones distintas del receptor: registros JSON por transferencia en `<data_dir>/transfers/<clave>.json` (clave = BLAKE3 de huella del emisor + manifiesto); al re-ofrecer se reutilizan destino, `.part` y hashes ya verificados; se purgan a los 30 días. Aviso en CLI/GUI. Test E2E.
 
 ## Backlog
 - [ ] TUI `ratatui`

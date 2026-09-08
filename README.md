@@ -30,9 +30,11 @@ uni-share list-devices [--timeout 3] [--json]
 
 # Recibir (pregunta aceptar/rechazar mostrando el árbol de archivos)
 uni-share receive [-o DIR] [-p PUERTO] [--auto-accept] [--pin 1234] [--force] [--once]
+uni-share receive --qr [--ticket pc-sala.unishare]   # QR de emparejamiento (ip/puerto/huella/PIN)
 
-# Enviar por LAN (interactivo, o --to nombre | ip[:puerto])
+# Enviar por LAN (interactivo, o --to nombre | ip[:puerto] | ticket de emparejamiento)
 uni-share send-lan ~/Videos/proyecto/ [--to PC-Sala] [--pin 1234] [--compress]
+uni-share send-lan ~/Videos/proyecto/ --to "unishare:…"   # sin mDNS: huella fijada y PIN incluidos
 
 # Subir a storage.to y obtener link + QR + portapapeles (+ ticket .unishare opcional)
 uni-share send-global ~/Videos/proyecto/ [--password xxxx] [--expiry-days 7] [--max-downloads 5] \
@@ -41,9 +43,11 @@ uni-share send-global ~/Videos/proyecto/ [--password xxxx] [--expiry-days 7] [--
 # Tickets .unishare (fichero propio con las fuentes, contraseña, lista de archivos y hashes)
 uni-share ticket create https://storage.to/c/XXXX --password xxxx --name fotos \
                         [--message "…"] [--verify-from ./fotos] [-o fotos.unishare] [--qr]
-uni-share ticket show fotos.unishare [--json]
+uni-share ticket show fotos.unishare [--json]         # verifica la firma Ed25519 si la hay
 uni-share ticket qr fotos.unishare [--uri-only]
 uni-share ticket save "unishare:…" -o fotos.unishare
+uni-share ticket sign fotos.unishare [-o firmado.unishare]   # firma con la clave de este equipo
+uni-share ticket identity                              # huella/clave pública de firma de este equipo
 
 # QR de cualquier texto/link (terminal o SVG)
 uni-share qr https://storage.to/XXXX [--svg qr.svg]
@@ -59,6 +63,8 @@ uni-share history [-n 20] [--json] [--clear]
 uni-share daemon start|stop|status
 uni-share gui [--port 47900] [--no-open]     # GUI web local
 uni-share app [fotos.unishare]               # app nativa Slint (cargo build --features slint)
+uni-share app --demo --screenshot app.png [--dialog new|share|settings|fs|confirm] [--select ID[:TAB]] [--light]
+uni-share associate [--remove] [--status]    # doble clic en .unishare / links unishare: abren la app
 uni-share config [--path]
 ```
 
@@ -111,6 +117,7 @@ auto_accept = false
 # pin = "1234"               # 4-6 dígitos
 notifications = true
 compress_folders = false     # true → carpetas como .tar.zst
+sign_tickets = true          # firmar los tickets con la clave Ed25519 de este equipo (signing.key)
 
 [global]
 backend = "storage_to"       # o "smash"
@@ -196,7 +203,10 @@ El receptor escribe en `archivo.part`, hashea mientras escribe y renombra solo s
 - TLS 1.3 obligatorio en LAN; el emisor fija la huella del receptor obtenida por mDNS (con `--to ip` se muestra la huella para verificación manual).
 - El receptor **siempre** decide (prompt con árbol de archivos, GUI o `--auto-accept` explícito); PIN opcional de 4-6 dígitos (`--pin`).
 - Rutas recibidas saneadas (`safe_join`): sin `..`, sin raíces ni letras de unidad, sin caracteres inválidos en Windows.
-- Claves/tokens solo en `config.toml` (excluido del repo por `.gitignore`); la clave privada TLS se guarda con permisos `0600`.
+- Claves/tokens solo en `config.toml` (excluido del repo por `.gitignore`); la clave privada TLS y la de firma se guardan con permisos `0600`.
+- **Tickets de emparejamiento LAN** (`receive --qr`): llevan IP, puerto, huella TLS y PIN del receptor; quien lo escanea conecta con la huella fijada desde la primera conexión (sin mDNS). Equivale a compartir el PIN: no publicarlo.
+- **Firma Ed25519 de tickets** (opcional, activa por defecto): el ticket incluye la clave pública del emisor y una firma sobre su contenido. `ticket show`, `download`, `send-lan` y las GUIs muestran «firma válida · huella» o rechazan el ticket si la firma no cuadra (manipulado/falsificado). La huella del firmante (`ticket identity`) se puede comparar una vez por otro canal, como una host key de SSH. La versión compacta para QR va sin firma.
+- **Reanudación entre ejecuciones**: el receptor guarda registros de transferencias interrumpidas (`transfers/*.json`, 30 días) y, si el mismo emisor vuelve a ofrecer el mismo contenido, reutiliza destino, `.part` y hashes verificados.
 
 ## Licencia
 

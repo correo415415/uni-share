@@ -65,6 +65,7 @@ uni-share gui [--port 47900] [--no-open]     # GUI web local
 uni-share app [fotos.unishare]               # app nativa Slint (cargo build --features slint)
 uni-share app --demo --screenshot app.png [--dialog new|share|settings|fs|confirm] [--select ID[:TAB]] [--light]
 uni-share associate [--remove] [--status]    # doble clic en .unishare / links unishare: abren la app
+uni-share scan <ruta…> [--json] [--no-clamav] [--quarantine|--delete] [-v]   # análisis de seguridad local (exit 0/1/2)
 uni-share config [--path]
 ```
 
@@ -118,6 +119,13 @@ auto_accept = false
 notifications = true
 compress_folders = false     # true → carpetas como .tar.zst
 sign_tickets = true          # firmar los tickets con la clave Ed25519 de este equipo (signing.key)
+
+[scan]                       # análisis de seguridad de lo recibido/descargado (100 % local)
+enabled = true
+clamav = true                # usar clamdscan/clamscan si están instalados
+# clamav_path = "/usr/bin/clamdscan"
+on_danger = "quarantine"     # quarantine | report | delete
+max_file_mib = 0             # no pasar a ClamAV archivos mayores (0 = sin límite)
 
 [global]
 backend = "storage_to"       # o "smash"
@@ -206,6 +214,7 @@ El receptor escribe en `archivo.part`, hashea mientras escribe y renombra solo s
 - Claves/tokens solo en `config.toml` (excluido del repo por `.gitignore`); la clave privada TLS y la de firma se guardan con permisos `0600`.
 - **Tickets de emparejamiento LAN** (`receive --qr`): llevan IP, puerto, huella TLS y PIN del receptor; quien lo escanea conecta con la huella fijada desde la primera conexión (sin mDNS). Equivale a compartir el PIN: no publicarlo.
 - **Firma Ed25519 de tickets** (opcional, activa por defecto): el ticket incluye la clave pública del emisor y una firma sobre su contenido. `ticket show`, `download`, `send-lan` y las GUIs muestran «firma válida · huella» o rechazan el ticket si la firma no cuadra (manipulado/falsificado). La huella del firmante (`ticket identity`) se puede comparar una vez por otro canal, como una host key de SSH. La versión compacta para QR va sin firma.
+- **Análisis de seguridad local** (`[scan]`, activo por defecto; también `uni-share scan`): tras cada recepción LAN o descarga se analizan los archivos **sin enviar nada fuera del equipo**. Heurísticas propias: tipo real por *magic bytes* frente a extensión (ejecutable PE/ELF/Mach-O/script disfrazado de `.jpg`/`.pdf`… = peligro), extensiones ejecutables, nombres engañosos (doble extensión `informe.pdf.exe`, RTLO `\u202e`, caracteres invisibles, relleno de espacios, nombres reservados), tamaño distinto al declarado, ZIP/OOXML/JAR/APK por directorio central sin extraer (bombas de descompresión por ratio o >20 GiB, >200k entradas, *path traversal*, anidados, cifrados, `vbaProject.bin`), tar y `.tar.zst` por cabeceras (traversal, setuid/setgid, enlaces que escapan), PDF (`/JavaScript`, `/Launch`, embebidos, acciones), OLE (macros VBA, `Ole10Native`, `DDEAUTO`), SVG/HTML con scripts o iframes, `.desktop`/`.url` que ejecutan comandos, shebangs en «texto». **ClamAV opcional**: si `clamdscan`/`clamscan` están instalados (PATH o rutas típicas) se usan además, con *timeout*; si no, se indica «no instalado» y se sigue con las heurísticas. Política ante peligro: **cuarentena** (renombrar a `*.unishare-quarantine` con `0600`; por defecto), solo avisar o eliminar. Resultado en CLI (verde/amarillo/rojo con detalle), registro del job y toast/etiqueta 🛡 en ambas GUIs; ajustes en «Seguridad».
 - **Reanudación entre ejecuciones**: el receptor guarda registros de transferencias interrumpidas (`transfers/*.json`, 30 días) y, si el mismo emisor vuelve a ofrecer el mismo contenido, reutiliza destino, `.part` y hashes verificados.
 
 ## Licencia

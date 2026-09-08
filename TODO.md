@@ -60,6 +60,7 @@ Leyenda: `[x]` hecho · `[~]` en progreso · `[ ]` pendiente
 ## Fase 7 — GUI (web, portable) sobre un *engine* compartido
 - [x] `engine.rs`: núcleo sin UI compartido por todos los front-ends — receptor LAN embebido + anuncio mDNS, ofertas pendientes (aceptar con carpeta destino / rechazar), jobs (envío LAN, recepción LAN, subida link, descarga) con progreso por bytes, velocidad, ETA, archivo actual, lista de archivos, log por job, cancelación; descubrimiento periódico; config editable en caliente y persistida; creación/parseo de tickets; listado de directorios para selectores.
 - [x] GUI web (`uni-share gui`) reescrita como capa fina sobre el engine: layout tipo qBittorrent (barra de herramientas, panel lateral con filtros y dispositivos LAN, tabla ordenable con barras de progreso, panel de detalles con pestañas General/Archivos/Compartir/Registro/Historial, barra de estado con velocidades ↓↑), diálogo "Nueva transferencia" (LAN / link / descarga / ticket) con vista previa, explorador de archivos propio, diálogo "Compartir" con QR grande (link y ticket) + guardar `.unishare`/SVG, ajustes editables, menú contextual, atajos de teclado, tema claro/oscuro, arrastrar y soltar `.unishare`.
+- [x] GUI web con el mismo sistema de diseño «Graphite» que la GUI Slint: tokens idénticos (superficies, acento azul único, ámbar saliente, semánticos desaturados, radios 4/5/8, toolbar 46 / fila 32 / control 30, escala tipográfica), botones planos, badges rectangulares, barras de progreso 6 px, barra lateral con marcador de 2 px, contadores mono, diálogos atenuados sin blur ni gradientes, glifo de marca.
 - [ ] SSE en lugar de polling para `/api/state`.
 - [ ] Reintentar job fallido desde la UI.
 
@@ -106,6 +107,16 @@ Objetivo: el mismo binario/engine Rust en el móvil, con una UI táctil, sin ree
 - [ ] Etapa 1: `--features android` + `cargo ndk` compilando el engine (sin UI) en CI.
 - [ ] Etapa 2: `uniffi` con `Engine` mínimo (snapshot + send_lan + accept) y app Compose "hola mundo" que lista dispositivos.
 - [ ] Etapa 3+: UI completa, intents, SAF, servicio en primer plano, QR, empaquetado.
+
+## Fase 10 — Análisis de seguridad local (`src/scan.rs`)
+- [x] Heurísticas 100 % locales: *magic bytes* vs. extensión (ejecutables disfrazados = peligro), extensiones peligrosas, nombres engañosos (doble extensión, RTLO, ancho cero, relleno, reservados), tamaño ≠ declarado, ZIP/OOXML/JAR/APK por directorio central (bombas, traversal, anidados, cifrados, `vbaProject.bin`), tar/tar.zst por cabeceras con presupuesto de 8 GiB (traversal, setuid, enlaces fuera), PDF (JS/Launch/embebidos/acciones), OLE (macros/Ole10Native/DDE), SVG/HTML (scripts, iframes, meta refresh), `.desktop`/`.url`, shebangs. Sin crates nuevos.
+- [x] ClamAV opcional: detección de `clamdscan` (`--fdpass`) / `clamscan` en PATH y rutas típicas, `--no-summary --infected`, *timeout* 120 s, exit 1 → firma; `clamav_path` explícito; `max_file_mib`.
+- [x] Política ante peligro: cuarentena (`*.unishare-quarantine`, 0600, sufijo numerado), solo avisar, eliminar. `Report` con `summary()`/`detail()`/JSON.
+- [x] Integración: `[scan]` en config; `Progress.saved` en el servidor LAN; `receive` (CLI) y engine (recepciones y descargas) → registro del job, `Job.scan`, `Notice` → toasts; `download`/ticket (CLI); `uni-share scan` (exit 0/1/2, `--json`, `--no-clamav`, `--quarantine|--delete`); `POST /api/scan`; ajustes «Seguridad» en GUI web y Slint con estado de ClamAV; badge 🛡 en tabla/detalle.
+- [x] Tests: sniffing, ejecutables disfrazados y doble extensión, trucos de nombre, ZIP (bomba/traversal/anidado/cifrado/macros/truncado/OOXML), tar + tar.zst (setuid/traversal/enlace/exec), PDF/OLE/SVG/HTML/.desktop, informe + cuarentena/eliminación + JSON, tamaño, ClamAV ausente y falso `clamscan` que reporta EICAR.
+- [ ] Escaneo bajo demanda desde el menú contextual de un job (botón «Analizar de nuevo» → `/api/scan`).
+- [ ] YARA opcional (crate `yara-x`) con reglas del usuario en `<data_dir>/rules/`.
+- [ ] Recorrer gzip-tar (`.tgz`) sin añadir `flate2`: hoy solo se avisa del tipo.
 
 ## Pendiente / mejoras conocidas
 - [ ] Cloudflare puede exigir captcha (Turnstile) en descargas de storage.to según reputación de IP: entonces se muestra un mensaje pidiendo abrir el link en el navegador

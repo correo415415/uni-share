@@ -32,7 +32,135 @@ pub struct IncomingOffer {
     pub transfer_id: String,
     pub manifest: Manifest,
     pub peer: SocketAddr,
+    /// Set when this exact content was accepted in an earlier run of the
+    /// receiver and partial data is still on disk: accepting continues from
+    /// where it stopped (same destination, same file names).
+    pub resume: Option<ResumeInfo>,
     pub decision: oneshot::Sender<Decision>,
+}
+
+/// What is already on disk for a previously accepted transfer.
+#[derive(Debug, Clone)]
+pub struct ResumeInfo {
+    pub dest_dir: PathBuf,
+    pub files_done: usize,
+    pub bytes_done: u64,
+}
+
+/// On-disk state of an accepted transfer so that a receiver restarted later can
+/// pick up the `.part` files instead of starting over. One JSON per transfer in
+/// `<state_dir>/transfers/<key>.json`, removed on completion.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResumeRecord {
+    pub key: String,
+    pub manifest: Manifest,
+    pub dest_dir: PathBuf,
+    pub targets: Vec<PathBuf>,
+    pub complete: Vec<bool>,
+    pub verified_hashes: Vec<String>,
+    /// Unix seconds of the last update.
+    pub updated: i64,
+}
+
+/// Records older than this are ignored and deleted.
+const RESUME_MAX_AGE_SECS: i64 = 30 * 24 * 3600;
+
+/// Deterministic key for a manifest: same sender identity + same content.
+pub fn resume_key(m: &Manifest) -> String {
+    let mut h = blake3::Hasher::new();
+    h.update(b"unishare-resume-v1");
+    h.update(&[0]);
+    h.update(m.sender_fingerprint.as_bytes());
+    h.update(&[0]);
+    h.update(m.name.as_bytes());
+    h.update(&[0, m.compressed_archive as u8]);
+    for f in &m.files {
+        h.update(f.path.as_bytes());
+        h.update(&[0]);
+        h.update(&f.size.to_le_bytes());
+        h.update(f.blake3.as_bytes());
+        h.update(&[0]);
+    }
+    h.finalize().to_hex().to_string()
+}
+
+fn now_secs() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
+impl ResumeRecord {
+    fn path(state_dir: &std::path::Path, key: &str) -> PathBuf {
+        state_dir.join("transfers").join(format!("{key}.json"))
+    }
+
+    pub async fn load(state_dir: &std::path::Path, key: &str) -> Option<ResumeRecord> {
+        let p = Self::path(state_dir, key);
+        let data = tokio::fs::read(&p).await.ok()?;
+        let rec: ResumeRecord = match serde_json::from_slice(&data) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(path = %p.display(), "corrupt resume record, removing: {e}");
+                let _ = tokio::fs::remove_file(&p).await;
+                return None;
+            }
+        };
+        if now_secs() - rec.updated > RESUME_MAX_AGE_SECS || rec.targets.len() != rec.manifest.files.len() {
+            let _ = tokio::fs::remove_file(&p).await;
+            return None;
+        }
+        Some(rec)
+    }
+
+    async fn save(&self, state_dir: &std::path::Path) {
+        let p = Self::path(state_dir, &self.key);
+        if let Some(parent) = p.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+        match serde_json::to_vec_pretty(self) {
+            Ok(data) => {
+                let tmp = p.with_extension("json.tmp");
+                if tokio::fs::write(&tmp, data).await.is_ok() {
+                    let _ = tokio::fs::rename(&tmp, &p).await;
+                }
+            }
+            Err(e) => tracing::warn!("serialising resume record: {e}"),
+        }
+    }
+
+    async fn remove(state_dir: &std::path::Path, key: &str) {
+        let _ = tokio::fs::remove_file(Self::path(state_dir, key)).await;
+    }
+
+    /// Bytes already on disk (verified files + `.part` prefixes) and files done.
+    pub async fn on_disk(&self) -> ResumeInfo {
+        let mut bytes = 0u64;
+        let mut done = 0usize;
+        for (i, t) in self.targets.iter().enumerate() {
+            if self.complete[i] {
+                done += 1;
+                bytes += self.manifest.files[i].size;
+            } else if let Ok(m) = tokio::fs::metadata(part_path(t)).await {
+                bytes += m.len().min(self.manifest.files[i].size);
+            }
+        }
+        ResumeInfo { dest_dir: self.dest_dir.clone(), files_done: done, bytes_done: bytes }
+    }
+}
+
+/// Remove stale or unreadable resume records (called at receiver start).
+pub async fn prune_resume_records(state_dir: &std::path::Path) {
+    let dir = state_dir.join("transfers");
+    let Ok(mut rd) = tokio::fs::read_dir(&dir).await else { return };
+    while let Ok(Some(e)) = rd.next_entry().await {
+        let p = e.path();
+        let stale = match tokio::fs::read(&p).await.ok().and_then(|d| serde_json::from_slice::<ResumeRecord>(&d).ok()) {
+            Some(r) => now_secs() - r.updated > RESUME_MAX_AGE_SECS,
+            None => true,
+        };
+        if stale {
+            let _ = tokio::fs::remove_file(&p).await;
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +185,7 @@ pub struct Progress {
 }
 
 pub struct Transfer {
+    key: String,
     manifest: Manifest,
     dest_dir: PathBuf,
     /// Final destination per file index (chosen once to keep dedup stable).
@@ -66,6 +195,20 @@ pub struct Transfer {
     received_total: AtomicU64,
     started: Instant,
     peer: SocketAddr,
+}
+
+impl Transfer {
+    fn record(&self) -> ResumeRecord {
+        ResumeRecord {
+            key: self.key.clone(),
+            manifest: self.manifest.clone(),
+            dest_dir: self.dest_dir.clone(),
+            targets: self.targets.clone(),
+            complete: self.complete.clone(),
+            verified_hashes: self.verified_hashes.clone(),
+            updated: now_secs(),
+        }
+    }
 }
 
 enum OfferState {
@@ -81,6 +224,8 @@ pub struct ServerState {
     pub force_overwrite: bool,
     pub default_dest: PathBuf,
     pub rate_limit_bps: u64,
+    /// Where resume records live (`None` disables cross-run resume).
+    pub state_dir: Option<PathBuf>,
     offers: RwLock<HashMap<String, OfferState>>,
     transfers: RwLock<HashMap<String, Arc<Mutex<Transfer>>>>,
     offer_tx: mpsc::Sender<IncomingOffer>,
@@ -116,6 +261,8 @@ pub struct ServerOptions {
     pub force_overwrite: bool,
     pub dest_dir: PathBuf,
     pub rate_limit_mbps: u32,
+    /// Directory for resume records; `None` = no cross-run resume.
+    pub state_dir: Option<PathBuf>,
 }
 
 /// Start the HTTPS server on `0.0.0.0:port` (port 0 = ephemeral).
@@ -130,12 +277,17 @@ pub async fn start(identity: Identity, opts: ServerOptions) -> Result<ServerHand
         force_overwrite: opts.force_overwrite,
         default_dest: opts.dest_dir,
         rate_limit_bps: (opts.rate_limit_mbps as u64) * 1_000_000 / 8,
+        state_dir: opts.state_dir.clone(),
         offers: RwLock::new(HashMap::new()),
         transfers: RwLock::new(HashMap::new()),
         offer_tx,
         progress_tx,
         completed_tx,
     });
+
+    if let Some(dir) = &opts.state_dir {
+        prune_resume_records(dir).await;
+    }
 
     let app = Router::new()
         .route(&format!("{API_PREFIX}/info"), get(info))
@@ -205,8 +357,26 @@ async fn offer(
         .await
         .insert(transfer_id.clone(), OfferState::Pending);
 
+    // Was this exact content accepted in an earlier run? Then offer to resume.
+    let key = resume_key(&manifest);
+    let mut record: Option<ResumeRecord> = None;
+    let mut resume: Option<ResumeInfo> = None;
+    if let Some(dir) = &s.state_dir {
+        if let Some(rec) = ResumeRecord::load(dir, &key).await {
+            if rec.manifest == manifest && tokio::fs::metadata(&rec.dest_dir).await.is_ok() {
+                let info = rec.on_disk().await;
+                tracing::info!(files_done = info.files_done, bytes = info.bytes_done, "offer matches an interrupted transfer");
+                resume = Some(info);
+                record = Some(rec);
+            } else {
+                ResumeRecord::remove(dir, &key).await;
+            }
+        }
+    }
+
     let (tx, rx) = oneshot::channel();
-    let incoming = IncomingOffer { transfer_id: transfer_id.clone(), manifest: manifest.clone(), peer, decision: tx };
+    let incoming =
+        IncomingOffer { transfer_id: transfer_id.clone(), manifest: manifest.clone(), peer, resume: resume.clone(), decision: tx };
     if s.offer_tx.send(incoming).await.is_err() {
         return err(StatusCode::SERVICE_UNAVAILABLE, "receiver not accepting offers");
     }
@@ -221,21 +391,34 @@ async fn offer(
         match decision {
             Decision::Accept { dest_dir } => {
                 let n = manifest.files.len();
-                let targets = manifest
-                    .files
-                    .iter()
-                    .map(|f| destination_path(&dest_dir, &f.path, st.force_overwrite))
-                    .collect();
+                // Resuming: keep the destination and file names chosen the first
+                // time so the `.part` files (and already verified files) line up.
+                let (dest_dir, targets, complete, verified_hashes, already) = match (record, resume) {
+                    (Some(rec), Some(info)) => (rec.dest_dir, rec.targets, rec.complete, rec.verified_hashes, info.bytes_done),
+                    _ => {
+                        let targets: Vec<PathBuf> = manifest
+                            .files
+                            .iter()
+                            .map(|f| destination_path(&dest_dir, &f.path, st.force_overwrite))
+                            .collect();
+                        (dest_dir, targets, vec![false; n], vec![String::new(); n], 0)
+                    }
+                };
                 let t = Transfer {
+                    key: key.clone(),
                     manifest: manifest.clone(),
                     dest_dir: dest_dir.clone(),
                     targets,
-                    complete: vec![false; n],
-                    verified_hashes: vec![String::new(); n],
-                    received_total: AtomicU64::new(0),
+                    complete,
+                    verified_hashes,
+                    received_total: AtomicU64::new(already),
                     started: Instant::now(),
                     peer,
                 };
+                if let Some(dir) = &st.state_dir {
+                    t.record().save(dir).await;
+                }
+                let files_done = t.complete.iter().filter(|c| **c).count();
                 st.transfers.write().await.insert(tid.clone(), Arc::new(Mutex::new(t)));
                 st.offers.write().await.insert(tid.clone(), OfferState::Accepted);
                 let _ = st.progress_tx.send(Progress {
@@ -243,6 +426,8 @@ async fn offer(
                     name: manifest.name.clone(),
                     sender: manifest.sender.clone(),
                     total: manifest.total_size,
+                    received: already,
+                    files_done,
                     files_total: n,
                     dest_dir: Some(dest_dir),
                     ..Default::default()
@@ -452,6 +637,9 @@ async fn upload_file(
         t.complete[idx] = true;
         t.verified_hashes[idx] = actual.clone();
         tracing::info!(file = %rel, size = written, "file verified (BLAKE3)");
+        if let Some(dir) = &s.state_dir {
+            t.record().save(dir).await;
+        }
     }
     Json(UploadResult::Ok { blake3: actual }).into_response()
 }
@@ -521,7 +709,12 @@ async fn complete(State(s): State<Arc<ServerState>>, AxPath(id): AxPath<String>)
             ..Default::default()
         }
     };
-    s.transfers.write().await.remove(&id);
+    if let Some(t) = s.transfers.write().await.remove(&id) {
+        if let Some(dir) = &s.state_dir {
+            let key = t.lock().await.key.clone();
+            ResumeRecord::remove(dir, &key).await;
+        }
+    }
     let _ = s.progress_tx.send(progress.clone());
     let _ = s.completed_tx.send(progress);
     StatusCode::OK.into_response()

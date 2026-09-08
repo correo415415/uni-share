@@ -46,6 +46,11 @@ pub struct PendingOffer {
     pub compressed: bool,
     pub files: Vec<JobFile>,
     pub received_at: i64,
+    /// Bytes already on disk from an earlier, interrupted run (0 = fresh).
+    #[serde(default)]
+    pub resume_bytes: u64,
+    #[serde(default)]
+    pub resume_files: usize,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default, Debug, PartialEq, Eq)]
@@ -253,6 +258,8 @@ impl Snapshot {
                 compressed: false,
                 files: vec![JobFile { path: "fotos-verano/IMG_2041.jpg".into(), size: 6 * mib }, JobFile { path: "fotos-verano/IMG_2042.jpg".into(), size: 7 * mib }],
                 received_at: now,
+                resume_bytes: 0,
+                resume_files: 0,
             }],
             jobs: vec![
                 mk(1, JobKind::LanSend, "proyecto-final", "PC-Sala", 2 * gib, 1_350 * mib, JobState::Running, 48 * mib, vec![("proyecto-final/render.mp4", 1_900 * mib), ("proyecto-final/notas.md", 12_000), ("proyecto-final/assets/logo.svg", 48_000)]),
@@ -393,6 +400,7 @@ impl Engine {
                 force_overwrite: false,
                 dest_dir: cfg.download_dir.clone(),
                 rate_limit_mbps: cfg.rate_limit_mbps,
+                state_dir: Some(crate::config::data_dir()),
             },
         )
         .await?;
@@ -418,7 +426,7 @@ impl Engine {
         // Incoming offers → pending map (or auto-accept).
         let e = eng.clone();
         tokio::spawn(async move {
-            while let Some(IncomingOffer { transfer_id, manifest, peer, decision }) = lan.offers.recv().await {
+            while let Some(IncomingOffer { transfer_id, manifest, peer, resume, decision }) = lan.offers.recv().await {
                 let (auto, dest, notif) = {
                     let c = e.cfg.read().await;
                     (c.auto_accept, c.download_dir.clone(), c.notifications)
@@ -438,6 +446,8 @@ impl Engine {
                     compressed: manifest.compressed_archive,
                     files,
                     received_at: chrono::Utc::now().timestamp_millis(),
+                    resume_bytes: resume.as_ref().map(|r| r.bytes_done).unwrap_or(0),
+                    resume_files: resume.as_ref().map(|r| r.files_done).unwrap_or(0),
                 };
                 if notif {
                     crate::ui::notify("uni-share: solicitud entrante", &format!("{} quiere enviarte {}", manifest.sender, manifest.name));

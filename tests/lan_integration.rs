@@ -28,6 +28,7 @@ async fn spawn_receiver(dest: PathBuf, pin: Option<&str>, force: bool) -> (uni_s
             force_overwrite: force,
             dest_dir: dest,
             rate_limit_mbps: 0,
+            state_dir: None,
         },
     )
     .await

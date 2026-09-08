@@ -70,6 +70,7 @@ pub async fn receive(ctx: Ctx, a: ReceiveArgs) -> Result<()> {
         force_overwrite: a.force,
         dest_dir: dest.clone(),
         rate_limit_mbps: ctx.cfg.rate_limit_mbps,
+        state_dir: Some(uni_share::config::data_dir()),
     };
     let mut server = start(id.clone(), opts).await?;
     let _announcer = Announcer::start(&ctx.cfg.device_name, server.addr.port(), &id.fingerprint, pin.is_some())?;
@@ -99,6 +100,12 @@ pub async fn receive(ctx: Ctx, a: ReceiveArgs) -> Result<()> {
                 ));
                 if !m.sender_fingerprint.is_empty() {
                     ui::info(S, format!("Huella del emisor: {}", short_fingerprint(&m.sender_fingerprint)));
+                }
+                if let Some(r) = &offer.resume {
+                    ui::info(S, format!(
+                        "Transferencia interrumpida anteriormente: se reanuda ({} archivo(s) y {} ya en {})",
+                        r.files_done, human_bytes(r.bytes_done), r.dest_dir.display()
+                    ));
                 }
                 if m.files.len() > 1 {
                     let preview: Vec<uni_share::fsutil::FileEntry> = m.files.iter().map(|f| uni_share::fsutil::FileEntry {

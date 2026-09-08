@@ -237,8 +237,8 @@ export component MainWindow inherits Window {
                         Rectangle { vertical-stretch: 1; }
                         // me card
                         Rectangle {
-                            height: 74px; border-radius: Theme.radius; background: Theme.bg3; border-width: 1px; border-color: Theme.line;
-                            VerticalLayout { padding: 10px; spacing: 2px;
+                            height: 96px; border-radius: Theme.radius; background: Theme.bg3; border-width: 1px; border-color: Theme.line;
+                            VerticalLayout { padding: 10px; spacing: 3px;
                                 Text { text: device-name; color: Theme.fg; font-weight: 600; overflow: elide; }
                                 Text { text: fingerprint; color: Theme.fg3; font-size: 11px; font-family: Theme.mono; }
                                 HorizontalLayout { Text { text: "LAN"; color: Theme.fg2; font-size: 12px; horizontal-stretch: 1; } Text { text: local-ip + ":" + lan-addr; color: Theme.fg3; font-size: 11px; font-family: Theme.mono; overflow: elide; } }
@@ -262,7 +262,7 @@ export component MainWindow inherits Window {
                                 Rectangle {
                                     x: 12px; y: 10px; width: parent.width - 24px; height: 60px; border-radius: Theme.radius; background: Theme.bg2; border-width: 1px; border-color: Theme.warn;
                                     HorizontalLayout { padding: 10px; spacing: 12px;
-                                        Rectangle { width: 40px; height: 40px; border-radius: 10px; background: Theme.warn.with-alpha(0.15); Icon { name: "arrow-down"; tint: Theme.warn; size: 20px; x: 10px; y: 10px; } }
+                                        Rectangle { width: 40px; height: 40px; border-radius: 10px; background: Theme.warn.with-alpha(0.15); Icon { name: "arrow-down"; tint: Theme.warn; size: 20px; x: 10px; y: 0; height: parent.height; } }
                                         VerticalLayout { alignment: center; spacing: 2px; horizontal-stretch: 1;
                                             Text { text: o.sender + " quiere enviarte " + o.name; color: Theme.fg; font-weight: 600; overflow: elide; }
                                             Text { text: o.size-text + " · " + o.files-count + " archivo(s)" + (o.compressed ? " · comprimido" : "") + " · desde " + o.peer + " · huella " + o.fingerprint; color: Theme.fg2; font-size: 12px; overflow: elide; }
@@ -314,7 +314,7 @@ export component MainWindow inherits Window {
                                             Rectangle { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.30; clip: true;
                                                 HorizontalLayout { spacing: 8px; alignment: start;
                                                     Rectangle { width: 22px; height: 22px; y: 6px; border-radius: 6px; background: Theme.bg4;
-                                                        Icon { name: j.kind == "lan_send" ? "arrow-up" : j.kind == "lan_receive" ? "arrow-down" : j.kind == "global_upload" ? "globe" : "download"; size: 13px; x: 4.5px; y: 4.5px; stroke-width: 2.2px;
+                                                        Icon { name: j.kind == "lan_send" ? "arrow-up" : j.kind == "lan_receive" ? "arrow-down" : j.kind == "global_upload" ? "globe" : "download"; size: 13px; x: 4.5px; y: 0; height: parent.height; stroke-width: 2.2px;
                                                             tint: (j.kind == "lan_send" || j.kind == "global_upload") ? Theme.accent2 : Theme.accent; } }
                                                     Text { text: j.name; color: Theme.fg; font-weight: 500; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                                                 } }
@@ -475,7 +475,7 @@ export component MainWindow inherits Window {
         }
     }
 
-    if root.dialog == "share": Dialog { title: "Compartir «" + root.sel().name + "»"; dialog-width: 820px; close => { root.dialog = ""; }
+    if root.dialog == "share": Dialog { title: root.sel().name == "" ? "Compartir" : "Compartir «" + root.sel().name + "»"; dialog-width: 820px; close => { root.dialog = ""; }
         VerticalLayout { padding: 18px; spacing: 14px;
             if root.sel().link != "" && root.sel().ticket-uri != "": Segmented { items: ["Link público", "Ticket .unishare"]; current: root.share-what == "ticket" ? 1 : 0; changed(i) => { root.open-share(root.selected, i == 1 ? "ticket" : "link"); } }
             HorizontalLayout { spacing: 20px;

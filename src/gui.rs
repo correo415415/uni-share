@@ -101,9 +101,9 @@ async fn api_state(State(e): St) -> Response {
     Json(e.snapshot().await).into_response()
 }
 /// Server-Sent Events: a full snapshot (same JSON as `/api/state`) whenever the engine
-/// state changes, at most every ~300 ms, plus periodic frames while transfers are running
-/// (progress counters are lock-free and do not trigger change notifications). A comment
-/// frame is sent every 15 s as a keep-alive.
+/// state changes (bursts coalesced over 60 ms), plus a frame every 700 ms while transfers
+/// are running (progress counters are lock-free and do not trigger change notifications).
+/// When idle a frame is still sent every 15 s as a keep-alive.
 async fn api_events(State(e): St) -> Response {
     let stream = async_stream(e);
     Response::builder()

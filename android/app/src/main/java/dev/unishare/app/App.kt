@@ -20,7 +20,7 @@ class App : Application() {
     }
 
     /** Private app data: config.toml, history.sqlite, keys… */
-    val dataDir: File get() = File(filesDir, "uni-share").apply { mkdirs() }
+    val engineDir: File get() = File(filesDir, "uni-share").apply { mkdirs() }
 
     /** Received files. App-specific external storage needs no runtime permission. */
     val downloadDir: File

@@ -101,7 +101,7 @@ class EngineService : Service() {
                     return running
                 }
                 val app = ctx.applicationContext as App
-                val p = Native.start(app.dataDir.absolutePath, app.downloadDir.absolutePath, app.deviceName)
+                val p = Native.start(app.engineDir.absolutePath, app.downloadDir.absolutePath, app.deviceName)
                 cachedPort = p
                 return p
             }

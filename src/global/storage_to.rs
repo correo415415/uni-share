@@ -367,16 +367,22 @@ async fn parse<T: serde::de::DeserializeOwned>(resp: reqwest::Response, what: &s
     serde_json::from_str::<T>(&text).map_err(|e| anyhow!("parsing {what} response: {e} — body: {}", text.chars().take(300).collect::<String>()))
 }
 
-/// rustls config using the OS trust store (rustls-platform-verifier).
+/// rustls config using the OS trust store (rustls-platform-verifier); on Android
+/// (no JVM bridge from plain Rust) the bundled Mozilla root set is used instead.
 pub fn platform_tls() -> Result<rustls::ClientConfig> {
-    use rustls_platform_verifier::BuilderVerifierExt;
     let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
-    let cfg = rustls::ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .context("tls versions")?
-        .with_platform_verifier()
-        .context("platform verifier")?
-        .with_no_client_auth();
+    let builder = rustls::ClientConfig::builder_with_provider(provider).with_safe_default_protocol_versions().context("tls versions")?;
+    #[cfg(not(target_os = "android"))]
+    let cfg = {
+        use rustls_platform_verifier::BuilderVerifierExt;
+        builder.with_platform_verifier().context("platform verifier")?.with_no_client_auth()
+    };
+    #[cfg(target_os = "android")]
+    let cfg = {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        builder.with_root_certificates(roots).with_no_client_auth()
+    };
     Ok(cfg)
 }
 

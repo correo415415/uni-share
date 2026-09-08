@@ -15,6 +15,9 @@ path = "src/main.rs"
 [lib]
 name = "uni_share"
 path = "src/lib.rs"
+# `cdylib` is what Android loads (`libuni_share.so`, built with `cargo ndk`); it is
+# harmless for desktop builds (one extra artefact) and keeps a single crate.
+crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 # --- async runtime ---
@@ -29,8 +32,6 @@ indicatif = "0.18"
 console = "0.16"
 dialoguer = "0.12"
 qrcode = { version = "0.14", default-features = false }
-arboard = { version = "3", default-features = false }
-notify-rust = "4"
 
 # --- errors / logging ---
 anyhow = "1"
@@ -56,7 +57,6 @@ local-ip-address = "0.6"
 
 # --- HTTP client (LAN + global) ---
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "stream", "http2", "charset", "cookies"] }
-rustls-platform-verifier = "0.6"
 url = "2"
 percent-encoding = "2"
 mime_guess = "2"
@@ -89,6 +89,16 @@ slint = { version = "1.9", optional = true, default-features = false, features =
 # user — accesskit AT-SPI on the winit thread, notify-rust — to require a tokio reactor).
 rfd = { version = "0.15", optional = true, default-features = false, features = ["xdg-portal", "async-std"] }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
+
+# --- desktop-only integrations (clipboard, D-Bus/WinRT notifications, OS trust store) ---
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard = { version = "3", default-features = false }
+notify-rust = "4"
+rustls-platform-verifier = "0.6"
+
+# --- Android: no OS trust-store bridge without a JVM → bundled Mozilla roots ---
+[target.'cfg(target_os = "android")'.dependencies]
+webpki-roots = "1"
 
 [features]
 default = []

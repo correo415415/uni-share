@@ -121,6 +121,12 @@ pub fn print_qr(section: &str, data: &str) {
 /// Copy text to system clipboard. Returns false when no clipboard is available
 /// (headless server, SSH…).
 pub fn copy_to_clipboard(text: &str) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        let _ = text;
+        false
+    }
+    #[cfg(not(target_os = "android"))]
     match arboard::Clipboard::new() {
         Ok(mut cb) => cb.set_text(text.to_string()).is_ok(),
         Err(e) => {
@@ -134,19 +140,27 @@ pub fn copy_to_clipboard(text: &str) -> bool {
 /// Show a desktop notification without blocking the caller: D-Bus round-trips
 /// can take hundreds of ms and the caller may be a UI thread.
 pub fn notify(summary: &str, body: &str) {
-    let n = notify_rust::Notification::new()
-        .appname(crate::APP_NAME)
-        .summary(summary)
-        .body(body)
-        .timeout(notify_rust::Timeout::Milliseconds(6000))
-        .finalize();
-    let spawned = std::thread::Builder::new().name("uni-share-notify".into()).spawn(move || {
-        if let Err(e) = n.show() {
-            tracing::debug!("notification failed: {e}");
+    #[cfg(target_os = "android")]
+    {
+        // Android notifications are posted by the Kotlin shell (ForegroundService).
+        tracing::info!(target: "uni_share::notify", "{summary}: {body}");
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let n = notify_rust::Notification::new()
+            .appname(crate::APP_NAME)
+            .summary(summary)
+            .body(body)
+            .timeout(notify_rust::Timeout::Milliseconds(6000))
+            .finalize();
+        let spawned = std::thread::Builder::new().name("uni-share-notify".into()).spawn(move || {
+            if let Err(e) = n.show() {
+                tracing::debug!("notification failed: {e}");
+            }
+        });
+        if let Err(e) = spawned {
+            tracing::debug!("notification thread failed: {e}");
         }
-    });
-    if let Err(e) = spawned {
-        tracing::debug!("notification thread failed: {e}");
     }
 }
 

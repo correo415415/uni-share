@@ -695,6 +695,8 @@ export component Tray inherits SystemTrayIcon {
     icon: @image-url("icon.png");
     title: "uni-share";
     tooltip: active-count > 0 ? "uni-share — " + active-count + " transferencia(s) activa(s)" : "uni-share";
+    // The built-in `clicked` is not exported to the Rust API: forward it to our own callback.
+    clicked => { root.show-window(); }
     Menu {
         MenuItem { title: window-visible ? "Ocultar ventana" : "Mostrar uni-share"; activated => { root.show-window(); } }
         MenuSeparator { }

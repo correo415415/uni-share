@@ -312,7 +312,6 @@ fn install_tray(win: &MainWindow, ctx: &UiCtx) -> Option<Tray> {
             }
         }
     };
-    tray.on_clicked(toggle.clone());
     tray.on_show_window(toggle);
     {
         let w = win.as_weak();

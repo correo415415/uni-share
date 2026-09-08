@@ -128,6 +128,7 @@ export component MainWindow inherits Window {
     in-out property <string> s-expiry;
     in-out property <bool> s-auto;
     in-out property <bool> s-notif;
+    in-out property <bool> s-tray;
     in-out property <bool> s-compress;
     in-out property <bool> s-sign;
     in-out property <bool> s-scan;
@@ -565,6 +566,7 @@ export component MainWindow inherits Window {
             }
             Check { text: "Aceptar automáticamente las transferencias LAN entrantes"; checked <=> root.s-auto; }
             Check { text: "Notificaciones de escritorio"; checked <=> root.s-notif; }
+            Check { text: "Al cerrar la ventana, minimizar a la bandeja del sistema (el motor sigue recibiendo)"; checked <=> root.s-tray; }
             Check { text: "Comprimir carpetas (.tar.zst) por defecto"; checked <=> root.s-compress; }
             Check { text: "Firmar los tickets con la clave Ed25519 de este equipo (el destinatario puede verificar el remitente)"; checked <=> root.s-sign; }
             Rectangle { height: 1px; background: Theme.line; }
@@ -678,5 +680,29 @@ export component MainWindow inherits Window {
             }
             HorizontalLayout { spacing: 8px; alignment: end; Text { text: root.dialog-error; color: Theme.err; vertical-alignment: center; horizontal-stretch: 1; wrap: word-wrap; } Button { text: "Cancelar"; clicked => { root.dialog = ""; } } Button { text: root.new-mode == 3 ? "Crear ticket" : "Iniciar"; primary: true; clicked => { root.submit-new(); } } }
         }
+    }
+}
+
+// ═══════════ system tray ═══════════
+// Top-level component (no window): icon + quick menu. Instantiated from Rust next to the
+// MainWindow; `clicked` and the menu entries are wired there.
+export component Tray inherits SystemTrayIcon {
+    in property <int> active-count: 0;
+    in property <bool> window-visible: true;
+    callback show-window();
+    callback new-transfer(int);
+    callback quit();
+    icon: @image-url("icon.png");
+    title: "uni-share";
+    tooltip: active-count > 0 ? "uni-share — " + active-count + " transferencia(s) activa(s)" : "uni-share";
+    Menu {
+        MenuItem { title: window-visible ? "Ocultar ventana" : "Mostrar uni-share"; activated => { root.show-window(); } }
+        MenuSeparator { }
+        MenuItem { title: "Enviar por LAN…"; activated => { root.new-transfer(0); } }
+        MenuItem { title: "Compartir link…"; activated => { root.new-transfer(1); } }
+        MenuItem { title: "Descargar…"; activated => { root.new-transfer(2); } }
+        MenuItem { title: "Abrir ticket…"; activated => { root.new-transfer(3); } }
+        MenuSeparator { }
+        MenuItem { title: "Salir"; activated => { root.quit(); } }
     }
 }

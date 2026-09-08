@@ -399,6 +399,7 @@ pub struct ConfigPatch {
     pub auto_accept: Option<bool>,
     pub pin: Option<String>,
     pub notifications: Option<bool>,
+    pub minimize_to_tray: Option<bool>,
     pub compress_folders: Option<bool>,
     pub sign_tickets: Option<bool>,
     pub expiry_days: Option<u32>,
@@ -941,6 +942,9 @@ impl Engine {
         }
         if let Some(v) = p.notifications {
             cfg.notifications = v;
+        }
+        if let Some(v) = p.minimize_to_tray {
+            cfg.minimize_to_tray = v;
         }
         if let Some(v) = p.compress_folders {
             cfg.compress_folders = v;

@@ -52,6 +52,7 @@ enum Evt {
 }
 
 struct UiState {
+    tray: Option<Weak<Tray>>,
     filter: String,
     query: String,
     sort_key: String,
@@ -214,6 +215,7 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
         last_pending: 0,
         last_notice: 0,
         snapshot: None,
+        tray: None,
     }));
     win.global::<Theme>().set_dark(!opts.light);
     let ctx = UiCtx { win: win.as_weak(), tx: tx.clone(), etx: etx.clone(), st: st.clone() };
@@ -227,6 +229,8 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
         open_ticket_or_url(&win, open);
     }
     install_drop_handler(&win, &ctx);
+    let tray = install_tray(&win, &ctx);
+    st.borrow_mut().tray = tray.as_ref().map(|t| t.as_weak());
     if opts.drag_over {
         win.set_drag_over(true);
     }
@@ -276,7 +280,80 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
 
     win.run().context("running event loop")?;
     drop(shot);
+    drop(tray);
     Ok(())
+}
+
+/// System tray icon with a quick menu. Closing the main window hides it when
+/// `minimize_to_tray` is enabled (the engine keeps running); "Salir" quits for real.
+/// On Linux this needs a StatusNotifierItem host (KDE, or the AppIndicator extension on
+/// GNOME); without one the icon is simply absent and the window closes normally.
+fn install_tray(win: &MainWindow, ctx: &UiCtx) -> Option<Tray> {
+    let tray = match Tray::new() {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("system tray unavailable: {e}");
+            return None;
+        }
+    };
+    let toggle = {
+        let w = win.as_weak();
+        let t = tray.as_weak();
+        move || {
+            let Some(w) = w.upgrade() else { return };
+            let visible = w.window().is_visible();
+            if visible {
+                let _ = w.hide();
+            } else {
+                let _ = w.show();
+            }
+            if let Some(t) = t.upgrade() {
+                t.set_window_visible(!visible);
+            }
+        }
+    };
+    tray.on_clicked(toggle.clone());
+    tray.on_show_window(toggle);
+    {
+        let w = win.as_weak();
+        let t = tray.as_weak();
+        tray.on_new_transfer(move |mode| {
+            let Some(w) = w.upgrade() else { return };
+            let _ = w.show();
+            if let Some(t) = t.upgrade() {
+                t.set_window_visible(true);
+            }
+            w.set_new_mode(mode);
+            w.set_dialog("new".into());
+        });
+    }
+    tray.on_quit(|| {
+        let _ = slint::quit_event_loop();
+    });
+    {
+        // Close button → hide to tray (when enabled), otherwise quit.
+        let w = win.as_weak();
+        let t = tray.as_weak();
+        let ctx = ctx.clone();
+        win.window().on_close_requested(move || {
+            let Some(w) = w.upgrade() else { return slint::CloseRequestResponse::HideWindow };
+            // The tray handle only exists while the icon is registered (see install_tray).
+            if w.get_s_tray() && t.upgrade().is_some() {
+                if let Some(t) = t.upgrade() {
+                    t.set_window_visible(false);
+                }
+                ctx.toast("uni-share sigue en la bandeja", "info");
+                return slint::CloseRequestResponse::HideWindow;
+            }
+            let _ = slint::quit_event_loop();
+            slint::CloseRequestResponse::HideWindow
+        });
+    }
+    if let Err(e) = tray.show() {
+        tracing::warn!("showing tray icon: {e}");
+        return None;
+    }
+    Some(tray)
 }
 
 async fn handle_cmd(engine: &Arc<Engine>, cmd: Cmd, etx: &std::sync::mpsc::Sender<Evt>) {
@@ -441,7 +518,11 @@ fn render(ctx: &UiCtx) {
     win.set_auto_accept(snap.auto_accept);
     win.set_speed_down(format!("{}/s", human_bytes(snap.speed_down)).into());
     win.set_speed_up(format!("{}/s", human_bytes(snap.speed_up)).into());
-    win.set_active_count(snap.jobs.iter().filter(|j| j.state == JobState::Running).count() as i32);
+    let active = snap.jobs.iter().filter(|j| j.state == JobState::Running).count() as i32;
+    win.set_active_count(active);
+    if let Some(t) = ctx.st.borrow().tray.as_ref().and_then(|t| t.upgrade()) {
+        t.set_active_count(active);
+    }
     set_filters(&win, Some(snap));
 
     let list = visible_jobs(&st, snap);
@@ -605,6 +686,7 @@ fn handle_evt(ctx: &UiCtx, evt: Evt) {
                 w.set_s_expiry(c.global.expiry_days.to_string().into());
                 w.set_s_auto(c.auto_accept);
                 w.set_s_notif(c.notifications);
+                w.set_s_tray(c.minimize_to_tray);
                 w.set_s_compress(c.compress_folders);
                 w.set_s_sign(c.sign_tickets);
                 w.set_s_scan(c.scan.enabled);
@@ -979,6 +1061,7 @@ fn wire_callbacks(win: &MainWindow, ctx: &UiCtx) {
             auto_accept: Some(w.get_s_auto()),
             pin: Some(w.get_s_pin().to_string()),
             notifications: Some(w.get_s_notif()),
+            minimize_to_tray: Some(w.get_s_tray()),
             compress_folders: Some(w.get_s_compress()),
             sign_tickets: Some(w.get_s_sign()),
             scan_enabled: Some(w.get_s_scan()),

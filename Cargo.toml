@@ -86,8 +86,8 @@ regex = "1"
 # Skia renderer: proper glyph hinting/subpixel positioning (femtovg's GPU atlas
 # smeared small text). femtovg stays as a fallback via SLINT_BACKEND=winit-femtovg.
 # unstable-winit-030: access to the winit window for native file drag & drop (Slint has no
-# external-drop event yet); pinned to the winit 0.30 line the lock already uses.
-slint = { version = "1.13", optional = true, default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-skia", "renderer-femtovg", "accessibility", "unstable-winit-030"] }
+# external-drop event yet). system-tray: `SystemTrayIcon` (1.17+) for the tray icon/menu.
+slint = { version = "1.17", optional = true, default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-skia", "renderer-femtovg", "accessibility", "unstable-winit-030", "system-tray"] }
 # rfd: keep zbus on its own async-io executor (the `tokio` feature would force every zbus
 # user — accesskit AT-SPI on the winit thread, notify-rust — to require a tokio reactor).
 rfd = { version = "0.15", optional = true, default-features = false, features = ["xdg-portal", "async-std"] }
@@ -110,7 +110,7 @@ default = []
 slint = ["dep:slint", "dep:rfd", "dep:image", "dep:slint-build"]
 
 [build-dependencies]
-slint-build = { version = "1.13", optional = true }
+slint-build = { version = "1.17", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

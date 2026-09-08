@@ -225,10 +225,10 @@ jobs:
           if [ -f "target/slint/release/uni-share${EXE}" ]; then
             cp "target/slint/release/uni-share${EXE}" "dist/uni-share-app-${TARGET}${EXE}"
           fi
-          # Archivo completo (binarios + README + TODO + script python de fallback)
-          STAGE="dist/${BASE}"; mkdir -p "$STAGE/python"
+          # Archivo completo (binarios + README + TODO)
+          STAGE="dist/${BASE}"; mkdir -p "$STAGE"
           cp dist/uni-share-*"${TARGET}"* "$STAGE"/ 2>/dev/null || true
-          cp README.md TODO.md "$STAGE"/; cp python/swisstransfer_dl.py python/requirements.txt "$STAGE/python/"
+          cp README.md TODO.md "$STAGE"/
           if [ "${{ runner.os }}" = "Windows" ]; then
             (cd dist && 7z a -bd -y "${BASE}.zip" "${BASE}" >/dev/null)
           else
@@ -242,7 +242,7 @@ jobs:
             echo
             echo "- \`uni-share-${TARGET}${EXE}\`: CLI + GUI web (\`uni-share gui\`)."
             [ -f "dist/uni-share-app-${TARGET}${EXE}" ] && echo "- \`uni-share-app-${TARGET}${EXE}\`: igual + app nativa Slint (\`uni-share app\`)."
-            echo "- \`${BASE}.tar.gz\` / \`.zip\`: binarios + docs + script python de fallback."
+            echo "- \`${BASE}.tar.gz\` / \`.zip\`: binarios + docs."
             ls dist/*.apk >/dev/null 2>&1 && echo "- \`$(basename dist/*.apk)\`: app Android (debug, WebView sobre el core Rust)."
             echo
             echo "Commit: ${GITHUB_SHA} · Rama/tag: ${GITHUB_REF_NAME} · Compilado en el runner local (${{ runner.os }}/${{ runner.arch }})."

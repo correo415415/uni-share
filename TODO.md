@@ -87,7 +87,7 @@ Decisión: Slint (Rust puro, renderizado propio con `winit`+`femtovg`/`skia`, si
 ## Fase 7c — CI/CD en runner local
 - [x] Workflow `.github/workflows/build.yml` en `self-hosted`: fmt (aviso) → clippy `-D warnings` → tests → `cargo build --release` (default) → `--features slint` (target-dir separado).
 - [x] Sin caché ni artefactos de Actions (sin espacio): el runner conserva `~/.cargo` y `target/`; los binarios van a una **release** rodante `nightly-<rama>` (prerelease, assets sobrescritos, tag movido al HEAD) y a releases normales en tags `v*`.
-- [x] Empaqueta `uni-share-<target>`, `uni-share-app-<target>` (con Slint), `uni-share-<ver>-<target>.tar.gz` (binarios + docs + script python) y `SHA256SUMS`.
+- [x] Empaqueta `uni-share-<target>`, `uni-share-app-<target>` (con Slint), `uni-share-<ver>-<target>.tar.gz` (binarios + docs) y `SHA256SUMS`.
 - [ ] Matriz Windows/macOS cuando haya runners de esas plataformas (el workflow ya detecta `runner.os`/`runner.arch`).
 
 ## Fase 8 — Smash (aparcado)

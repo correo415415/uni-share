@@ -198,9 +198,6 @@ pub struct DownloadArgs {
     /// Only list contents, don't download
     #[arg(long)]
     pub list: bool,
-    /// For SwissTransfer: delegate to python/swisstransfer_dl.py instead of the native Rust port
-    #[arg(long)]
-    pub python: bool,
 }
 
 #[derive(Args, Debug)]

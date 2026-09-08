@@ -253,9 +253,8 @@ export component MainWindow inherits Window {
                     // offers + table
                     tbl := Rectangle {
                         vertical-stretch: 1; background: Theme.bg; clip: true;
-                        // Column widths derive from this container (not from the layouts that
-                        // hold the cells) so the layout solver never sees a width loop.
-                        property <length> col-w: max(0px, root.width - Theme.sidebar-w - 20px);
+                        // Columns are proportional stretch factors (see `col` below): no width
+                        // bindings, so the layout solver never sees a loop and resizing is free.
                         VerticalLayout {
                             // pending offers
                             for o in offers: Rectangle {
@@ -281,7 +280,7 @@ export component MainWindow inherits Window {
                                 HorizontalLayout {
                                     padding-left: 10px; padding-right: 10px;
                                     for c in [ { k: "name", l: "Nombre", w: 0.30 }, { k: "kind", l: "Tipo", w: 0.10 }, { k: "size", l: "Tamaño", w: 0.08 }, { k: "progress", l: "Progreso", w: 0.20 }, { k: "state", l: "Estado", w: 0.09 }, { k: "speed", l: "Velocidad", w: 0.08 }, { k: "eta", l: "ETA", w: 0.06 }, { k: "peer", l: "Origen / destino", w: 0.09 } ]: Rectangle {
-                                        width: tbl.col-w * c.w;
+                                        min-width: 0px; preferred-width: 0px; horizontal-stretch: c.w; clip: true;
                                         HorizontalLayout { spacing: 4px; alignment: start;
                                             Text { text: c.l; color: hta.has-hover ? Theme.fg : Theme.fg3; font-size: Theme.fs-sm; font-weight: 600; vertical-alignment: center; }
                                             if root.sort-key == c.k: Icon { name: root.sort-desc ? "chevron-down" : "chevron-up"; tint: Theme.accent; size: 12px; stroke-width: 2.4px; }
@@ -312,24 +311,24 @@ export component MainWindow inherits Window {
                                         HorizontalLayout {
                                             padding-left: 10px; padding-right: 10px;
                                             // name
-                                            Rectangle { width: tbl.col-w * 0.30;
+                                            Rectangle { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.30; clip: true;
                                                 HorizontalLayout { spacing: 8px; alignment: start;
                                                     Rectangle { width: 22px; height: 22px; y: 6px; border-radius: 6px; background: Theme.bg4;
                                                         Icon { name: j.kind == "lan_send" ? "arrow-up" : j.kind == "lan_receive" ? "arrow-down" : j.kind == "global_upload" ? "globe" : "download"; size: 13px; x: 4.5px; y: 4.5px; stroke-width: 2.2px;
                                                             tint: (j.kind == "lan_send" || j.kind == "global_upload") ? Theme.accent2 : Theme.accent; } }
                                                     Text { text: j.name; color: Theme.fg; font-weight: 500; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                                                 } }
-                                            Text { width: tbl.col-w * 0.10; text: j.kind-label; color: Theme.fg3; vertical-alignment: center; overflow: elide; }
-                                            Text { width: tbl.col-w * 0.08; text: j.size-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; vertical-alignment: center; overflow: elide; }
-                                            Rectangle { width: tbl.col-w * 0.20;
+                                            Text { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.10; text: j.kind-label; color: Theme.fg3; vertical-alignment: center; overflow: elide; }
+                                            Text { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.08; text: j.size-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; vertical-alignment: center; overflow: elide; }
+                                            Rectangle { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.20; clip: true;
                                                 HorizontalLayout { spacing: 8px; padding-right: 10px;
                                                     ProgressBar { y: 13px; value: j.percent; state: j.state; indeterminate: j.indeterminate; horizontal-stretch: 1; }
                                                     Text { width: 44px; text: j.indeterminate ? "…" : round(j.percent) + "%"; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; horizontal-alignment: right; vertical-alignment: center; }
                                                 } }
-                                            Rectangle { width: tbl.col-w * 0.09; Badge { y: 8px; text: j.state-label; kind: j.state; } }
-                                            Text { width: tbl.col-w * 0.08; text: j.speed-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; vertical-alignment: center; }
-                                            Text { width: tbl.col-w * 0.06; text: j.eta-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; vertical-alignment: center; }
-                                            Text { width: tbl.col-w * 0.09; text: j.peer; color: Theme.fg3; vertical-alignment: center; overflow: elide; }
+                                            Rectangle { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.09; clip: true; Badge { y: 8px; text: j.state-label; kind: j.state; } }
+                                            Text { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.08; text: j.speed-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; vertical-alignment: center; }
+                                            Text { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.06; text: j.eta-text; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; vertical-alignment: center; }
+                                            Text { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.09; text: j.peer; color: Theme.fg3; vertical-alignment: center; overflow: elide; }
                                         }
                                         rta := TouchArea {
                                             clicked => { root.select-job(i); }

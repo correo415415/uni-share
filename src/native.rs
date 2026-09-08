@@ -35,7 +35,6 @@ enum Cmd {
     Reject(String),
     PatchConfig(ConfigPatch),
     LoadHistory,
-    Refresh,
 }
 
 /// Results from the engine thread to the UI thread.
@@ -221,7 +220,6 @@ async fn handle_cmd(engine: &Arc<Engine>, cmd: Cmd, etx: &std::sync::mpsc::Sende
             Err(e) => Err(e),
         },
         Cmd::LoadHistory => engine.history.list(200).map(|l| Some(Evt::History(l))),
-        Cmd::Refresh => Ok(None),
     };
     match r {
         Ok(Some(e)) => {

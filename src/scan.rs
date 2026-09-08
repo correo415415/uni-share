@@ -24,7 +24,7 @@
 //! 5. **Archives** — ZIP central directory parsed in place (no extraction):
 //!    zip bombs (ratio / declared size / entry count), path traversal, nested
 //!    archives, executables inside, encrypted entries, OOXML `vbaProject.bin`.
-//!    `tar` / `tar.zst` (our own transfer format) are streamed header-by-header
+//!    `tar` / `tar.zst` (our own transfer format) / `tar.gz` are streamed header-by-header
 //!    with a byte budget: traversal, setuid bits, escaping links.
 //! 6. **Documents** — PDF `/JavaScript`, `/Launch`, `/EmbeddedFile`, auto
 //!    actions; legacy OLE with VBA / `Ole10Native` / `DDEAUTO`; SVG/HTML with
@@ -299,8 +299,9 @@ pub fn scan_file(path: &Path, expected_size: Option<u64>) -> FileReport {
 
     match kind {
         "zip" | "ooxml" | "jar" | "apk" => archives::check_zip(path, size, 0, &mut findings),
-        "tar" => archives::check_tar(path, false, &mut findings),
-        "zstd" if name.ends_with(".tar.zst") || name.ends_with(".tzst") => archives::check_tar(path, true, &mut findings),
+        "tar" => archives::check_tar(path, archives::Wrap::None, &mut findings),
+        "zstd" if name.ends_with(".tar.zst") || name.ends_with(".tzst") => archives::check_tar(path, archives::Wrap::Zstd, &mut findings),
+        "gzip" if name.ends_with(".tar.gz") || name.ends_with(".tgz") => archives::check_tar(path, archives::Wrap::Gzip, &mut findings),
         "pdf" => documents::check_pdf(path, size, &mut findings),
         "ole" => documents::check_ole(path, size, &mut findings),
         "html" | "svg" | "xml" | "text" => documents::check_text(path, size, &ext, &mut findings),
@@ -707,16 +708,24 @@ mod archives {
         }
     }
 
-    /// Stream a tar (optionally zstd) reading headers only, within a byte budget.
-    pub fn check_tar(path: &Path, zst: bool, out: &mut Vec<Finding>) {
+    /// Outer compression around a tar stream.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum Wrap {
+        None,
+        Zstd,
+        Gzip,
+    }
+
+    /// Stream a tar (optionally zstd/gzip) reading headers only, within a byte budget.
+    pub fn check_tar(path: &Path, wrap: Wrap, out: &mut Vec<Finding>) {
         let Ok(f) = std::fs::File::open(path) else { return };
-        let reader: Box<dyn Read> = if zst {
-            match zstd::stream::read::Decoder::new(f) {
+        let reader: Box<dyn Read> = match wrap {
+            Wrap::None => Box::new(f),
+            Wrap::Zstd => match zstd::stream::read::Decoder::new(f) {
                 Ok(d) => Box::new(d),
                 Err(_) => return,
-            }
-        } else {
-            Box::new(f)
+            },
+            Wrap::Gzip => Box::new(flate2::read::MultiGzDecoder::new(f)),
         };
         let mut ar = tar::Archive::new(Budget { inner: reader, left: TAR_BUDGET });
         let Ok(entries) = ar.entries() else { return };
@@ -1224,6 +1233,16 @@ mod tests {
         let z = zstd::encode_all(&t[..], 3).unwrap();
         let r = scan_file(&write(d.path(), "esc.tar.zst", &z), None);
         assert_eq!(r.kind, "zstd");
+        assert!(codes(&r).contains(&"tar_traversal"), "{:?}", r.findings);
+
+        // .tgz / .tar.gz go through the gzip decoder
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        std::io::Write::write_all(&mut gz, &t).unwrap();
+        let g = gz.finish().unwrap();
+        let r = scan_file(&write(d.path(), "esc.tgz", &g), None);
+        assert_eq!(r.kind, "gzip");
+        assert!(codes(&r).contains(&"tar_traversal"), "{:?}", r.findings);
+        let r = scan_file(&write(d.path(), "esc.tar.gz", &g), None);
         assert!(codes(&r).contains(&"tar_traversal"), "{:?}", r.findings);
     }
 

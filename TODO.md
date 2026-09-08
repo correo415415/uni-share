@@ -112,7 +112,7 @@ Objetivo: el mismo engine Rust en el móvil sin reescribir la lógica. Decisión
 - [x] Tests: sniffing, ejecutables disfrazados y doble extensión, trucos de nombre, ZIP (bomba/traversal/anidado/cifrado/macros/truncado/OOXML), tar + tar.zst (setuid/traversal/enlace/exec), PDF/OLE/SVG/HTML/.desktop, informe + cuarentena/eliminación + JSON, tamaño, ClamAV ausente y falso `clamscan` que reporta EICAR.
 - [x] Escaneo bajo demanda: `Engine::rescan_job` (recuerda `Job.saved`; fallback a `dest` + lista de archivos), `POST /api/jobs/{id}/scan` → `{severity, summary, detail, report}`; web: menú contextual «Analizar de nuevo» + enlace ↻ en Detalles; nativa: botón 🛡 junto al estado. Funciona aunque `[scan] enabled = false`.
 - [ ] YARA opcional (crate `yara-x`) con reglas del usuario en `<data_dir>/rules/`.
-- [ ] Recorrer gzip-tar (`.tgz`) sin añadir `flate2`: hoy solo se avisa del tipo.
+- [x] Recorrer `.tgz`/`.tar.gz` con `flate2` (`rust_backend`, ya estaba en el árbol vía reqwest — sin dependencias nativas nuevas): mismas comprobaciones de traversal/setuid/enlaces/bomba que `.tar`/`.tar.zst`. Test.
 
 ## Pendiente / mejoras conocidas
 - [ ] Cloudflare puede exigir captcha (Turnstile) en descargas de storage.to según reputación de IP: entonces se muestra un mensaje pidiendo abrir el link en el navegador

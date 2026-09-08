@@ -93,7 +93,7 @@ pub async fn gui(ctx: Ctx, a: GuiArgs) -> Result<()> {
 #[cfg(feature = "slint")]
 pub fn app(ctx: Ctx, a: AppArgs) -> Result<()> {
     let Ctx { cfg, cfg_path, history, .. } = ctx;
-    uni_share::native::run(cfg, cfg_path, history, uni_share::native::AppOptions { open: a.open })
+    uni_share::native::run(cfg, cfg_path, history, uni_share::native::AppOptions { open: a.open, demo: a.demo, screenshot: a.screenshot, dialog: a.dialog })
 }
 
 #[cfg(not(feature = "slint"))]

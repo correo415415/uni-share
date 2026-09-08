@@ -102,6 +102,12 @@ impl UiCtx {
 pub struct AppOptions {
     /// Ticket or URL to open at start (file association / `unishare:` handler).
     pub open: Option<String>,
+    /// Feed the UI with `Snapshot::demo()` instead of starting the engine.
+    pub demo: bool,
+    /// Render the window once, save it as PNG and quit (design review / CI).
+    pub screenshot: Option<PathBuf>,
+    /// Dialog to open before the screenshot ("new", "share", "settings", "fs", "confirm").
+    pub dialog: Option<String>,
 }
 
 /// Run the native window. Blocks until the window is closed.
@@ -113,6 +119,23 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
     let cfg2 = cfg.clone();
     let cfg_path2 = cfg_path.clone();
     let etx2 = etx.clone();
+    if opts.demo {
+        // No network, no engine: a static snapshot that ticks its fake progress.
+        std::thread::Builder::new()
+            .name("uni-share-demo".into())
+            .spawn(move || {
+                let mut snap = Snapshot::demo();
+                let _ = etx2.send(Evt::Config(cfg2));
+                loop {
+                    let _ = etx2.send(Evt::Snapshot(snap.clone()));
+                    for j in snap.jobs.iter_mut().filter(|j| j.state == JobState::Running) {
+                        j.done = (j.done + j.speed / 2).min(j.total);
+                    }
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            })
+            .context("spawning demo thread")?;
+    } else {
     std::thread::Builder::new()
         .name("uni-share-engine".into())
         .spawn(move || {
@@ -139,6 +162,7 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
             });
         })
         .context("spawning engine thread")?;
+    }
 
     // ── window ──
     let win = MainWindow::new().context("creating window")?;
@@ -168,6 +192,33 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
         win.set_f_url(open.into());
         win.set_dialog("new".into());
     }
+    if let Some(d) = &opts.dialog {
+        if d == "share" {
+            let data = "https://storage.to/c/G7pzkDNFy";
+            win.set_share_what("link".into());
+            win.set_qr_caption(data.into());
+            win.set_qr_image(qr_image(data));
+        }
+        win.set_dialog(d.as_str().into());
+    }
+    // Kept alive until the event loop returns.
+    let shot = slint::Timer::default();
+    if let Some(path) = opts.screenshot.clone() {
+        // Give the pump a few ticks so the first snapshot is rendered, then grab it.
+        let w = win.as_weak();
+        shot.start(slint::TimerMode::SingleShot, Duration::from_millis(1500), move || {
+            let Some(w) = w.upgrade() else { return };
+            if let Some(w) = w.window().take_snapshot().ok() {
+                let img = image::RgbaImage::from_raw(w.width(), w.height(), w.as_bytes().to_vec());
+                match img.map(|i| i.save(&path)) {
+                    Some(Ok(())) => tracing::info!("screenshot saved to {}", path.display()),
+                    Some(Err(e)) => tracing::error!("saving screenshot: {e}"),
+                    None => tracing::error!("snapshot buffer size mismatch"),
+                }
+            }
+            let _ = slint::quit_event_loop();
+        });
+    }
 
     // ── event pump: engine → UI ──
     let ctx2 = ctx.clone();
@@ -179,6 +230,7 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
     });
 
     win.run().context("running event loop")?;
+    drop(shot);
     Ok(())
 }
 

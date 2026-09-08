@@ -195,6 +195,88 @@ pub struct Snapshot {
     pub version: &'static str,
 }
 
+impl Snapshot {
+    /// A realistic, fully populated snapshot used by `uni-share app --demo`
+    /// (design reviews and screenshots without any network activity).
+    pub fn demo() -> Snapshot {
+        use std::net::{IpAddr, Ipv4Addr};
+        let now = chrono::Utc::now().timestamp_millis();
+        let mk = |id: u64, kind: JobKind, name: &str, peer: &str, total: u64, done: u64, state: JobState, speed: u64, files: Vec<(&str, u64)>| Job {
+            id,
+            kind,
+            name: name.into(),
+            peer: peer.into(),
+            total,
+            done,
+            state,
+            message: match state {
+                JobState::Failed => "El receptor rechazó la transferencia".into(),
+                JobState::Completed => "Verificación BLAKE3 correcta".into(),
+                _ => String::new(),
+            },
+            current_file: files.first().map(|f| f.0.to_string()).unwrap_or_default(),
+            link: matches!(kind, JobKind::GlobalUpload).then(|| "https://storage.to/c/G7pzkDNFy".to_string()),
+            ticket_uri: None,
+            ticket_path: None,
+            dest: matches!(kind, JobKind::LanReceive | JobKind::Download).then(|| format!("/home/user/Descargas/{name}")),
+            files: files.iter().map(|(p, s)| JobFile { path: (*p).into(), size: *s }).collect(),
+            started: now - 1000 * (60 * id as i64 + 12),
+            finished: (!state.is_active()).then_some(now - 1000 * 20 * id as i64),
+            speed,
+            eta: (state.is_active() && speed > 0).then(|| (total - done) / speed),
+            log: vec![
+                "Conectado a PC-Sala — huella 56EC-D8F3-F330-F460".into(),
+                "Manifiesto aceptado (3 archivos, 1.9 GiB)".into(),
+                format!("Enviando {}…", files.first().map(|f| f.0).unwrap_or("")),
+            ],
+            samples: VecDeque::new(),
+        };
+        let gib = 1024u64 * 1024 * 1024;
+        let mib = 1024u64 * 1024;
+        Snapshot {
+            device_name: "Laptop-Maria".into(),
+            fingerprint: "9A1C-77E0-B2D4-5F08".into(),
+            fingerprint_full: "9A1C77E0B2D45F08".repeat(4),
+            lan_addr: "0.0.0.0:47820".into(),
+            lan_port: 47820,
+            local_ips: vec!["192.168.1.78".into()],
+            download_dir: PathBuf::from("/home/user/Descargas"),
+            pin_required: false,
+            auto_accept: false,
+            pending: vec![PendingOffer {
+                transfer_id: "demo-offer".into(),
+                sender: "PC-Sala".into(),
+                sender_fingerprint: "56EC-D8F3-F330-F460".into(),
+                peer: "192.168.1.45".into(),
+                name: "fotos-verano".into(),
+                total_size: 812 * mib,
+                compressed: false,
+                files: vec![JobFile { path: "fotos-verano/IMG_2041.jpg".into(), size: 6 * mib }, JobFile { path: "fotos-verano/IMG_2042.jpg".into(), size: 7 * mib }],
+                received_at: now,
+            }],
+            jobs: vec![
+                mk(1, JobKind::LanSend, "proyecto-final", "PC-Sala", 2 * gib, 1_350 * mib, JobState::Running, 48 * mib, vec![("proyecto-final/render.mp4", 1_900 * mib), ("proyecto-final/notas.md", 12_000), ("proyecto-final/assets/logo.svg", 48_000)]),
+                mk(2, JobKind::Download, "dataset.tar.zst", "storage.to", 640 * mib, 200 * mib, JobState::Running, 9 * mib, vec![("dataset.tar.zst", 640 * mib)]),
+                mk(3, JobKind::GlobalUpload, "entrega-cliente", "storage.to", 320 * mib, 320 * mib, JobState::Completed, 0, vec![("entrega-cliente/informe.pdf", 20 * mib), ("entrega-cliente/anexos.zip", 300 * mib)]),
+                mk(4, JobKind::LanReceive, "backup-movil", "Pixel-de-Ana", 5 * gib, 5 * gib, JobState::Completed, 0, vec![("backup-movil/DCIM.tar", 5 * gib)]),
+                mk(5, JobKind::LanSend, "video-boda.mov", "TV-Salon", 9 * gib, 400 * mib, JobState::Failed, 0, vec![("video-boda.mov", 9 * gib)]),
+                mk(6, JobKind::Download, "swisstransfer-8f2a", "swisstransfer.com", 0, 0, JobState::Queued, 0, vec![]),
+                mk(7, JobKind::GlobalUpload, "cv-2026.pdf", "storage.to", 3 * mib, 1 * mib, JobState::Cancelled, 0, vec![("cv-2026.pdf", 3 * mib)]),
+            ],
+            devices: vec![
+                Device { name: "PC-Sala".into(), addresses: vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 45))], port: 47820, fingerprint: "56EC-D8F3-F330-F460".into(), version: crate::APP_VERSION.into(), requires_pin: false, online: true },
+                Device { name: "Pixel-de-Ana".into(), addresses: vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 90))], port: 47820, fingerprint: "1F0A-3C3C-98B1-E2D7".into(), version: crate::APP_VERSION.into(), requires_pin: true, online: true },
+                Device { name: "TV-Salon".into(), addresses: vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 12))], port: 47820, fingerprint: "77AD-10BE-4C40-0E91".into(), version: crate::APP_VERSION.into(), requires_pin: false, online: true },
+            ],
+            devices_scanned_ago: Some(4),
+            speed_down: 9 * mib,
+            speed_up: 48 * mib,
+            uptime: 3_725,
+            version: crate::APP_VERSION,
+        }
+    }
+}
+
 // ───────────────────────── requests ─────────────────────────
 
 #[derive(Deserialize, Debug, Clone, Default)]

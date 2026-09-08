@@ -126,6 +126,27 @@ jobs:
           set -euo pipefail
           cargo build --release --locked --features slint --target-dir target/slint
 
+      - name: Screenshots de la app (demo, sin red)
+        if: runner.os == 'Linux' && (github.event_name != 'workflow_dispatch' || inputs.slint)
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          BIN=target/slint/release/uni-share
+          [ -x "$BIN" ] || { echo "sin binario slint"; exit 0; }
+          mkdir -p shots
+          export UNI_SHARE_HOME="$RUNNER_TEMP/uni-share-shots"
+          RUN="$BIN"
+          if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+            if command -v xvfb-run >/dev/null 2>&1; then RUN="xvfb-run -a -s '-screen 0 1400x900x24' $BIN"; else echo "::warning::sin DISPLAY ni xvfb-run: no hay capturas"; exit 0; fi
+          fi
+          for d in "" new share settings; do
+            name="main"; args=""
+            [ -n "$d" ] && { name="$d"; args="--dialog $d"; }
+            timeout 60 bash -c "$RUN app --demo --screenshot shots/app-$name.png $args" || echo "::warning::captura $name falló"
+          done
+          ls -la shots || true
+
       - name: Package
         id: pkg
         shell: bash
@@ -177,7 +198,8 @@ jobs:
           files: |
             dist/uni-share-*
             dist/SHA256SUMS-*.txt
-          fail_on_unmatched_files: true
+            shots/*.png
+          fail_on_unmatched_files: false
           token: ${{ secrets.GITHUB_TOKEN }}
 
       # Las releases nightly reutilizan el tag: lo movemos al commit actual para

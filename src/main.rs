@@ -290,6 +290,15 @@ pub struct GuiArgs {
 pub struct AppArgs {
     /// Link, unishare: URI or .unishare file to open on start
     pub open: Option<String>,
+    /// Demo mode: realistic fake data, no network (design review)
+    #[arg(long)]
+    pub demo: bool,
+    /// Render once, save a PNG screenshot and quit
+    #[arg(long, value_name = "PNG")]
+    pub screenshot: Option<PathBuf>,
+    /// Dialog to open on start (new, share, settings, fs, confirm)
+    #[arg(long, value_name = "NAME")]
+    pub dialog: Option<String>,
 }
 
 #[derive(Args, Debug)]

@@ -1143,7 +1143,7 @@ impl Engine {
         self.update_job(job, |j| j.dest = Some(dest.display().to_string())).await;
         let e = self.clone();
         let task = tokio::spawn(async move {
-            let res: Result<String> = async {
+            let res: Result<(String, Vec<PathBuf>)> = async {
                 tokio::fs::create_dir_all(&dest).await?;
                 let s2 = sink.clone();
                 let progress: crate::download::http::ProgressFn = Arc::new(move |n| s2.add(n));
@@ -1190,7 +1190,7 @@ impl Engine {
                     .await;
                     e.history.finish(rid, if r.is_ok() { Status::Completed } else { Status::Failed }, r.as_ref().err().map(|x| format!("{x:#}")).as_deref())?;
                     let r = r?;
-                    Ok(format!("{} archivo(s) desde {} — BLAKE3 verificado: {}", r.saved.len(), r.source, r.verified))
+                    Ok((format!("{} archivo(s) desde {} — BLAKE3 verificado: {}", r.saved.len(), r.source, r.verified), r.saved))
                 } else if crate::download::swisstransfer::is_swisstransfer_url(&src) {
                     let mut c = crate::download::swisstransfer::SwissTransferClient::new()?;
                     let t = c.get_transfer(&src, pw.as_deref()).await?;
@@ -1200,7 +1200,8 @@ impl Engine {
                     let rid = e.history.start(Kind::Download, &title, t.total_size, &src, t.files.len() as u32)?;
                     let r = c.download_all(&t, &dest, req.force, progress, on_file).await;
                     e.history.finish(rid, if r.is_ok() { Status::Completed } else { Status::Failed }, r.as_ref().err().map(|x| format!("{x:#}")).as_deref())?;
-                    Ok(format!("{} archivo(s) descargados", r?.len()))
+                    let saved = r?;
+                    Ok((format!("{} archivo(s) descargados", saved.len()), saved))
                 } else if crate::global::storage_to::parse_share_url(&src).is_some() {
                     let d = crate::download::storage_to::StorageDownloader::new()?;
                     let info = d.info(&src).await?;
@@ -1213,7 +1214,8 @@ impl Engine {
                     let rid = e.history.start(Kind::Download, &title, info.total_size, &src, info.files.len() as u32)?;
                     let r = d.download_all(&info, &dest, req.force, progress, on_file).await;
                     e.history.finish(rid, if r.is_ok() { Status::Completed } else { Status::Failed }, r.as_ref().err().map(|x| format!("{x:#}")).as_deref())?;
-                    Ok(format!("{} archivo(s) descargados", r?.len()))
+                    let saved = r?;
+                    Ok((format!("{} archivo(s) descargados", saved.len()), saved))
                 } else if src.starts_with("http://") || src.starts_with("https://") {
                     let mut t = Ticket::new(src.rsplit('/').next().unwrap_or("download"));
                     t.sources.push(Source::Http { url: src.clone(), filename: None });
@@ -1221,18 +1223,20 @@ impl Engine {
                     let rid = e.history.start(Kind::Download, &t.name, 0, &src, 1)?;
                     let r = crate::download::ticket::download_ticket(&t, &dest, req.force, progress, on_file, |_, _| {}).await;
                     e.history.finish(rid, if r.is_ok() { Status::Completed } else { Status::Failed }, r.as_ref().err().map(|x| format!("{x:#}")).as_deref())?;
-                    Ok(format!("{} archivo(s) descargados", r?.saved.len()))
+                    let saved = r?.saved;
+                    Ok((format!("{} archivo(s) descargados", saved.len()), saved))
                 } else {
                     bail!("URL no soportada (storage.to, SwissTransfer, HTTP directo, unishare: o fichero .unishare)")
                 }
             }
             .await;
             match res {
-                Ok(m) => {
+                Ok((m, saved)) => {
                     if e.cfg.read().await.notifications {
                         crate::ui::notify("uni-share: descarga completada", &m);
                     }
-                    e.finish_job(job, JobState::Completed, m).await
+                    e.finish_job(job, JobState::Completed, m).await;
+                    e.scan_saved(Some(job), saved).await;
                 }
                 Err(err) => e.finish_job(job, JobState::Failed, format!("Error: {err:#}")).await,
             }

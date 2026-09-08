@@ -72,7 +72,7 @@ async fn download_storage_to(ctx: Ctx, a: DownloadArgs, dest: std::path::PathBuf
     let b2 = bar.clone();
     let b3 = bar.clone();
     let res = dl.download_all(&info, &dest, a.force, Arc::new(move |n| b2.inc(n)), move |f| b3.set_message(f.to_string())).await;
-    finish(&ctx, rid, bar, res, &dest)
+    finish(&ctx, rid, bar, res, &dest).await
 }
 
 async fn download_swisstransfer(ctx: Ctx, a: DownloadArgs, dest: std::path::PathBuf) -> Result<()> {
@@ -98,10 +98,10 @@ async fn download_swisstransfer(ctx: Ctx, a: DownloadArgs, dest: std::path::Path
     let b2 = bar.clone();
     let b3 = bar.clone();
     let res = st.download_all(&t, &dest, a.force, Arc::new(move |n| b2.inc(n)), move |f| b3.set_message(f.to_string())).await;
-    finish(&ctx, rid, bar, res, &dest)
+    finish(&ctx, rid, bar, res, &dest).await
 }
 
-fn finish(ctx: &Ctx, rid: i64, bar: indicatif::ProgressBar, res: Result<Vec<std::path::PathBuf>>, dest: &std::path::Path) -> Result<()> {
+async fn finish(ctx: &Ctx, rid: i64, bar: indicatif::ProgressBar, res: Result<Vec<std::path::PathBuf>>, dest: &std::path::Path) -> Result<()> {
     match res {
         Ok(paths) => {
             bar.finish_and_clear();
@@ -110,6 +110,7 @@ fn finish(ctx: &Ctx, rid: i64, bar: indicatif::ProgressBar, res: Result<Vec<std:
             if ctx.cfg.notifications {
                 ui::notify("uni-share: descarga completada", &format!("{} archivo(s) en {}", paths.len(), dest.display()));
             }
+            scan_saved(ctx, paths).await;
             Ok(())
         }
         Err(e) => {
@@ -118,4 +119,15 @@ fn finish(ctx: &Ctx, rid: i64, bar: indicatif::ProgressBar, res: Result<Vec<std:
             Err(e)
         }
     }
+}
+
+/// Local safety scan of freshly downloaded files (config `[scan]`).
+pub async fn scan_saved(ctx: &Ctx, paths: Vec<std::path::PathBuf>) {
+    if !ctx.cfg.scan.enabled || paths.is_empty() {
+        return;
+    }
+    let sp = ui::spinner(S, "Análisis de seguridad…");
+    let report = uni_share::scan::scan_paths_async(paths, ctx.cfg.scan.clone()).await;
+    sp.finish_and_clear();
+    ui::scan_report(S, &report);
 }

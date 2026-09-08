@@ -220,6 +220,7 @@ pub async fn download_from_ticket(ctx: Ctx, a: DownloadArgs, dest: PathBuf) -> R
             if ctx.cfg.notifications {
                 ui::notify("uni-share: descarga completada", &t.name);
             }
+            crate::commands_download::scan_saved(&ctx, r.saved).await;
             Ok(())
         }
         Err(e) => {

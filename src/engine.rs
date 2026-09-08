@@ -261,7 +261,7 @@ impl Snapshot {
                 mk(4, JobKind::LanReceive, "backup-movil", "Pixel-de-Ana", 5 * gib, 5 * gib, JobState::Completed, 0, vec![("backup-movil/DCIM.tar", 5 * gib)]),
                 mk(5, JobKind::LanSend, "video-boda.mov", "TV-Salon", 9 * gib, 400 * mib, JobState::Failed, 0, vec![("video-boda.mov", 9 * gib)]),
                 mk(6, JobKind::Download, "swisstransfer-8f2a", "swisstransfer.com", 0, 0, JobState::Queued, 0, vec![]),
-                mk(7, JobKind::GlobalUpload, "cv-2026.pdf", "storage.to", 3 * mib, 1 * mib, JobState::Cancelled, 0, vec![("cv-2026.pdf", 3 * mib)]),
+                mk(7, JobKind::GlobalUpload, "cv-2026.pdf", "storage.to", 3 * mib, mib, JobState::Cancelled, 0, vec![("cv-2026.pdf", 3 * mib)]),
             ],
             devices: vec![
                 Device { name: "PC-Sala".into(), addresses: vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 45))], port: 47820, fingerprint: "56EC-D8F3-F330-F460".into(), version: crate::APP_VERSION.into(), requires_pin: false, online: true },

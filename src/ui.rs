@@ -150,18 +150,6 @@ pub fn notify(summary: &str, body: &str) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn qr_renders() {
-        let q = qr_string("https://storage.to/abc123").unwrap();
-        assert!(q.lines().count() > 10);
-        assert!(q.contains('█'));
-    }
-}
-
 /// Print a scan report: one summary line (green/yellow/red) plus per-file detail.
 pub fn scan_report(section: &str, report: &crate::scan::Report) {
     use crate::scan::Severity;
@@ -175,5 +163,17 @@ pub fn scan_report(section: &str, report: &crate::scan::Report) {
     }
     if report.quarantined() > 0 {
         info(section, format!("{} archivo(s) renombrados a *.unishare-quarantine; revísalos antes de restaurarlos", report.quarantined()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qr_renders() {
+        let q = qr_string("https://storage.to/abc123").unwrap();
+        assert!(q.lines().count() > 10);
+        assert!(q.contains('█'));
     }
 }

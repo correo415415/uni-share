@@ -364,6 +364,9 @@ pub struct AppArgs {
     /// Initial window size, e.g. `1024x600` (layout review at small sizes)
     #[arg(long, value_name = "WxH")]
     pub size: Option<String>,
+    /// Show the drag & drop overlay (design review)
+    #[arg(long)]
+    pub drag_over: bool,
 }
 
 #[derive(Args, Debug)]

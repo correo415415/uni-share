@@ -145,7 +145,7 @@ pub fn app(ctx: Ctx, a: AppArgs) -> Result<()> {
             Some((w.parse::<u32>().context("--size: invalid width")?, h.parse::<u32>().context("--size: invalid height")?))
         }
     };
-    uni_share::native::run(cfg, cfg_path, history, uni_share::native::AppOptions { open: a.open, demo: a.demo, screenshot: a.screenshot, dialog: a.dialog, select, light: a.light, empty: a.empty, size })
+    uni_share::native::run(cfg, cfg_path, history, uni_share::native::AppOptions { open: a.open, demo: a.demo, screenshot: a.screenshot, dialog: a.dialog, select, light: a.light, empty: a.empty, size, drag_over: a.drag_over })
 }
 
 #[cfg(not(feature = "slint"))]

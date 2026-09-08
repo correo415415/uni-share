@@ -98,6 +98,7 @@ export component MainWindow inherits Window {
     in-out property <bool> details-collapsed: false;
     in-out property <length> details-h: 260px;
     in-out property <string> dialog: "";    // "" | new | share | settings | fs | confirm
+    in-out property <bool> drag-over: false; // a file is being dragged over the window (native DnD)
     in-out property <int> new-mode: 0;      // 0 lan 1 global 2 download 3 ticket
     in-out property <string> share-what: "link";
     in-out property <string> confirm-text;
@@ -496,6 +497,20 @@ export component MainWindow inherits Window {
                     Text { text: "LAN " + lan-addr; color: Theme.fg3; font-family: Theme.mono; font-size: Theme.fs-sm; vertical-alignment: center; }
                     Text { text: "↓ " + download-dir; color: Theme.fg3; font-size: Theme.fs-sm; vertical-alignment: center; overflow: elide; }
                 }
+            }
+        }
+    }
+
+    // ═══════════ drop overlay (native drag & drop) ═══════════
+    if root.drag-over: Rectangle {
+        background: Theme.bg.with-alpha(0.72);
+        Rectangle {
+            x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px;
+            border-radius: Theme.radius; border-width: 2px; border-color: Theme.accent; background: Theme.accent.with-alpha(0.06);
+            VerticalLayout { alignment: center; spacing: 8px;
+                Rectangle { height: 36px; Icon { name: "inbox"; tint: Theme.accent; size: 36px; stroke-width: 1.6px; x: (parent.width - self.width) / 2; } }
+                Text { text: "Suelta para enviar por LAN"; color: Theme.fg; font-size: 16px; font-weight: 600; horizontal-alignment: center; }
+                Text { text: "Un archivo o carpeta abre «Enviar LAN»; un ticket .unishare abre «Descargar» (o el emparejamiento)."; color: Theme.fg2; font-size: Theme.fs-sm; horizontal-alignment: center; }
             }
         }
     }

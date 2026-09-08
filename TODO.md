@@ -72,7 +72,8 @@ Decisión: Slint (Rust puro, renderizado propio con `winit`+`femtovg`/`skia`, si
 - [x] Ofertas LAN entrantes: banner con árbol de archivos, huella del emisor, aceptar (elegir carpeta) / rechazar; notificación del sistema.
 - [x] Diálogos: Nueva transferencia (4 modos) con selector de archivos nativo (`rfd`) y vista previa; Compartir (QR renderizado en la propia ventana desde `qrcode`, copiar, guardar `.unishare`, guardar QR); Ajustes; confirmaciones.
 - [x] Puente engine↔UI: tokio en hilo aparte, snapshot cada 500 ms → `VecModel` de Slint vía `invoke_from_event_loop`; acciones de la UI → canal mpsc hacia el engine.
-- [ ] Arrastrar y soltar (rutas y `.unishare`), bandeja del sistema (`tray-icon`) con "minimizar a bandeja" y menú rápido.
+- [x] Arrastrar y soltar nativo: eventos winit `HoveredFile`/`DroppedFile` vía `WinitWindowAccessor` (feature `unstable-winit-030`; Slint 1.13 no expone drops externos). Overlay «Suelta para enviar por LAN» mientras se arrastra; un archivo/carpeta abre «Enviar LAN» con la ruta; varios del mismo directorio → la carpeta; un `.unishare` abre «Descargar» (o el emparejamiento si es ticket LAN). `app --demo --drag-over` + captura `drop` en CI.
+- [ ] Bandeja del sistema con "minimizar a bandeja" y menú rápido (`SystemTrayIcon` llega en Slint 1.17; mientras, `tray-icon` + `muda`).
 - [x] Asociación de `.unishare` y `unishare:` al binario (Linux `.desktop` + MIME, Windows registro) → abre la GUI con el ticket cargado (los de emparejamiento abren «Enviar por LAN»). Pendiente macOS Info.plist (requiere bundle).
 - [ ] Empaquetado: AppImage/.deb, .msi, .dmg (cargo-dist / cargo-bundle); iconos de la app.
 

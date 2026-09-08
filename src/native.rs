@@ -121,6 +121,8 @@ pub struct AppOptions {
     pub empty: bool,
     /// Initial window size in logical pixels.
     pub size: Option<(u32, u32)>,
+    /// Show the drag & drop overlay (design review).
+    pub drag_over: bool,
 }
 
 /// Run the native window. Blocks until the window is closed.
@@ -222,20 +224,11 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
         // Launched by the OS for a `.unishare` file or a `unishare:` link (see
         // `associate`) or with a plain URL: pre-fill the download dialog and
         // show the ticket preview straight away.
-        let open = open.strip_prefix("file://").map(|p| percent_decode(p)).unwrap_or(open);
-        let is_pairing = Engine::parse_ticket(&open).map(|t| t.is_lan()).unwrap_or(false);
-        win.set_preview_text(preview_ticket(&open).into());
-        if is_pairing {
-            // A LAN pairing ticket is a *target*, not a download: open "Enviar por LAN"
-            // with the ticket as manual address.
-            win.set_new_mode(0);
-            win.set_f_device(-1);
-            win.set_f_target(open.into());
-        } else {
-            win.set_new_mode(2);
-            win.set_f_url(open.into());
-        }
-        win.set_dialog("new".into());
+        open_ticket_or_url(&win, open);
+    }
+    install_drop_handler(&win, &ctx);
+    if opts.drag_over {
+        win.set_drag_over(true);
     }
     if let Some((_, tab)) = opts.select {
         win.set_tab(tab);
@@ -650,6 +643,91 @@ fn qr_image(data: &str) -> slint::Image {
         }
     }
     slint::Image::from_rgb8(buf)
+}
+
+/// Pre-fill the "new transfer" dialog for a `.unishare` ticket, a `unishare:` URI or a
+/// plain download URL (OS file association, `--open`, or a drop on the window).
+fn open_ticket_or_url(win: &MainWindow, open: String) {
+    let open = open.strip_prefix("file://").map(|p| percent_decode(p)).unwrap_or(open);
+    let is_pairing = Engine::parse_ticket(&open).map(|t| t.is_lan()).unwrap_or(false);
+    win.set_preview_text(preview_ticket(&open).into());
+    if is_pairing {
+        // A LAN pairing ticket is a *target*, not a download: open "Enviar por LAN"
+        // with the ticket as manual address.
+        win.set_new_mode(0);
+        win.set_f_device(-1);
+        win.set_f_target(open.into());
+    } else {
+        win.set_new_mode(2);
+        win.set_f_url(open.into());
+    }
+    win.set_dialog("new".into());
+}
+
+/// Native drag & drop. Slint 1.13 has no external-file drop event, so we listen to the
+/// underlying winit window: `HoveredFile` lights the drop overlay, `DroppedFile` opens
+/// the "new transfer" dialog — a `.unishare` ticket goes to Descargar/Enviar LAN (pairing),
+/// anything else becomes the path of a new LAN send (several files: their common folder).
+fn install_drop_handler(win: &MainWindow, ctx: &UiCtx) {
+    use slint::winit_030::{winit::event::WindowEvent, EventResult, WinitWindowAccessor};
+    let w = win.as_weak();
+    let ctx = ctx.clone();
+    // winit delivers one `DroppedFile` per path; they are collected here and flushed a few
+    // ms later so a multi-file drop opens a single dialog.
+    let batch: Rc<std::cell::RefCell<Vec<PathBuf>>> = Rc::default();
+    win.window().on_winit_window_event(move |_, ev| {
+        let Some(win) = w.upgrade() else { return EventResult::Propagate };
+        match ev {
+            WindowEvent::HoveredFile(_) => win.set_drag_over(true),
+            WindowEvent::HoveredFileCancelled => {
+                batch.borrow_mut().clear();
+                win.set_drag_over(false);
+            }
+            WindowEvent::DroppedFile(p) => {
+                let mut b = batch.borrow_mut();
+                b.push(p.clone());
+                if b.len() == 1 {
+                    let w = win.as_weak();
+                    let ctx = ctx.clone();
+                    let batch = batch.clone();
+                    slint::Timer::single_shot(Duration::from_millis(60), move || {
+                        let paths = std::mem::take(&mut *batch.borrow_mut());
+                        let Some(win) = w.upgrade() else { return };
+                        win.set_drag_over(false);
+                        handle_drop(&win, &ctx, paths);
+                    });
+                }
+            }
+            _ => {}
+        }
+        EventResult::Propagate
+    });
+}
+
+fn handle_drop(win: &MainWindow, ctx: &UiCtx, paths: Vec<PathBuf>) {
+    let Some(first) = paths.first() else { return };
+    let is_ticket = |p: &PathBuf| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("unishare"));
+    if paths.len() == 1 && is_ticket(first) {
+        open_ticket_or_url(win, first.display().to_string());
+        ctx.toast("Ticket cargado", "info");
+        return;
+    }
+    let path = if paths.len() == 1 {
+        first.clone()
+    } else {
+        // Several entries: send their common parent folder (the LAN sender walks directories).
+        let parent = first.parent().map(PathBuf::from).unwrap_or_else(|| first.clone());
+        if paths.iter().all(|p| p.parent().map(PathBuf::from).as_ref() == Some(&parent)) {
+            ctx.toast(format!("{} elementos: se enviará la carpeta «{}»", paths.len(), parent.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()), "info");
+            parent
+        } else {
+            ctx.toast("Varios orígenes: se usa el primero", "warn");
+            first.clone()
+        }
+    };
+    win.set_f_path(path.display().to_string().into());
+    win.set_new_mode(0);
+    win.set_dialog("new".into());
 }
 
 fn nonempty(s: SharedString) -> Option<String> {

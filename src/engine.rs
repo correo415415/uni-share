@@ -440,6 +440,8 @@ pub struct Engine {
     visitor_token: Mutex<Option<String>>,
     /// Pending user-facing notices (scan results…) drained by the GUIs as toasts.
     notices: Mutex<Vec<Notice>>,
+    /// Woken on every state mutation (jobs, offers, notices, devices) → SSE / UI refresh.
+    changed: tokio::sync::Notify,
     /// ClamAV detection result at startup (`clamav (clamdscan 1.4.1)`).
     clamav_label: Option<String>,
     devices: RwLock<(Vec<Device>, Option<Instant>)>,
@@ -477,6 +479,7 @@ impl Engine {
             pending: RwLock::new(HashMap::new()),
             receiving: RwLock::new(HashMap::new()),
             jobs: RwLock::new(Vec::new()),
+            changed: tokio::sync::Notify::new(),
             handles: RwLock::new(HashMap::new()),
             next_job: AtomicU64::new(0),
             visitor_token: Mutex::new(cfg.global.storage_to_visitor_token.clone()),
@@ -517,6 +520,7 @@ impl Engine {
                     crate::ui::notify("uni-share: solicitud entrante", &format!("{} quiere enviarte {}", manifest.sender, manifest.name));
                 }
                 e.pending.write().await.insert(transfer_id, (po, decision));
+                e.touch();
             }
         });
 
@@ -607,6 +611,7 @@ impl Engine {
             jobs.insert(0, job);
             jobs.truncate(300);
         }
+        self.touch();
         self.handles.write().await.insert(id, JobHandle { counter: sink.counter.clone(), current_file: sink.current_file.clone(), abort: None });
         (id, sink)
     }
@@ -625,6 +630,17 @@ impl Engine {
         if let Some(j) = self.jobs.write().await.iter_mut().find(|j| j.id == id) {
             f(j);
         }
+        self.touch();
+    }
+
+    /// Signal listeners (SSE clients, native UI) that the snapshot changed.
+    pub fn touch(&self) {
+        self.changed.notify_waiters();
+    }
+
+    /// Resolves on the next state change (or after `max`, whichever comes first).
+    pub async fn changed(&self, max: std::time::Duration) {
+        let _ = tokio::time::timeout(max, self.changed.notified()).await;
     }
 
     pub async fn log(&self, id: u64, line: impl Into<String>) {
@@ -646,11 +662,14 @@ impl Engine {
         if n.len() > 20 {
             n.remove(0);
         }
+        drop(n);
+        self.touch();
     }
 
     /// Drop notices the UI has already shown (`up_to` inclusive).
     pub async fn ack_notices(&self, up_to: u64) {
         self.notices.lock().await.retain(|n| n.id > up_to);
+        self.touch();
     }
 
     /// Run the local safety scanner on freshly written paths; results go to the
@@ -816,6 +835,7 @@ impl Engine {
         if let Some(pos) = jobs.iter().position(|j| j.id == id && !j.is_active()) {
             jobs.remove(pos);
             self.handles.write().await.remove(&id);
+            self.touch();
             true
         } else {
             false
@@ -871,6 +891,7 @@ impl Engine {
 
     pub async fn reject_offer(&self, transfer_id: &str) -> Result<()> {
         let (p, tx) = self.pending.write().await.remove(transfer_id).context("offer not found")?;
+        self.touch();
         let _ = tx.send(Decision::Reject { reason: "rechazada por el usuario".into() });
         if let Ok(rid) = self.history.start(Kind::LanReceive, &p.name, p.total_size, &p.sender, p.files.len() as u32) {
             let _ = self.history.finish(rid, Status::Rejected, None);
@@ -883,6 +904,7 @@ impl Engine {
     pub async fn refresh_devices(&self) -> Vec<Device> {
         let list = discover(Duration::from_millis(1800), Some(&self.identity.fingerprint)).await.unwrap_or_default();
         *self.devices.write().await = (list.clone(), Some(Instant::now()));
+        self.touch();
         list
     }
 

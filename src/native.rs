@@ -158,10 +158,16 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
                     }
                 };
                 let _ = etx2.send(Evt::Config(engine.config().await));
+                // Push a snapshot on every engine change (coalesced) and at least twice a second
+                // while something is running, so state changes show up immediately.
                 let mut tick = tokio::time::interval(Duration::from_millis(500));
                 loop {
                     tokio::select! {
                         _ = tick.tick() => { let _ = etx2.send(Evt::Snapshot(engine.snapshot().await)); }
+                        _ = engine.changed(Duration::from_secs(3600)) => {
+                            tokio::time::sleep(Duration::from_millis(40)).await;
+                            let _ = etx2.send(Evt::Snapshot(engine.snapshot().await));
+                        }
                         cmd = rx.recv() => {
                             let Some(cmd) = cmd else { break };
                             handle_cmd(&engine, cmd, &etx2).await;

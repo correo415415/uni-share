@@ -141,24 +141,33 @@ function renderStatus() {
 }
 function render() { renderSidebar(); renderOffers(); renderTable(); renderDetails(); renderStatus(); }
 
-let lastPending = 0, lastStates = new Map();
-async function poll() {
-  try {
-    const d = await api('/api/state'); S.online = true;
-    for (const j of d.jobs) {
-      const prev = lastStates.get(j.id);
-      if (prev && prev !== j.state && (j.state === 'completed' || j.state === 'failed')) { toast(`${KIND[j.kind]} «${j.name}»: ${STATE[j.state]}${j.state === 'failed' ? ' — ' + j.message : ''}`, j.state === 'completed' ? 'ok' : 'err', 6000); if (j.state === 'completed' && j.link) { S.sel = j.id; S.tab = 'share'; } }
-      lastStates.set(j.id, j.state);
-    }
-    if (d.pending.length > lastPending) toast('Solicitud de transferencia entrante', 'info');
-    for (const n of d.notices || []) { if (n.id > lastNotice) { lastNotice = n.id; sessionStorage.lastNotice = n.id; toast(n.text, n.kind === 'warn' ? 'warn' : n.kind, n.kind === 'err' ? 12000 : 8000); } }
-    if ((d.notices || []).length && d.notices[d.notices.length - 1].id <= lastNotice) api('/api/notices/ack', { method: 'POST', body: { up_to: lastNotice } }).catch(() => {});
-    lastPending = d.pending.length; S.data = d;
-    if (S.sel && !d.jobs.some(j => j.id === S.sel)) S.sel = null;
-  } catch { S.online = false; }
+let lastPending = 0, lastStates = new Map(), es = null, pollTimer = null;
+function applyState(d) {
+  S.online = true;
+  for (const j of d.jobs) {
+    const prev = lastStates.get(j.id);
+    if (prev && prev !== j.state && (j.state === 'completed' || j.state === 'failed')) { toast(`${KIND[j.kind]} «${j.name}»: ${STATE[j.state]}${j.state === 'failed' ? ' — ' + j.message : ''}`, j.state === 'completed' ? 'ok' : 'err', 6000); if (j.state === 'completed' && j.link) { S.sel = j.id; S.tab = 'share'; } }
+    lastStates.set(j.id, j.state);
+  }
+  if (d.pending.length > lastPending) toast('Solicitud de transferencia entrante', 'info');
+  for (const n of d.notices || []) { if (n.id > lastNotice) { lastNotice = n.id; sessionStorage.lastNotice = n.id; toast(n.text, n.kind === 'warn' ? 'warn' : n.kind, n.kind === 'err' ? 12000 : 8000); } }
+  if ((d.notices || []).length && d.notices[d.notices.length - 1].id <= lastNotice) api('/api/notices/ack', { method: 'POST', body: { up_to: lastNotice } }).catch(() => {});
+  lastPending = d.pending.length; S.data = d;
+  if (S.sel && !d.jobs.some(j => j.id === S.sel)) S.sel = null;
   render();
-  const fast = S.data.jobs?.some(j => j.state === 'running') || S.data.pending?.length;
-  setTimeout(poll, document.hidden ? 4000 : fast ? 700 : 1800);
+}
+// Live updates over SSE (/api/events); polling is only the fallback when the stream drops.
+async function poll() {
+  clearTimeout(pollTimer);
+  try { applyState(await api('/api/state')); } catch { S.online = false; render(); }
+  if (!es) { const fast = S.data.jobs?.some(j => j.state === 'running') || S.data.pending?.length; pollTimer = setTimeout(poll, document.hidden ? 4000 : fast ? 700 : 1800); }
+}
+function connectEvents() {
+  if (!window.EventSource) return poll();
+  es = new EventSource('/api/events');
+  es.addEventListener('state', (ev) => { try { applyState(JSON.parse(ev.data)); } catch { } });
+  es.onopen = () => { clearTimeout(pollTimer); };
+  es.onerror = () => { es.close(); es = null; S.online = false; render(); pollTimer = setTimeout(() => { poll(); setTimeout(connectEvents, 4000); }, 1500); };
 }
 
 function modal(html, cls = '') {
@@ -330,6 +339,6 @@ function init() {
     else if (k === 'arrowdown' || k === 'arrowup') { const l = visibleJobs(); if (!l.length) return; const i = l.findIndex(j => j.id === S.sel); S.sel = l[k === 'arrowdown' ? Math.min(l.length - 1, i + 1) : Math.max(0, i - 1)].id; render(); e.preventDefault(); }
     else if (k === 'escape') { S.sel = null; render(); }
   });
-  poll(); loadHistory(); api('/api/config').then(d => { S.cfg = d.config; }).catch(() => {});
+  connectEvents(); loadHistory(); api('/api/config').then(d => { S.cfg = d.config; }).catch(() => {});
 }
 document.addEventListener('DOMContentLoaded', init);

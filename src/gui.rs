@@ -58,6 +58,7 @@ pub fn router(engine: Arc<Engine>) -> Router {
         .route("/app.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], APP_CSS) }))
         .route("/app.js", get(|| async { ([(header::CONTENT_TYPE, "application/javascript; charset=utf-8")], APP_JS) }))
         .route("/api/state", get(api_state))
+        .route("/api/events", get(api_events))
         .route("/api/devices", get(api_devices))
         .route("/api/history", get(api_history).delete(api_history_clear))
         .route("/api/offers/{id}/accept", post(api_accept))
@@ -99,6 +100,37 @@ fn res_json<T: serde::Serialize>(r: Result<T>) -> Response {
 async fn api_state(State(e): St) -> Response {
     Json(e.snapshot().await).into_response()
 }
+/// Server-Sent Events: a full snapshot (same JSON as `/api/state`) whenever the engine
+/// state changes, at most every ~300 ms, plus periodic frames while transfers are running
+/// (progress counters are lock-free and do not trigger change notifications). A comment
+/// frame is sent every 15 s as a keep-alive.
+async fn api_events(State(e): St) -> Response {
+    let stream = async_stream(e);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .header(header::CACHE_CONTROL, "no-cache")
+        .header("X-Accel-Buffering", "no")
+        .body(Body::from_stream(stream))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+fn async_stream(e: Arc<Engine>) -> impl futures::Stream<Item = Result<String, std::io::Error>> {
+    futures::stream::unfold((e, 0u32), |(e, n)| async move {
+        if n > 0 {
+            let snap = e.snapshot().await;
+            let active = snap.jobs.iter().any(|j| j.is_active()) || !snap.pending.is_empty();
+            // Wait for a change, but not longer than the refresh cadence.
+            let max = if active { std::time::Duration::from_millis(700) } else { std::time::Duration::from_secs(15) };
+            e.changed(max).await;
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await; // coalesce bursts
+        }
+        let snap = e.snapshot().await;
+        let json = serde_json::to_string(&snap).unwrap_or_else(|_| "{}".into());
+        Some((Ok(format!("event: state\ndata: {json}\n\n")), (e, n.wrapping_add(1))))
+    })
+}
+
 async fn api_devices(State(e): St) -> Response {
     Json(e.refresh_devices().await).into_response()
 }

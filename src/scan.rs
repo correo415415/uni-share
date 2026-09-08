@@ -1291,7 +1291,7 @@ mod tests {
         assert!(bad.exists() && bad2.exists());
 
         let cfg = ScanConfig { clamav: false, on_danger: DangerAction::Quarantine, ..Default::default() };
-        let rep = scan_paths(&[bad.clone()], &cfg);
+        let rep = scan_paths(std::slice::from_ref(&bad), &cfg);
         assert_eq!(rep.quarantined(), 1);
         assert!(!bad.exists());
         let q = rep.files[0].quarantined.clone().unwrap();
@@ -1304,7 +1304,7 @@ mod tests {
         assert!(q2.to_string_lossy().contains(".1.unishare-quarantine"));
 
         let cfg = ScanConfig { clamav: false, on_danger: DangerAction::Delete, ..Default::default() };
-        scan_paths(&[bad2.clone()], &cfg);
+        scan_paths(std::slice::from_ref(&bad2), &cfg);
         assert!(!bad2.exists());
 
         // clean report
@@ -1334,7 +1334,7 @@ mod tests {
 
         // pointing ClamAV to a non-existent binary → engine reports "no instalado", nothing dangerous
         let cfg = ScanConfig { clamav: true, clamav_path: Some(d.path().join("nope/clamscan")), on_danger: DangerAction::Report, ..Default::default() };
-        let rep = scan_paths(&[p.clone()], &cfg);
+        let rep = scan_paths(std::slice::from_ref(&p), &cfg);
         assert!(rep.engines.iter().any(|e| e.contains("no instalado")));
         assert!(rep.is_clean());
 

@@ -49,7 +49,7 @@ function androidEvent(kind, payload) {
   if (kind === 'exported') return toast(`«${payload.name}»: ${payload.files} archivo(s) copiados a ${payload.folder}`, 'ok', 6000);
 }
 function exportToSaf(j) { if (!mobile || !j.saved || !j.saved.length) return; try { Android.exportJob(j.id, JSON.stringify(j.saved), j.name); } catch { /* bridge unavailable */ } }
-window.openScanned = openScanned; window.androidEvent = androidEvent; window.openNew = (mode, preset) => openNew(mode, preset || {});
+// Classic script: top-level function declarations (openScanned, androidEvent, openNew) are already window globals for the Kotlin shell.
 
 // ───────────────────────── state & API ─────────────────────────
 const S = { data: null, cfg: null, online: false, tab: localStorage.mtab || 'home', stack: [], filter: 'all', q: '', history: null, lastStates: new Map(), lastPending: new Set(), lastNotice: 0, scanning: false };
@@ -465,7 +465,7 @@ function viewHistory() {
   return root;
 }
 function wireHistory(root) {
-  $('#hist-clear', root).onclick = async () => { if (await confirmSheet('Se borra el registro de transferencias. Los archivos no se tocan.', 'Borrar', true)) { await api('/api/history', { method: 'DELETE' }).catch(e => toast(e.message, 'err')); S.history = null; render(); } };
+  const hc = $('#hist-clear', root); if (hc) hc.onclick = async () => { if (await confirmSheet('Se borra el registro de transferencias. Los archivos no se tocan.', 'Borrar', true)) { await api('/api/history', { method: 'DELETE' }).catch(e => toast(e.message, 'err')); S.history = null; render(); } };
   $$('[data-hist]', root).forEach(b => b.onclick = () => { const r = S.history.find(x => x.id === b.dataset.hist || String(x.id) === b.dataset.hist); if (!r) return; const items = [];
     if (r.peer_or_link && /^https?:|^unishare:/.test(r.peer_or_link)) { items.push({ icon: 'copy', label: 'Copiar link', sub: r.peer_or_link, fn: () => copy(r.peer_or_link, 'Link copiado') }); items.push({ icon: 'dl', label: 'Descargar de nuevo', fn: () => openNew('download', { url: r.peer_or_link }) }); }
     if (r.error) items.push({ icon: 'info', label: 'Error', sub: r.error, fn: () => copy(r.error, 'Error copiado') });
@@ -482,3 +482,198 @@ function viewAbout() {
     h('a', { class: 'row', href: '/', target: mobile ? '_self' : '_blank' }, h('span', { class: 'ic', html: ico('globe') }), h('span', { class: 'body' }, h('div', { class: 'ttl' }, 'Interfaz de escritorio'), h('div', { class: 'sub' }, 'La misma app con la vista completa')), h('span', { class: 'chev', html: ico('chev') }))));
   return root;
 }
+
+// ───────────────────────── flows (bottom sheets) ─────────────────────────
+function bigQr(data, caption) {
+  if (!data) return;
+  sheet({ title: caption || 'Código QR', cls: 'full', body: h('div', { style: 'display:flex;flex-direction:column;align-items:center;gap:14px;padding-top:8px' },
+    h('div', { class: 'qrbox big' }, h('img', { src: '/api/qr?data=' + encodeURIComponent(data), alt: 'QR' })),
+    h('div', { class: 'linkbox', style: 'width:100%' }, h('span', { class: 't' }, data), h('button', { class: 'ib', 'aria-label': 'Copiar', html: ico('copy'), onclick: () => copy(data) })),
+    h('div', { class: 'btns', style: 'width:100%;margin:0' }, h('button', { class: 'btn primary', html: ico('share') + 'Compartir', onclick: () => shareText(data, caption) }))) });
+}
+function openShareSheet(j) {
+  const items = []; if (j.link) items.push(['link', 'Link', j.link]); if (j.ticket_uri) items.push(['ticket', 'Ticket', j.ticket_uri]);
+  if (!items.length) return toast('Esta transferencia no tiene nada que compartir', 'info');
+  let cur = items[0][0];
+  const body = h('div');
+  const draw = () => {
+    const it = items.find(x => x[0] === cur); body.innerHTML = '';
+    if (items.length > 1) body.append(h('div', { class: 'seg' }, items.map(x => h('button', { class: x[0] === cur ? 'active' : '', onclick: () => { cur = x[0]; draw(); }, html: ico(x[0]) + x[1] }))));
+    body.append(h('div', { class: 'qrbox', onclick: () => bigQr(it[2], j.name) }, h('img', { src: '/api/qr?data=' + encodeURIComponent(it[2]), alt: 'QR' })));
+    body.append(h('div', { class: 'linkbox' }, h('span', { class: 't' }, it[2]), h('button', { class: 'ib', 'aria-label': 'Copiar', html: ico('copy'), onclick: () => copy(it[2], `${it[1]} copiado`) })));
+    if (cur === 'ticket') body.append(h('p', { class: 'hint', style: 'margin:0 0 10px' }, 'El ticket incluye nombre, tamaño, hash de cada archivo y la firma de este dispositivo; quien lo abra podrá verificar que nada ha cambiado.'));
+    const btns = h('div', { class: 'btns', style: 'margin:0' });
+    btns.append(h('button', { class: 'btn', html: ico('copy') + 'Copiar', onclick: () => copy(it[2], `${it[1]} copiado`) }));
+    if (cur === 'ticket' && j.ticket_path && mobile) btns.append(h('button', { class: 'btn primary', html: ico('share') + 'Enviar .unishare', onclick: () => Android.shareFile(j.ticket_path, `${j.name}.unishare`) }));
+    else if (cur === 'ticket' && !mobile) btns.append(h('a', { class: 'btn primary', href: `/api/ticket/file?uri=${encodeURIComponent(it[2])}&name=${encodeURIComponent(j.name)}`, download: `${j.name}.unishare`, html: ico('dl') + 'Guardar .unishare' }));
+    else btns.append(h('button', { class: 'btn primary', html: ico('share') + 'Compartir', onclick: () => shareText(it[2], j.name) }));
+    body.append(btns);
+  };
+  draw();
+  sheet({ title: `Compartir «${j.name}»`, body });
+}
+
+/** New transfer sheet: lan | global | download | ticket. preset: {path, device, target, url, links} */
+function openNew(mode = 'lan', preset = {}) {
+  const d = S.data || { devices: [] }; const c = S.cfg || { global: {} };
+  const st = { mode, path: preset.path || '', device: preset.device || '', target: preset.target || '', url: preset.url || '', dest: '', links: preset.links || '' };
+  const body = h('div'); const err = h('span', { class: 'err' }); const okBtn = h('button', { class: 'btn primary' });
+  const ov = sheet({ title: 'Nueva transferencia', cls: 'full', body, foot: h('div', { style: 'display:flex;gap:10px;align-items:center;width:100%' }, err, okBtn) });
+  const MODES = [['lan', 'send', 'LAN'], ['global', 'globe', 'Link'], ['download', 'dl', 'Descargar'], ['ticket', 'ticket', 'Ticket']];
+  const field = (label, ctl, sub) => h('div', { class: 'field' }, h('label', {}, label), ctl, sub ? h('div', { class: 'sub' }, sub) : null);
+  const picked = () => h('button', { class: `picked${st.path ? '' : ' none'}`, id: 'f-pick', html: ico(st.path ? 'file' : 'folder') + `<span class="t">${esc(st.path || 'Elegir archivo o carpeta…')}</span>` + (st.path ? ico('x') : '') });
+  const toggle = (id, label, sub, on) => h('button', { class: 'sw', 'data-tg': id, role: 'switch', 'aria-checked': on ? 'true' : 'false', style: 'padding:8px 0' }, h('span', { class: 'body' }, h('div', { class: 'ttl' }, label), sub ? h('div', { class: 'sub' }, sub) : null), h('span', { class: `tg${on ? ' on' : ''}` }));
+  const tg = { ticket: true, compress: !!c.compress_folders, force: false };
+  const draw = () => {
+    body.innerHTML = ''; err.textContent = '';
+    body.append(h('div', { class: 'seg' }, MODES.map(([m, i, l]) => h('button', { class: st.mode === m ? 'active' : '', onclick: () => { st.mode = m; draw(); }, html: ico(i) + l }))));
+    if (st.mode === 'lan') {
+      body.append(field('Qué enviar', picked()));
+      const devs = d.devices || [];
+      body.append(h('label', { class: 'hint', style: 'display:block;margin-bottom:6px;font-size:var(--fs-sm);color:var(--fg-2);font-weight:500' }, 'A quién'));
+      body.append(devs.length ? h('div', { class: 'devgrid' }, devs.map(dv => h('button', { class: `devc${st.device === dv.name ? ' active' : ''}`, 'data-d': dv.name, onclick: () => { st.device = dv.name; st.target = ''; draw(); } }, h('b', {}, dv.name), h('code', {}, h('span', { class: `dot${dv.requires_pin ? ' pin' : ''}` }), `${dv.addresses[0]}:${dv.port}`))))
+        : h('div', { class: 'alert', style: 'margin-bottom:10px', html: ico('info') + '<span>No se ve ningún dispositivo. Escribe su IP o pega su ticket de emparejamiento.</span>' }));
+      body.append(field('O dirección / ticket', h('div', { class: 'with-btn' }, h('input', { id: 'f-target', value: st.target, placeholder: '192.168.1.20:7777 o unishare:…', autocomplete: 'off', oninput: e => { st.target = e.target.value; if (st.target) st.device = ''; } }), mobile ? h('button', { class: 'btn', id: 'f-qr', 'aria-label': 'Escanear', html: ico('qr') }) : null)));
+      body.append(h('div', { class: 'grid2' }, field('PIN (si lo pide)', h('input', { id: 'f-pin', type: 'password', inputmode: 'numeric', placeholder: '····' })), h('div')));
+      body.append(toggle('compress', 'Comprimir carpetas', 'Un solo archivo en vez de muchos', tg.compress));
+      okBtn.innerHTML = ico('send') + 'Enviar';
+    } else if (st.mode === 'global') {
+      body.append(field('Qué subir', picked()));
+      body.append(h('div', { class: 'grid2' }, field('Contraseña', h('input', { id: 'f-pw', type: 'password', placeholder: 'opcional' })), field('Caduca en', h('input', { id: 'f-exp', type: 'number', min: 1, value: c.global.expiry_days || 7 }), 'días')));
+      body.append(field('Mensaje', h('input', { id: 'f-msg', placeholder: 'opcional · se incluye en el ticket' })));
+      body.append(toggle('ticket', 'Crear ticket .unishare', 'Firmado, con hashes para verificar', tg.ticket));
+      body.append(toggle('compress', 'Comprimir carpetas', null, tg.compress));
+      body.append(h('p', { class: 'hint', style: 'margin:10px 0 0' }, `Servicio: ${c.global.backend || '—'}`));
+      okBtn.innerHTML = ico('ul') + 'Subir';
+    } else if (st.mode === 'download') {
+      const prev = h('div', { id: 'f-prev' });
+      body.append(field('Link o ticket', h('div', { class: 'with-btn' }, h('textarea', { id: 'f-url', placeholder: 'https://… o unishare:…', style: 'min-height:72px', oninput: e => { st.url = e.target.value; previewTicket(st.url, prev); } }, st.url), mobile ? h('button', { class: 'btn', id: 'f-qr', 'aria-label': 'Escanear', html: ico('qr') }) : null)));
+      body.append(prev);
+      body.append(field('Contraseña', h('input', { id: 'f-pw', type: 'password', placeholder: 'si el link la tiene' })));
+      if (!mobile) body.append(field('Guardar en', h('button', { class: `picked${st.dest ? '' : ' none'}`, id: 'f-dest', html: ico('folder') + `<span class="t">${esc(st.dest || String(d.download_dir || 'carpeta de descargas'))}</span>` })));
+      body.append(toggle('force', 'Descargar aunque el análisis avise', 'Solo si confías en el origen', tg.force));
+      if (st.url) previewTicket(st.url, prev);
+      okBtn.innerHTML = ico('dl') + 'Descargar';
+    } else {
+      body.append(h('div', { class: 'alert', html: ico('ticket') + '<span>Un ticket agrupa uno o varios links ya existentes en un archivo .unishare firmado por este dispositivo.</span>' }));
+      body.append(field('Links (uno por línea)', h('textarea', { id: 'f-links', placeholder: 'https://…\nhttps://…', oninput: e => { st.links = e.target.value; } }, st.links)));
+      body.append(h('div', { class: 'grid2' }, field('Nombre', h('input', { id: 'f-name', placeholder: 'opcional' })), field('Contraseña', h('input', { id: 'f-tpw', type: 'password', placeholder: 'de los links' }))));
+      body.append(field('Mensaje', h('input', { id: 'f-tmsg', placeholder: 'opcional' })));
+      okBtn.innerHTML = ico('ticket') + 'Crear ticket';
+    }
+    const pk = $('#f-pick', body); if (pk) pk.onclick = async () => { if (st.path) { st.path = ''; return draw(); } const p = await pickPath({ dirsOnly: false, start: st.path }); if (p) { st.path = p; draw(); } };
+    const ds = $('#f-dest', body); if (ds) ds.onclick = async () => { const p = await pickPath({ dirsOnly: true, start: st.dest || String(d.download_dir || ''), title: 'Guardar en' }); if (p) { st.dest = p; draw(); } };
+    const qr = $('#f-qr', body); if (qr) qr.onclick = () => { ov.close(); Android.scanQr(); };
+    $$('[data-tg]', body).forEach(b => b.onclick = () => { tg[b.dataset.tg] = !tg[b.dataset.tg]; b.classList.toggle('on'); b.querySelector('.tg').classList.toggle('on', tg[b.dataset.tg]); b.setAttribute('aria-checked', tg[b.dataset.tg]); });
+  };
+  draw();
+  okBtn.onclick = async () => {
+    err.textContent = ''; okBtn.disabled = true;
+    try {
+      let r;
+      if (st.mode === 'lan') {
+        if (!st.path) throw new Error('Elige qué enviar');
+        let target = st.target.trim(), fingerprint = null, port = null;
+        if (!target) { const dv = (d.devices || []).find(x => x.name === st.device); if (!dv) throw new Error('Elige un dispositivo o escribe su dirección'); target = String(dv.addresses[0]); port = dv.port; fingerprint = dv.fingerprint; }
+        r = await api('/api/send-lan', { method: 'POST', body: { path: st.path, target, fingerprint, port, pin: $('#f-pin', body).value || null, compress: tg.compress } });
+      } else if (st.mode === 'global') {
+        if (!st.path) throw new Error('Elige qué subir');
+        r = await api('/api/send-global', { method: 'POST', body: { path: st.path, password: $('#f-pw', body).value || null, expiry_days: Number($('#f-exp', body).value) || null, compress: tg.compress, ticket: tg.ticket, message: $('#f-msg', body).value || null } });
+      } else if (st.mode === 'download') {
+        if (!st.url.trim()) throw new Error('Pega un link o un ticket');
+        r = await api('/api/download', { method: 'POST', body: { url: st.url.trim(), password: $('#f-pw', body).value || null, dest: st.dest || null, force: tg.force } });
+      } else {
+        const links = st.links.split(/\s+/).map(s => s.trim()).filter(Boolean);
+        if (!links.length) throw new Error('Añade al menos un link');
+        const t = await api('/api/ticket/create', { method: 'POST', body: { links, name: $('#f-name', body).value || null, password: $('#f-tpw', body).value || null, message: $('#f-tmsg', body).value || null } });
+        ov.close(); toast('Ticket creado', 'ok');
+        return openShareSheet({ name: t.ticket.name || 'ticket', ticket_uri: t.uri, ticket_path: String(t.path) });
+      }
+      ov.close(); vib(20);
+      if (r && r.job) push({ kind: 'job', id: r.job.id, title: KIND[r.job.kind] || 'Transferencia' });
+    } catch (e) { err.textContent = e.message; okBtn.disabled = false; }
+  };
+  return ov;
+}
+let prevT = null;
+function previewTicket(text, el) {
+  clearTimeout(prevT); el.innerHTML = ''; const t = (text || '').trim(); if (!/^unishare:/i.test(t)) return;
+  prevT = setTimeout(async () => {
+    try {
+      const r = await api('/api/ticket/parse', { method: 'POST', body: { data: t } }); const tk = r.ticket; const sig = r.signature || {};
+      const sigCls = sig.status === 'valid' ? 'ok' : sig.status === 'invalid' ? 'err' : 'warn';
+      const sigTxt = sig.status === 'valid' ? `Firmado por ${sig.signer} (${sig.fingerprint})` : sig.status === 'invalid' ? `Firma NO válida: ${sig.reason}` : 'Sin firma';
+      el.append(h('div', { class: `alert ${r.expired ? 'err' : sigCls}`, html: ico(r.expired ? 'x' : sig.status === 'valid' ? 'shield' : 'info') + `<span><b>${esc(tk.name)}</b> · ${fmtB(tk.total_size)} · ${tk.files.length} archivo(s)${tk.sender ? ' · de ' + esc(tk.sender) : ''}<br>${esc(sigTxt)}${r.expired ? '<br><b>Caducado</b>' : tk.expires ? '<br>caduca ' + esc(fmtDate(Date.parse(tk.expires))) : ''}${tk.message ? '<br><i>' + esc(tk.message) + '</i>' : ''}</span>` }));
+    } catch (e) { el.append(h('div', { class: 'alert err', html: ico('x') + `<span>${esc(e.message)}</span>` })); }
+  }, 250);
+}
+
+/** Server-side path picker (the engine reads local files). Resolves with a path or null. */
+function pickPath({ dirsOnly = false, start = '', title } = {}) {
+  return new Promise(res => {
+    let out = null; let cur = start || '';
+    const list = h('div', { class: 'list' }); const crumb = h('div', { class: 'linkbox', style: 'margin-bottom:10px' }); const roots = h('div', { class: 'chips' });
+    const body = h('div', {}, roots, crumb, list);
+    const ov = sheet({ title: title || (dirsOnly ? 'Elegir carpeta' : 'Elegir archivo o carpeta'), cls: 'full', body, onClose: () => res(out),
+      foot: h('div', { class: 'btns', style: 'margin:0;width:100%' }, h('button', { class: 'btn', onclick: () => ov.close() }, 'Cancelar'), h('button', { class: 'btn primary', id: 'pk-ok', html: ico('check') + (dirsOnly ? 'Usar esta carpeta' : 'Enviar esta carpeta'), onclick: () => { out = cur; ov.close(); } })) });
+    const load = async p => {
+      list.innerHTML = '<div class="empty" style="padding:24px"><p>Cargando…</p></div>';
+      try {
+        const r = await api(`/api/fs?path=${encodeURIComponent(p || '')}&dirs_only=${dirsOnly}`); cur = String(r.path);
+        crumb.innerHTML = ''; crumb.append(h('span', { class: 't' }, cur));
+        roots.innerHTML = ''; for (const rt of r.roots || []) { const n = String(rt).split(/[\\/]/).filter(Boolean).pop() || String(rt); roots.append(h('button', { class: `chip${String(rt) === cur ? ' active' : ''}`, onclick: () => load(String(rt)) }, n)); }
+        list.innerHTML = '';
+        if (r.parent) list.append(h('button', { class: 'row', onclick: () => load(String(r.parent)) }, h('span', { class: 'ic', html: ico('up') }), h('span', { class: 'body' }, h('div', { class: 'ttl' }, '..'), h('div', { class: 'sub' }, 'Carpeta superior'))));
+        if (!r.entries.length) list.append(h('div', { class: 'row hint' }, dirsOnly ? 'Sin subcarpetas' : 'Carpeta vacía'));
+        for (const e of r.entries) list.append(h('button', { class: 'row', onclick: () => { if (e.dir) load(String(e.path)); else { out = String(e.path); ov.close(); } } },
+          h('span', { class: 'ic', html: ico(e.dir ? 'folder' : 'file') }), h('span', { class: 'body' }, h('div', { class: 'ttl' }, e.name), h('div', { class: 'sub' }, e.dir ? 'Carpeta' : fmtB(e.size))), e.dir ? h('span', { class: 'chev', html: ico('chev') }) : null));
+      } catch (e) { list.innerHTML = ''; list.append(h('div', { class: 'alert err', html: ico('x') + `<span>${esc(e.message)}</span>` })); }
+    };
+    load(cur);
+  });
+}
+
+// ───────────────────────── job actions ─────────────────────────
+function jobMenu(j) {
+  const act = isActive(j);
+  menuSheet(j.name, [
+    (j.link || j.ticket_uri) && { icon: 'share', label: 'Compartir link / ticket', fn: () => openShareSheet(j) },
+    j.link && { icon: 'copy', label: 'Copiar link', sub: j.link, fn: () => copy(j.link, 'Link copiado') },
+    act && { icon: 'stop', label: 'Cancelar', danger: true, fn: () => cancelJob(j) },
+    !act && j.retryable && { icon: 'refresh', label: 'Reintentar', fn: () => retryJob(j) },
+    !act && (j.kind === 'lan_receive' || j.kind === 'download') && j.state === 'completed' && { icon: 'shield', label: 'Analizar de nuevo', fn: () => rescanJob(j) },
+    !act && (j.kind === 'lan_receive' || j.kind === 'download') && j.state === 'completed' && mobile && j.saved && j.saved.length && { icon: 'folder', label: 'Copiar a la carpeta de descargas', fn: () => exportToSaf(j) },
+    !act && j.link && { icon: 'dl', label: 'Descargar de nuevo', fn: () => openNew('download', { url: j.link }) },
+    !act && { icon: 'trash', label: 'Quitar de la lista', danger: true, fn: () => removeJob(j) }]);
+}
+async function cancelJob(j) { if (await confirmSheet(`Se cancela «${j.name}».`, 'Cancelar transferencia', true)) api(`/api/jobs/${j.id}/cancel`, { method: 'POST' }).then(() => toast('Cancelada', 'info')).catch(e => toast(e.message, 'err')); }
+async function removeJob(j) { try { await api(`/api/jobs/${j.id}`, { method: 'DELETE' }); if (S.stack.length && S.stack[S.stack.length - 1].id === j.id) pop(); } catch (e) { toast(e.message, 'err'); } }
+async function retryJob(j) { try { const r = await api(`/api/jobs/${j.id}/retry`, { method: 'POST' }); toast('Reintentando…', 'ok'); S.stack = []; push({ kind: 'job', id: r.id, title: KIND[j.kind] }); } catch (e) { toast(e.message, 'err'); } }
+async function rescanJob(j) {
+  toast('Analizando…', 'info', 2000);
+  try { const r = await api(`/api/jobs/${j.id}/scan`, { method: 'POST' }); const sv = SCAN[r.severity] || SCAN.info;
+    sheet({ title: 'Resultado del análisis', body: h('div', {}, h('div', { class: `alert ${sv[0] === 'danger' ? 'err' : sv[0]}`, html: ico('shield') + `<span><b>${sv[1]}</b> · ${esc(r.summary)}</span>` }), r.detail ? h('pre', { class: 'log' }, r.detail) : null) });
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+// ───────────────────────── wiring, theme, init ─────────────────────────
+function wire(root, top) {
+  wireCommon(root);
+  if (top) { if (top.kind === 'job') wireJob(root, top.id); else if (top.kind === 'security') wireSecurity(root); else if (top.kind === 'history') wireHistory(root); return; }
+  ({ home: wireHome, jobs: wireJobs, devices: wireDevices, share: wireShare, settings: wireSettings })[S.tab](root);
+}
+function setTheme(t) { document.documentElement.dataset.theme = t; localStorage.mtheme = t; $('#t-theme').innerHTML = ico(t === 'light' ? 'sun' : 'moon'); const m = $('meta[name=theme-color]'); if (m) m.content = t === 'light' ? '#f4f5f7' : '#151719'; }
+function toggleTheme() { setTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'); render(); }
+function init() {
+  setTheme(localStorage.mtheme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+  $$('#tabs button').forEach(b => b.onclick = () => { if (S.tab === b.dataset.tab && !S.stack.length) { try { $('#page').scrollTo({ top: 0, behavior: 'smooth' }); } catch { $('#page').scrollTop = 0; } } else go(b.dataset.tab); });
+  $('#fab').onclick = () => openNew(S.tab === 'share' ? 'global' : 'lan');
+  $('#t-back').onclick = pop;
+  $('#t-theme').onclick = toggleTheme;
+  const q = $('#t-qr'); q.hidden = !mobile; q.onclick = () => Android.scanQr();
+  if (mobile) document.documentElement.classList.add('android');
+  history.replaceState({ depth: 0 }, '');
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && !es) poll(); });
+  render(); loadCfg(); connect();
+}
+init();

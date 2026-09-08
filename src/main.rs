@@ -302,6 +302,9 @@ pub struct AppArgs {
     /// Pre-select job ID and details tab, e.g. `1:1` (tabs: 0 general, 1 files, 2 share, 3 log, 4 history)
     #[arg(long, value_name = "ID[:TAB]")]
     pub select: Option<String>,
+    /// Start with the light theme
+    #[arg(long)]
+    pub light: bool,
 }
 
 #[derive(Args, Debug)]

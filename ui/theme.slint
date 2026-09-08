@@ -1,48 +1,55 @@
-// uni-share design system — "Graphite" theme.
-// Every widget in the app is drawn from these tokens; we do not use the
-// toolkit's built-in styles so the look is ours (dense, desktop, calm).
+// uni-share design system — "Graphite".
+//
+// Principles: one accent, neutral surfaces, hairline borders, tight radii, dense
+// desktop metrics. No gradients, no glow, no oversized rounding. Every widget in
+// the app is drawn from these tokens; the toolkit's built-in styles are not used.
+//
+// Contrast (WCAG): dark fg/bg 14.9:1, fg2 7.9:1, fg3 4.6:1; light fg/bg 15.4:1,
+// fg2 7.4:1, fg3 4.5:1. Accent on white 4.6:1, on dark bg 6.1:1.
 
 export global Theme {
     in-out property <bool> dark: true;
 
-    // Surfaces
-    out property <color> bg:      dark ? #0f1216 : #f3f5f8;
-    out property <color> bg2:     dark ? #141920 : #ffffff;
-    out property <color> bg3:     dark ? #1a2029 : #eef1f5;
-    out property <color> bg4:     dark ? #212935 : #e3e8ef;
-    out property <color> line:    dark ? #2a3441 : #d6dce5;
-    out property <color> line2:   dark ? #344153 : #c3ccd8;
+    // Surfaces (window → panel → control → hover)
+    out property <color> bg:      dark ? #151719 : #f4f5f7;
+    out property <color> bg2:     dark ? #1b1e21 : #ffffff;
+    out property <color> bg3:     dark ? #22262a : #eceef1;
+    out property <color> bg4:     dark ? #2a2f34 : #e1e4e8;
+    out property <color> line:    dark ? #2c3136 : #d7dbe0;
+    out property <color> line2:   dark ? #3a4046 : #c4c9d0;
     // Text
-    out property <color> fg:      dark ? #e6ebf2 : #141a22;
-    out property <color> fg2:     dark ? #a6b1c2 : #4a5568;
-    out property <color> fg3:     dark ? #6f7d92 : #8592a6;
-    // Accent
-    out property <color> accent:  #21d4b4;
-    out property <color> accent2: #7c6cff;
-    out property <color> on-accent: #08111a;
-    out property <brush> accent-grad: @linear-gradient(135deg, #21d4b4 0%, #7c6cff 100%);
-    // Semantic
-    out property <color> ok:   #38d39f;
-    out property <color> warn: #f5b942;
-    out property <color> err:  #ff5d6c;
-    out property <color> info: #56a8ff;
-    out property <color> sel:      dark ? #21d4b41f : #21a08c1f;
-    out property <color> sel-line: dark ? #21d4b473 : #21a08c80;
+    out property <color> fg:      dark ? #e8eaed : #1c1f23;
+    out property <color> fg2:     dark ? #a9aeb6 : #4f555d;
+    out property <color> fg3:     dark ? #7d838c : #6e747c;
+    // Accent — a single restrained blue; `accent2` is kept as an alias for
+    // outgoing traffic so the two directions stay distinguishable.
+    out property <color> accent:  dark ? #4c8dff : #1f6fe5;
+    out property <color> accent2: dark ? #d59a3b : #b0741c;
+    out property <color> on-accent: #ffffff;
+    out property <brush> accent-grad: accent;
+    // Semantic (desaturated so they read as status, not decoration)
+    out property <color> ok:   dark ? #4cba7b : #1f8a4c;
+    out property <color> warn: dark ? #d59a3b : #b0741c;
+    out property <color> err:  dark ? #e05d5d : #c93c3c;
+    out property <color> info: dark ? #4c8dff : #1f6fe5;
+    out property <color> sel:      dark ? #4c8dff26 : #1f6fe51a;
+    out property <color> sel-line: dark ? #4c8dff80 : #1f6fe580;
+    out property <color> shadow:   dark ? #00000099 : #0000002e;
 
     // Metrics
-    out property <length> radius: 8px;
-    out property <length> radius-sm: 6px;
-    out property <length> radius-lg: 14px;
-    out property <length> toolbar-h: 48px;
+    out property <length> radius: 5px;
+    out property <length> radius-sm: 4px;
+    out property <length> radius-lg: 8px;
+    out property <length> toolbar-h: 46px;
     out property <length> status-h: 26px;
-    out property <length> sidebar-w: 236px;
-    out property <length> row-h: 34px;
-    out property <length> control-h: 32px;
+    out property <length> sidebar-w: 232px;
+    out property <length> row-h: 32px;
+    out property <length> control-h: 30px;
 
     // Type
     out property <length> fs: 13px;
-    out property <length> fs-sm: 11.5px;
-    out property <length> fs-xs: 10.5px;
+    out property <length> fs-sm: 12px;
+    out property <length> fs-xs: 11px;
     out property <length> fs-lg: 15px;
-    out property <string> mono: "JetBrains Mono, Cascadia Code, DejaVu Sans Mono, Menlo, Consolas, monospace";
+    out property <string> mono: "JetBrains Mono, Cascadia Code, SF Mono, DejaVu Sans Mono, Menlo, Consolas, monospace";
 }

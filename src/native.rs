@@ -110,6 +110,8 @@ pub struct AppOptions {
     pub dialog: Option<String>,
     /// Pre-select a job id and details tab (0 general, 1 files, 2 share, 3 log, 4 history).
     pub select: Option<(u64, i32)>,
+    /// Start with the light theme.
+    pub light: bool,
 }
 
 /// Run the native window. Blocks until the window is closed.
@@ -178,13 +180,14 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
         sort_key: "started".into(),
         sort_desc: true,
         selected_job: opts.select.map(|(id, _)| id),
-        dark: true,
+        dark: !opts.light,
         toasts: Vec::new(),
         next_toast: 1,
         last_states: Default::default(),
         last_pending: 0,
         snapshot: None,
     }));
+    win.global::<Theme>().set_dark(!opts.light);
     let ctx = UiCtx { win: win.as_weak(), tx: tx.clone(), etx: etx.clone(), st: st.clone() };
     wire_callbacks(&win, &ctx);
     set_filters(&win, None);

@@ -101,7 +101,7 @@ pub fn app(ctx: Ctx, a: AppArgs) -> Result<()> {
             Some((id.parse::<u64>().context("--select: invalid job id")?, tab.parse::<i32>().context("--select: invalid tab")?))
         }
     };
-    uni_share::native::run(cfg, cfg_path, history, uni_share::native::AppOptions { open: a.open, demo: a.demo, screenshot: a.screenshot, dialog: a.dialog, select })
+    uni_share::native::run(cfg, cfg_path, history, uni_share::native::AppOptions { open: a.open, demo: a.demo, screenshot: a.screenshot, dialog: a.dialog, select, light: a.light })
 }
 
 #[cfg(not(feature = "slint"))]

@@ -180,9 +180,9 @@ export component MainWindow inherits Window {
                     // brand
                     HorizontalLayout {
                         spacing: 10px; padding-right: 10px;
-                        Rectangle { width: 28px; height: 28px; y: 10px; border-radius: 8px; background: Theme.accent-grad;
-                            Text { text: "u"; color: Theme.on-accent; font-size: 14px; font-weight: 800; vertical-alignment: center; horizontal-alignment: center; } }
-                        Text { text: "uni-share"; color: Theme.fg; font-weight: 700; vertical-alignment: center; }
+                        Rectangle { width: 24px; height: 24px; y: 11px; border-radius: Theme.radius; background: Theme.accent;
+                            Icon { name: "swap"; tint: Theme.on-accent; size: 14px; x: 5px; y: 0; height: parent.height; stroke-width: 2.2px; } }
+                        Text { text: "uni-share"; color: Theme.fg; font-weight: 600; vertical-alignment: center; }
                         Text { text: version; color: Theme.fg3; font-size: Theme.fs-sm; vertical-alignment: center; }
                     }
                     Rectangle { width: 1px; height: 24px; y: 12px; background: Theme.line; }
@@ -197,14 +197,14 @@ export component MainWindow inherits Window {
                     Rectangle { horizontal-stretch: 1; }
                     // search
                     Rectangle {
-                        y: 8px; width: 240px; height: 32px; border-radius: Theme.radius; background: Theme.bg3; border-width: 1px; border-color: q.has-focus ? Theme.accent : Theme.line;
+                        y: 8px; width: 240px; height: 30px; border-radius: Theme.radius; background: Theme.bg2; border-width: 1px; border-color: q.has-focus ? Theme.accent : Theme.line;
                         HorizontalLayout { padding-left: 10px; padding-right: 10px; spacing: 6px;
                             Icon { name: "search"; tint: Theme.fg3; size: 15px; }
                             q := TextInput { text <=> root.query; color: Theme.fg; font-size: Theme.fs; vertical-alignment: center; single-line: true; edited => { root.set-query(self.text); } }
                         }
                         if root.query == "": Text { x: 31px; text: "Filtrar transferencias…"; color: Theme.fg3; height: parent.height; vertical-alignment: center; }
                     }
-                    Button { y: 8px; icon: "moon"; ghost: true; tooltip: "Tema"; clicked => { root.toggle-theme(); } }
+                    Button { y: 8px; icon: Theme.dark ? "sun" : "moon"; ghost: true; tooltip: "Tema"; clicked => { root.toggle-theme(); } }
                     Button { y: 8px; icon: "gear"; ghost: true; tooltip: "Ajustes (,)"; clicked => { root.open-settings(); } }
                 }
             }
@@ -216,10 +216,10 @@ export component MainWindow inherits Window {
                     Rectangle { x: parent.width - 1px; width: 1px; background: Theme.line; }
                     VerticalLayout {
                         padding: 8px; spacing: 4px;
-                        Text { text: "TRANSFERENCIAS"; color: Theme.fg3; font-size: Theme.fs-xs; font-weight: 700; letter-spacing: 0.9px; height: 26px; vertical-alignment: bottom; x: 8px; }
+                        Text { text: "TRANSFERENCIAS"; color: Theme.fg3; font-size: Theme.fs-xs; font-weight: 600; letter-spacing: 0.6px; height: 26px; vertical-alignment: bottom; x: 8px; }
                         for f in filters: SideItem { text: f.label; icon: f.icon; count: f.count; active: root.filter == f.id; clicked => { root.set-filter(f.id); } }
                         HorizontalLayout { height: 30px; padding-top: 8px;
-                            Text { text: "DISPOSITIVOS LAN"; color: Theme.fg3; font-size: Theme.fs-xs; font-weight: 700; letter-spacing: 0.9px; vertical-alignment: center; horizontal-stretch: 1; }
+                            Text { text: "DISPOSITIVOS LAN"; color: Theme.fg3; font-size: Theme.fs-xs; font-weight: 600; letter-spacing: 0.6px; vertical-alignment: center; horizontal-stretch: 1; }
                             Button { icon: "refresh"; ghost: true; width: 22px; height: 22px; clicked => { root.rescan(); } }
                         }
                         if devices.length == 0: Hint { text: "Ningún dispositivo encontrado. Abre uni-share en el otro equipo."; }
@@ -292,7 +292,7 @@ export component MainWindow inherits Window {
                             // rows
                             if jobs.length == 0 && offers.length == 0: Rectangle {
                                 VerticalLayout { alignment: center; spacing: 6px;
-                                    Text { text: "⇅"; color: Theme.fg3; font-size: 42px; horizontal-alignment: center; opacity: 0.5; }
+                                    Icon { name: "inbox"; tint: Theme.fg3; size: 28px; x: (parent.width - 28px) / 2; }
                                     Text { text: "No hay transferencias en esta vista."; color: Theme.fg3; horizontal-alignment: center; }
                                     Text { text: "Pulsa N para empezar, o arrastra aquí un archivo o un ticket .unishare."; color: Theme.fg3; font-size: Theme.fs-sm; horizontal-alignment: center; }
                                 }

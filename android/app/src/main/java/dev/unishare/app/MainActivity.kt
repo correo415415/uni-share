@@ -272,12 +272,24 @@ class MainActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------- permissions --
 
+    /**
+     * Android 13+: explain *why* before the system prompt (the foreground-service notice and the
+     * Aceptar/Rechazar offer notifications), once; a refusal is respected and not re-asked.
+     */
     private fun requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
-        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        val prefs = getSharedPreferences("uni-share", MODE_PRIVATE)
+        if (prefs.getBoolean("notif_asked", false)) return
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(R.string.notif_rationale_title)
+            .setMessage(R.string.notif_rationale_text)
+            .setPositiveButton(R.string.notif_rationale_ok) { _, _ ->
+                prefs.edit().putBoolean("notif_asked", true).apply()
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+            }
+            .setNegativeButton(R.string.notif_rationale_later) { _, _ -> prefs.edit().putBoolean("notif_asked", true).apply() }
+            .show()
     }
 
     // ------------------------------------------------------------------- views --

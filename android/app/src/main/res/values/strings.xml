@@ -8,5 +8,9 @@
     <string name="retry">Reintentar</string>
     <string name="notif_offers_channel">Transferencias entrantes</string>
     <string name="notif_offers_desc">Solicitudes de envío desde la red local, con Aceptar y Rechazar</string>
+    <string name="notif_rationale_title">Notificaciones</string>
+    <string name="notif_rationale_text">uni-share usa las notificaciones para dos cosas: mostrar que el motor sigue activo en segundo plano (recibiendo con la pantalla apagada) y avisarte cuando otro dispositivo quiere enviarte archivos, con botones Aceptar y Rechazar. No se usan para publicidad.</string>
+    <string name="notif_rationale_ok">Permitir</string>
+    <string name="notif_rationale_later">Ahora no</string>
     <string name="scan_prompt">Apunta al código QR del ticket o del emparejamiento</string>
 </resources>

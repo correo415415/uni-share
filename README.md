@@ -22,6 +22,32 @@ cargo build --release          # un solo comando; sin pasos extra
 
 `cargo test` ejecuta 43 tests (unitarios + integración LAN real sobre loopback con TLS).
 
+### GUI nativa (Slint)
+
+```bash
+cargo build --release --features slint     # necesita clang + ninja (renderer Skia)
+./target/release/uni-share app
+```
+
+La GUI nativa incrusta sus propias fuentes (`ui/fonts/`: Inter para la interfaz y JetBrains Mono para hashes, puertos y velocidades; licencia OFL) y usa el renderer **Skia** con FemtoVG como alternativa, de modo que el texto se ve igual de nítido en cualquier equipo aunque no tenga esas fuentes instaladas.
+
+### Android
+
+La app Android (`android/`, paquete `dev.unishare.app`) es una cáscara Kotlin que arranca el mismo core Rust como biblioteca (`libuni_share.so`, JNI en `src/android.rs`) y muestra la GUI web servida en `127.0.0.1`. Requisitos: Android SDK + NDK r26+, `cargo install cargo-ndk`, `rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android`.
+
+```bash
+android/build-android.sh            # compila las .so y las deja en android/app/src/main/jniLibs/
+android/build-android.sh --apk      # + APK debug (android/app/build/outputs/apk/debug/)
+android/build-android.sh --release  # + APK firmado con android/release.keystore (se crea la primera vez;
+                                    #   contraseña en UNISHARE_KEYSTORE_PASS, alias en UNISHARE_KEY_ALIAS)
+```
+
+En Windows, `android\build-android.bat` con los mismos argumentos. Funciones: compartir archivos desde cualquier app («Enviar con uni-share»), abrir links `unishare:` y tickets `.unishare`, servicio en primer plano para seguir recibiendo con la pantalla apagada. Las descargas van a `Android/data/dev.unishare.app/files/Download/`.
+
+### Marca
+
+`assets/logo.svg` (icono: dos flechas ↑↓ en azul `#4c8dff` sobre baldosa grafito `#1b1e21`), `assets/logo-mark.svg` (versión monocroma de 24 px para barras de herramientas), PNG 16–1024 y `logo.ico`. La GUI nativa usa `ui/icon.png` y la web un favicon SVG embebido.
+
 ## Uso
 
 ```bash

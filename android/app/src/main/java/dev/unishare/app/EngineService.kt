@@ -21,6 +21,8 @@ class EngineService : Service() {
 
     /** mDNS needs multicast; many vendors drop multicast packets unless the app holds a lock. */
     private var multicast: WifiManager.MulticastLock? = null
+    /** Incoming-offer notifications with Aceptar/Rechazar (see OfferWatcher). */
+    private var offers: OfferWatcher? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -45,10 +47,13 @@ class EngineService : Service() {
             return START_NOT_STICKY
         }
         ensureStarted(applicationContext)
+        if (offers == null) offers = OfferWatcher(applicationContext).also { it.start() }
         return START_STICKY
     }
 
     override fun onDestroy() {
+        offers?.stop()
+        offers = null
         try {
             multicast?.takeIf { it.isHeld }?.release()
         } catch (_: Exception) {

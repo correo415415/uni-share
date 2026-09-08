@@ -138,7 +138,14 @@ pub fn app(ctx: Ctx, a: AppArgs) -> Result<()> {
             Some((id.parse::<u64>().context("--select: invalid job id")?, tab.parse::<i32>().context("--select: invalid tab")?))
         }
     };
-    uni_share::native::run(cfg, cfg_path, history, uni_share::native::AppOptions { open: a.open, demo: a.demo, screenshot: a.screenshot, dialog: a.dialog, select, light: a.light })
+    let size = match a.size.as_deref() {
+        None => None,
+        Some(s) => {
+            let (w, h) = s.split_once('x').context("--size: expected WxH, e.g. 1024x600")?;
+            Some((w.parse::<u32>().context("--size: invalid width")?, h.parse::<u32>().context("--size: invalid height")?))
+        }
+    };
+    uni_share::native::run(cfg, cfg_path, history, uni_share::native::AppOptions { open: a.open, demo: a.demo, screenshot: a.screenshot, dialog: a.dialog, select, light: a.light, empty: a.empty, size, drag_over: a.drag_over })
 }
 
 #[cfg(not(feature = "slint"))]

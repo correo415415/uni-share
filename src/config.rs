@@ -33,6 +33,9 @@ pub struct Config {
     pub pin: Option<String>,
     /// Show desktop notifications.
     pub notifications: bool,
+    /// Desktop GUI: closing the window hides it to the system tray instead of quitting
+    /// (the engine keeps receiving); "Salir" in the tray menu quits.
+    pub minimize_to_tray: bool,
     /// Compress folders into .tar.zst before sending (default: keep hierarchy).
     pub compress_folders: bool,
     /// Sign the tickets this device creates with its Ed25519 key
@@ -90,6 +93,7 @@ impl Default for Config {
             auto_accept: false,
             pin: None,
             notifications: true,
+            minimize_to_tray: false,
             compress_folders: false,
             sign_tickets: true,
             scan: crate::scan::ScanConfig::default(),

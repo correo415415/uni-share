@@ -5,7 +5,7 @@ use anyhow::{Result, bail};
 use console::style;
 use std::sync::Arc;
 use uni_share::download::storage_to::StorageDownloader;
-use uni_share::download::swisstransfer::{SwissTransferClient, is_swisstransfer_url, run_python_fallback};
+use uni_share::download::swisstransfer::{SwissTransferClient, is_swisstransfer_url};
 use uni_share::fsutil::human_bytes;
 use uni_share::global::storage_to::parse_share_url;
 use uni_share::history::{Kind, Status};
@@ -20,13 +20,6 @@ pub async fn download(ctx: Ctx, a: DownloadArgs) -> Result<()> {
         return crate::commands_ticket::download_from_ticket(ctx, a, dest).await;
     }
     if is_swisstransfer_url(&a.url) {
-        if a.python {
-            ui::info(S, "Delegando a swisstransfer-dl (Python)…");
-            let rid = ctx.history.start(Kind::Download, "swisstransfer", 0, &a.url, 0)?;
-            let r = run_python_fallback(&a.url, &dest, a.password.as_deref(), a.force, a.list).await;
-            ctx.history.finish(rid, if r.is_ok() { Status::Completed } else { Status::Failed }, r.as_ref().err().map(|e| e.to_string()).as_deref())?;
-            return r.map(|_| ui::ok(S, "Completado."));
-        }
         return download_swisstransfer(ctx, a, dest).await;
     }
     if parse_share_url(&a.url).is_some() {

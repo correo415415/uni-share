@@ -70,4 +70,9 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.activity:activity-ktx:1.9.3")
     implementation("androidx.webkit:webkit:1.12.1")
+    // SAF tree helpers (DocumentFile) for the user-chosen download folder.
+    implementation("androidx.documentfile:documentfile:1.0.1")
+    // QR scanner (zxing) for .unishare tickets and LAN pairing.
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0") { isTransitive = false }
+    implementation("com.google.zxing:core:3.5.3")
 }

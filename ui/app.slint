@@ -98,6 +98,7 @@ export component MainWindow inherits Window {
     in-out property <bool> details-collapsed: false;
     in-out property <length> details-h: 260px;
     in-out property <string> dialog: "";    // "" | new | share | settings | fs | confirm
+    in-out property <bool> drag-over: false; // a file is being dragged over the window (native DnD)
     in-out property <int> new-mode: 0;      // 0 lan 1 global 2 download 3 ticket
     in-out property <string> share-what: "link";
     in-out property <string> confirm-text;
@@ -127,6 +128,7 @@ export component MainWindow inherits Window {
     in-out property <string> s-expiry;
     in-out property <bool> s-auto;
     in-out property <bool> s-notif;
+    in-out property <bool> s-tray;
     in-out property <bool> s-compress;
     in-out property <bool> s-sign;
     in-out property <bool> s-scan;
@@ -263,7 +265,7 @@ export component MainWindow inherits Window {
                                 HorizontalLayout { spacing: 6px;
                                     Text { text: device-name; color: Theme.fg; font-weight: 600; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
                                     Rectangle { width: 22px; height: 22px; border-radius: Theme.radius-sm; background: pqa.has-hover ? Theme.bg2 : transparent;
-                                        Icon { name: "qr"; tint: pqa.has-hover ? Theme.fg : Theme.fg3; size: 14px; x: 4px; y: 4px; height: 14px; }
+                                        Icon { name: "qr"; tint: pqa.has-hover ? Theme.fg : Theme.fg3; size: 14px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; height: 14px; }
                                         pqa := TouchArea { mouse-cursor: pointer; clicked => { root.open-pairing(); } }
                                     }
                                 }
@@ -280,10 +282,14 @@ export component MainWindow inherits Window {
                 }
 
                 // ═══════════ main ═══════════
+                // Explicit stretch/min-width: a VerticalLayout inherits the *minimum* stretch of
+                // its children, so a single fixed-width child (e.g. the empty-state icon) would
+                // otherwise pin the whole column to its preferred width instead of filling the window.
                 VerticalLayout {
+                    horizontal-stretch: 1; min-width: 0px;
                     // offers + table
                     tbl := Rectangle {
-                        vertical-stretch: 1; background: Theme.bg; clip: true;
+                        vertical-stretch: 1; horizontal-stretch: 1; min-width: 0px; background: Theme.bg; clip: true;
                         // Columns are proportional stretch factors (see `col` below): no width
                         // bindings, so the layout solver never sees a loop and resizing is free.
                         VerticalLayout {
@@ -293,7 +299,7 @@ export component MainWindow inherits Window {
                                 Rectangle {
                                     x: 12px; y: 10px; width: parent.width - 24px; height: 60px; border-radius: Theme.radius; background: Theme.bg2; border-width: 1px; border-color: Theme.warn;
                                     HorizontalLayout { padding: 10px; spacing: 12px;
-                                        Rectangle { width: 40px; height: 40px; border-radius: 10px; background: Theme.warn.with-alpha(0.15); Icon { name: "arrow-down"; tint: Theme.warn; size: 20px; x: 10px; y: 0; height: parent.height; } }
+                                        Rectangle { width: 40px; height: 40px; border-radius: 10px; background: Theme.warn.with-alpha(0.15); Icon { name: "arrow-down"; tint: Theme.warn; size: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; height: 20px; stroke-width: 2.2px; } }
                                         VerticalLayout { alignment: center; spacing: 2px; horizontal-stretch: 1;
                                             Text { text: o.sender + " quiere enviarte " + o.name; color: Theme.fg; font-weight: 600; overflow: elide; }
                                             Text { text: o.size-text + " · " + o.files-count + " archivo(s)" + (o.compressed ? " · comprimido" : "") + " · desde " + o.peer + " · huella " + o.fingerprint; color: Theme.fg2; font-size: 12px; overflow: elide; }
@@ -322,13 +328,16 @@ export component MainWindow inherits Window {
                             }
                             // rows
                             if jobs.length == 0 && offers.length == 0: Rectangle {
-                                VerticalLayout { alignment: center; spacing: 6px;
-                                    Icon { name: "inbox"; tint: Theme.fg3; size: 28px; x: (parent.width - 28px) / 2; }
-                                    Text { text: "No hay transferencias en esta vista."; color: Theme.fg3; horizontal-alignment: center; }
-                                    Text { text: "Pulsa N para empezar, o arrastra aquí un archivo o un ticket .unishare."; color: Theme.fg3; font-size: Theme.fs-sm; horizontal-alignment: center; }
+                                horizontal-stretch: 1; vertical-stretch: 1; min-width: 0px; preferred-width: 0px;
+                                // Explicit geometry so this layout never feeds its constraints back to the column.
+                                VerticalLayout { x: 0; y: 0; width: parent.width; height: parent.height; alignment: center; spacing: 6px;
+                                    Rectangle { height: 28px; Icon { name: "inbox"; tint: Theme.fg3; size: 28px; x: (parent.width - self.width) / 2; } }
+                                    Text { text: "No hay transferencias en esta vista."; color: Theme.fg3; horizontal-alignment: center; min-width: 0px; overflow: elide; }
+                                    Text { text: "Pulsa N para empezar, o arrastra aquí un archivo o un ticket .unishare."; color: Theme.fg3; font-size: Theme.fs-sm; horizontal-alignment: center; min-width: 0px; overflow: elide; }
                                 }
                             }
                             Flickable {
+                                horizontal-stretch: 1; min-width: 0px;
                                 viewport-width: self.width;
                                 viewport-height: rows.preferred-height;
                                 rows := VerticalLayout {
@@ -345,7 +354,7 @@ export component MainWindow inherits Window {
                                             Rectangle { min-width: 0px; preferred-width: 0px; horizontal-stretch: 0.27; clip: true;
                                                 HorizontalLayout { spacing: 8px; alignment: start; padding-right: 8px;
                                                     Rectangle { width: 22px; height: 22px; y: 6px; border-radius: 6px; background: Theme.bg4;
-                                                        Icon { name: j.kind == "lan_send" ? "arrow-up" : j.kind == "lan_receive" ? "arrow-down" : j.kind == "global_upload" ? "globe" : "download"; size: 13px; x: 4.5px; y: 0; height: parent.height; stroke-width: 2.2px;
+                                                        Icon { name: j.kind == "lan_send" ? "arrow-up" : j.kind == "lan_receive" ? "arrow-down" : j.kind == "global_upload" ? "globe" : "download"; size: 13px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; height: 13px; stroke-width: 2.2px;
                                                             tint: (j.kind == "lan_send" || j.kind == "global_upload") ? Theme.accent2 : Theme.accent; } }
                                                     Text { text: j.name; color: Theme.fg; font-weight: 500; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                                                 } }
@@ -384,7 +393,7 @@ export component MainWindow inherits Window {
                     }
                     // details
                     Rectangle {
-                        height: root.details-collapsed ? 0px : root.details-h; background: Theme.bg2; clip: true;
+                        height: root.details-collapsed ? 0px : root.details-h; horizontal-stretch: 1; min-width: 0px; background: Theme.bg2; clip: true;
                         animate height { duration: 150ms; easing: ease-out; }
                         VerticalLayout {
                             Rectangle { height: 34px;
@@ -396,6 +405,7 @@ export component MainWindow inherits Window {
                                 }
                             }
                             Flickable {
+                                horizontal-stretch: 1; min-width: 0px;
                                 viewport-height: pane.preferred-height;
                                 pane := VerticalLayout {
                                     padding: 14px; spacing: 6px; alignment: start;
@@ -492,6 +502,20 @@ export component MainWindow inherits Window {
         }
     }
 
+    // ═══════════ drop overlay (native drag & drop) ═══════════
+    if root.drag-over: Rectangle {
+        background: Theme.bg.with-alpha(0.72);
+        Rectangle {
+            x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px;
+            border-radius: Theme.radius; border-width: 2px; border-color: Theme.accent; background: Theme.accent.with-alpha(0.06);
+            VerticalLayout { alignment: center; spacing: 8px;
+                Rectangle { height: 36px; Icon { name: "inbox"; tint: Theme.accent; size: 36px; stroke-width: 1.6px; x: (parent.width - self.width) / 2; } }
+                Text { text: "Suelta para enviar por LAN"; color: Theme.fg; font-size: 16px; font-weight: 600; horizontal-alignment: center; }
+                Text { text: "Un archivo o carpeta abre «Enviar LAN»; un ticket .unishare abre «Descargar» (o el emparejamiento)."; color: Theme.fg2; font-size: Theme.fs-sm; horizontal-alignment: center; }
+            }
+        }
+    }
+
     // ═══════════ toasts ═══════════
     VerticalLayout {
         x: root.width - 396px; y: root.height - 40px - self.preferred-height; width: 380px; spacing: 8px; alignment: end;
@@ -542,6 +566,7 @@ export component MainWindow inherits Window {
             }
             Check { text: "Aceptar automáticamente las transferencias LAN entrantes"; checked <=> root.s-auto; }
             Check { text: "Notificaciones de escritorio"; checked <=> root.s-notif; }
+            Check { text: "Al cerrar la ventana, minimizar a la bandeja del sistema (el motor sigue recibiendo)"; checked <=> root.s-tray; }
             Check { text: "Comprimir carpetas (.tar.zst) por defecto"; checked <=> root.s-compress; }
             Check { text: "Firmar los tickets con la clave Ed25519 de este equipo (el destinatario puede verificar el remitente)"; checked <=> root.s-sign; }
             Rectangle { height: 1px; background: Theme.line; }
@@ -655,5 +680,31 @@ export component MainWindow inherits Window {
             }
             HorizontalLayout { spacing: 8px; alignment: end; Text { text: root.dialog-error; color: Theme.err; vertical-alignment: center; horizontal-stretch: 1; wrap: word-wrap; } Button { text: "Cancelar"; clicked => { root.dialog = ""; } } Button { text: root.new-mode == 3 ? "Crear ticket" : "Iniciar"; primary: true; clicked => { root.submit-new(); } } }
         }
+    }
+}
+
+// ═══════════ system tray ═══════════
+// Top-level component (no window): icon + quick menu. Instantiated from Rust next to the
+// MainWindow; `clicked` and the menu entries are wired there.
+export component Tray inherits SystemTrayIcon {
+    in property <int> active-count: 0;
+    in property <bool> window-visible: true;
+    callback show-window();
+    callback new-transfer(int);
+    callback quit();
+    icon: @image-url("icon.png");
+    title: "uni-share";
+    tooltip: active-count > 0 ? "uni-share — " + active-count + " transferencia(s) activa(s)" : "uni-share";
+    // The built-in `clicked` is not exported to the Rust API: forward it to our own callback.
+    clicked => { root.show-window(); }
+    Menu {
+        MenuItem { title: window-visible ? "Ocultar ventana" : "Mostrar uni-share"; activated => { root.show-window(); } }
+        MenuSeparator { }
+        MenuItem { title: "Enviar por LAN…"; activated => { root.new-transfer(0); } }
+        MenuItem { title: "Compartir link…"; activated => { root.new-transfer(1); } }
+        MenuItem { title: "Descargar…"; activated => { root.new-transfer(2); } }
+        MenuItem { title: "Abrir ticket…"; activated => { root.new-transfer(3); } }
+        MenuSeparator { }
+        MenuItem { title: "Salir"; activated => { root.quit(); } }
     }
 }

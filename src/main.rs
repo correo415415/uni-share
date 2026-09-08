@@ -198,9 +198,6 @@ pub struct DownloadArgs {
     /// Only list contents, don't download
     #[arg(long)]
     pub list: bool,
-    /// For SwissTransfer: delegate to python/swisstransfer_dl.py instead of the native Rust port
-    #[arg(long)]
-    pub python: bool,
 }
 
 #[derive(Args, Debug)]
@@ -361,6 +358,15 @@ pub struct AppArgs {
     /// Start with the light theme
     #[arg(long)]
     pub light: bool,
+    /// With --demo: no jobs/offers/devices (fresh-install look, empty-state layout)
+    #[arg(long)]
+    pub empty: bool,
+    /// Initial window size, e.g. `1024x600` (layout review at small sizes)
+    #[arg(long, value_name = "WxH")]
+    pub size: Option<String>,
+    /// Show the drag & drop overlay (design review)
+    #[arg(long)]
+    pub drag_over: bool,
 }
 
 #[derive(Args, Debug)]

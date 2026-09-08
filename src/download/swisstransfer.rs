@@ -1,4 +1,4 @@
-//! SwissTransfer downloader — native Rust port of `python/swisstransfer_dl.py`.
+//! SwissTransfer downloader (100 % Rust; the original Python helper was retired).
 //!
 //! 1. `GET /dl/{uuid}` → Inertia page; `<script data-page="app" type="application/json">`
 //!    (or `<div id="app" data-page="…">`) holds `{component, props:{transfer:{files[]}}}`.
@@ -6,8 +6,6 @@
 //!    (from cookie `SWISSTRANSFER-API-XSRF-TOKEN`).
 //! 3. `GET /api/1/links/{uuid}/files/{fileId}` (Accept: application/json) →
 //!    `{data:{url}}` presigned S3 URL, valid 1 h; supports `Range`.
-//!
-//! The Python script is still shipped and can be used with `download --python`.
 
 use super::http::{ProgressFn, browser_client, download_resumable};
 use crate::fsutil::destination_path;
@@ -246,41 +244,6 @@ impl SwissTransferClient {
 
 fn html_unescape(s: &str) -> String {
     s.replace("&quot;", "\"").replace("&#039;", "'").replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
-}
-
-/// Run the bundled Python script (fallback / user preference).
-pub async fn run_python_fallback(url: &str, dest: &Path, password: Option<&str>, force: bool, list_only: bool) -> Result<()> {
-    let script = locate_script().ok_or_else(|| anyhow!("python/swisstransfer_dl.py not found next to the binary or in the repo"))?;
-    let py = if cfg!(windows) { "python" } else { "python3" };
-    let mut cmd = tokio::process::Command::new(py);
-    cmd.arg(&script).arg(url).arg("-o").arg(dest);
-    if let Some(p) = password {
-        cmd.arg("-p").arg(p);
-    }
-    if force {
-        cmd.arg("--force");
-    }
-    if list_only {
-        cmd.arg("--list");
-    }
-    let status = cmd.status().await.with_context(|| format!("running {py}"))?;
-    if !status.success() {
-        bail!("swisstransfer_dl.py exited with {status}");
-    }
-    Ok(())
-}
-
-fn locate_script() -> Option<PathBuf> {
-    let mut candidates = vec![PathBuf::from("python/swisstransfer_dl.py")];
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("python/swisstransfer_dl.py"));
-            candidates.push(dir.join("swisstransfer_dl.py"));
-            candidates.push(dir.join("../../python/swisstransfer_dl.py"));
-        }
-    }
-    candidates.push(crate::config::data_dir().join("swisstransfer_dl.py"));
-    candidates.into_iter().find(|p| p.exists())
 }
 
 #[cfg(test)]

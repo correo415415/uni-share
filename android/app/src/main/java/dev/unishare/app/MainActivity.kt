@@ -21,6 +21,9 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
@@ -40,7 +43,22 @@ class MainActivity : AppCompatActivity() {
     private lateinit var error: View
     private var loaded = false
     private var pendingJs: String? = null
-    private val io = Executors.newSingleThreadExecutor()
+    internal val io = Executors.newSingleThreadExecutor()
+    private lateinit var bridge: Bridge
+
+    /** SAF folder picker (Storage Access Framework); result stored by the bridge. */
+    private val pickTreeLauncher = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri?.let { bridge.onTreePicked(it) }
+    }
+
+    /** zxing camera scanner for tickets / pairing QRs. */
+    private val scanLauncher = registerForActivityResult(ScanContract()) { result ->
+        result.contents?.let { onQr(it) }
+    }
+
+    private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) launchScanner() else bridge.emit("toast", "Sin permiso de cámara no se puede escanear")
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -78,6 +96,8 @@ class MainActivity : AppCompatActivity() {
             }
             visibility = View.INVISIBLE
         }
+        bridge = Bridge(this, web)
+        web.addJavascriptInterface(bridge, "Android")
         splash = buildSplash()
         error = buildError().apply { visibility = View.GONE }
         root.addView(web, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -159,6 +179,46 @@ class MainActivity : AppCompatActivity() {
         i.action = Intent.ACTION_MAIN
     }
 
+    // ------------------------------------------------------------ SAF + QR --
+
+    fun pickTree() {
+        try {
+            pickTreeLauncher.launch(null)
+        } catch (_: Exception) {
+            bridge.emit("toast", "No hay selector de carpetas disponible")
+        }
+    }
+
+    fun scanQr() {
+        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchScanner()
+        else cameraPermission.launch(Manifest.permission.CAMERA)
+    }
+
+    private fun launchScanner() {
+        val opts = ScanOptions().apply {
+            setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+            setPrompt(getString(R.string.scan_prompt))
+            setBeepEnabled(false)
+            setOrientationLocked(false)
+            setBarcodeImageEnabled(false)
+        }
+        try {
+            scanLauncher.launch(opts)
+        } catch (_: Exception) {
+            bridge.emit("toast", "No se pudo abrir la cámara")
+        }
+    }
+
+    /**
+     * A scanned code is either a `unishare:` ticket (download or LAN pairing — the page decides
+     * through `openScanned`), an http(s) link, or free text (treated as a manual LAN target).
+     */
+    private fun onQr(text: String) {
+        val t = text.trim()
+        val js = "window.openScanned ? openScanned(${jsStr(t)}) : openNew('download', {url: ${jsStr(t)}})"
+        if (loaded) web.evaluateJavascript(js, null) else pendingJs = js
+    }
+
     private fun looksLikeLink(s: String) = s.trim().let { it.startsWith("http://") || it.startsWith("https://") || it.startsWith("unishare:") }
 
     /** Copies a content:// stream to our cache and returns the path the Rust core can read. */
@@ -212,12 +272,24 @@ class MainActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------- permissions --
 
+    /**
+     * Android 13+: explain *why* before the system prompt (the foreground-service notice and the
+     * Aceptar/Rechazar offer notifications), once; a refusal is respected and not re-asked.
+     */
     private fun requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
-        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        val prefs = getSharedPreferences("uni-share", MODE_PRIVATE)
+        if (prefs.getBoolean("notif_asked", false)) return
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(R.string.notif_rationale_title)
+            .setMessage(R.string.notif_rationale_text)
+            .setPositiveButton(R.string.notif_rationale_ok) { _, _ ->
+                prefs.edit().putBoolean("notif_asked", true).apply()
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+            }
+            .setNegativeButton(R.string.notif_rationale_later) { _, _ -> prefs.edit().putBoolean("notif_asked", true).apply() }
+            .show()
     }
 
     // ------------------------------------------------------------------- views --

@@ -21,7 +21,7 @@ button,input,select,textarea{font:inherit;color:inherit}a{color:var(--accent);te
 .main{grid-area:main;display:grid;grid-template-rows:minmax(120px,1fr) 6px var(--details-h,260px);min-height:0}
 .main.details-collapsed{grid-template-rows:1fr 0 0}.main.details-collapsed .details,.main.details-collapsed .splitter{display:none}
 .brand{display:flex;align-items:center;gap:10px;margin-right:10px;user-select:none}
-.brand .logo{width:24px;height:24px;border-radius:var(--radius);background:var(--accent);display:grid;place-items:center;color:var(--on-accent)}.brand .logo svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.brand .logo{width:24px;height:24px;border-radius:6px;background:#1b1e21;display:grid;place-items:center;color:var(--accent);border:1px solid var(--line-2)}.brand .logo svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
 .brand .name{font-weight:600}.brand .name small{color:var(--fg-3);font-weight:500;margin-left:6px;font-size:var(--fs-xs)}
 .tb-sep{width:1px;height:20px;background:var(--line);margin:0 4px}.tb-spacer{flex:1}
 .btn{display:inline-flex;align-items:center;gap:6px;height:var(--control-h);padding:0 11px;border-radius:var(--radius);border:1px solid var(--line);background:var(--bg-3);color:var(--fg);cursor:pointer;white-space:nowrap;transition:background .1s,border-color .1s;font-size:var(--fs)}

@@ -103,6 +103,24 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "target=$TARGET tag=$TAG version=$VERSION sha=$SHORT"
 
+      - name: Cargo.lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Si Cargo.toml cambió sin regenerar el lock (sandbox sin toolchain), lo regeneramos
+          # aquí y lo devolvemos al repo; en caso contrario, `--locked` garantiza builds reproducibles.
+          if cargo metadata --locked --format-version 1 >/dev/null 2>&1; then
+            echo "LOCKED=--locked" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Cargo.lock desactualizado: se regenera"
+            cargo generate-lockfile
+            echo "LOCKED=" >> "$GITHUB_ENV"
+            if [ "${{ github.event_name }}" = "push" ]; then
+              git config user.name "github-actions[bot]"; git config user.email "github-actions[bot]@users.noreply.github.com"
+              git add Cargo.lock && git commit -qm "chore: update Cargo.lock [skip ci]" && git push origin "HEAD:${GITHUB_REF_NAME}" || echo "::warning::no se pudo subir Cargo.lock"
+            fi
+          fi
+
       - name: fmt
         shell: bash
         run: cargo fmt --all -- --check || echo "::warning::cargo fmt reporta diferencias"
@@ -117,14 +135,14 @@ jobs:
 
       - name: build release (default)
         shell: bash
-        run: cargo build --release --locked
+        run: cargo build --release $LOCKED
 
       - name: build release (--features slint)
         if: github.event_name != 'workflow_dispatch' || inputs.slint
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release --locked --features slint --target-dir target/slint
+          cargo build --release $LOCKED --features slint --target-dir target/slint
 
       - name: Screenshots de la app (demo, sin red)
         if: runner.os == 'Linux' && (github.event_name != 'workflow_dispatch' || inputs.slint)

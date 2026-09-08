@@ -131,15 +131,22 @@ pub fn copy_to_clipboard(text: &str) -> bool {
 }
 
 /// Best-effort desktop notification.
+/// Show a desktop notification without blocking the caller: D-Bus round-trips
+/// can take hundreds of ms and the caller may be a UI thread.
 pub fn notify(summary: &str, body: &str) {
-    let res = notify_rust::Notification::new()
+    let n = notify_rust::Notification::new()
         .appname(crate::APP_NAME)
         .summary(summary)
         .body(body)
         .timeout(notify_rust::Timeout::Milliseconds(6000))
-        .show();
-    if let Err(e) = res {
-        tracing::debug!("notification failed: {e}");
+        .finalize();
+    let spawned = std::thread::Builder::new().name("uni-share-notify".into()).spawn(move || {
+        if let Err(e) = n.show() {
+            tracing::debug!("notification failed: {e}");
+        }
+    });
+    if let Err(e) = spawned {
+        tracing::debug!("notification thread failed: {e}");
     }
 }
 

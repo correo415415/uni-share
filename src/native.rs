@@ -67,6 +67,9 @@ struct UiState {
 struct UiCtx {
     win: Weak<MainWindow>,
     tx: tokio::sync::mpsc::UnboundedSender<Cmd>,
+    /// Engine→UI event sender; also handed to helper threads (file dialogs) so
+    /// they can report back without touching the non-`Send` UI state.
+    etx: std::sync::mpsc::Sender<Evt>,
     st: Rc<std::cell::RefCell<UiState>>,
 }
 
@@ -159,7 +162,7 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
         snapshot: None,
         confirm: None,
     }));
-    let ctx = UiCtx { win: win.as_weak(), tx: tx.clone(), st: st.clone() };
+    let ctx = UiCtx { win: win.as_weak(), tx: tx.clone(), etx: etx.clone(), st: st.clone() };
     wire_callbacks(&win, &ctx);
     set_filters(&win, None);
 
@@ -535,6 +538,19 @@ fn fs_load(win: &MainWindow, path: &str, dirs_only: bool) {
     }
 }
 
+/// Report the outcome of a native save dialog back to the UI thread (toast).
+fn report_save(etx: &std::sync::mpsc::Sender<Evt>, what: &str, res: Option<Result<PathBuf>>) {
+    match res {
+        Some(Ok(p)) => {
+            let _ = etx.send(Evt::Toast(format!("{what} {}", p.display()), "ok"));
+        }
+        Some(Err(e)) => {
+            let _ = etx.send(Evt::Error(format!("{e:#}")));
+        }
+        None => {}
+    }
+}
+
 fn wire_callbacks(win: &MainWindow, ctx: &UiCtx) {
     let c = ctx.clone();
     win.on_select_job(move |i| {
@@ -640,7 +656,7 @@ fn wire_callbacks(win: &MainWindow, ctx: &UiCtx) {
     });
     let c = ctx.clone();
     win.on_save_ticket(move |uri| {
-        let c2 = c.clone();
+        let etx = c.etx.clone();
         let t = match crate::ticket::Ticket::from_uri(&uri) {
             Ok(t) => t,
             Err(e) => return c.toast(format!("{e:#}"), "err"),
@@ -649,25 +665,17 @@ fn wire_callbacks(win: &MainWindow, ctx: &UiCtx) {
         std::thread::spawn(move || {
             let picked = rfd::FileDialog::new().set_file_name(&default).add_filter("uni-share ticket", &["unishare"]).save_file();
             let res = picked.map(|p| t.save(&p).map(|_| p));
-            let _ = slint::invoke_from_event_loop(move || match res {
-                Some(Ok(p)) => c2.toast(format!("Ticket guardado en {}", p.display()), "ok"),
-                Some(Err(e)) => c2.toast(format!("{e:#}"), "err"),
-                None => {}
-            });
+            report_save(&etx, "Ticket guardado en", res);
         });
     });
     let c = ctx.clone();
     win.on_save_qr(move |data| {
-        let c2 = c.clone();
+        let etx = c.etx.clone();
         let data = data.to_string();
         std::thread::spawn(move || {
             let picked = rfd::FileDialog::new().set_file_name("qr.svg").add_filter("SVG", &["svg"]).save_file();
             let res = picked.map(|p| crate::ui::qr_svg(&data).context("data too long for a QR").and_then(|svg| std::fs::write(&p, svg).map(|_| p).map_err(Into::into)));
-            let _ = slint::invoke_from_event_loop(move || match res {
-                Some(Ok(p)) => c2.toast(format!("QR guardado en {}", p.display()), "ok"),
-                Some(Err(e)) => c2.toast(format!("{e:#}"), "err"),
-                None => {}
-            });
+            report_save(&etx, "QR guardado en", res);
         });
     });
     let c = ctx.clone();

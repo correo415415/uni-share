@@ -97,7 +97,17 @@ pub fn print_ticket(t: &Ticket) {
     eprintln!("    tamaño: {}   archivos: {}", human_bytes(t.total_size), if t.files.is_empty() { "?".into() } else { t.files.len().to_string() });
     eprintln!("    fuentes:");
     for (i, s) in t.sources.iter().enumerate() {
-        eprintln!("      {}. [{}] {}{}", i + 1, s.label(), s.url(), if s.password().is_some() { "  (con contraseña)" } else { "" });
+        match s.lan_endpoint() {
+            Some(ep) => eprintln!(
+                "      {}. [LAN] {} en {}  huella {}{}   → uni-share send-lan <ruta> --to <ticket>",
+                i + 1,
+                ep.name.as_deref().unwrap_or("receptor"),
+                ep.addr(),
+                uni_share::lan::tls::short_fingerprint(&ep.fingerprint),
+                if ep.pin.is_some() { "  (PIN incluido)" } else { "" }
+            ),
+            None => eprintln!("      {}. [{}] {}{}", i + 1, s.label(), s.url(), if s.password().is_some() { "  (con contraseña)" } else { "" }),
+        }
     }
     if !t.files.is_empty() {
         eprintln!("    contenido:");
@@ -116,6 +126,9 @@ pub async fn download_from_ticket(ctx: Ctx, a: DownloadArgs, dest: PathBuf) -> R
     print_ticket(&t);
     if a.list {
         return Ok(());
+    }
+    if t.is_lan() && t.sources.iter().all(Source::is_lan) {
+        anyhow::bail!("es un ticket de emparejamiento LAN (un receptor, no una descarga): usa `uni-share send-lan <ruta> --to '{}'`", a.url);
     }
     if t.is_expired() {
         ui::warn(S, "el ticket indica que la compartición ha expirado; se intentará igualmente");

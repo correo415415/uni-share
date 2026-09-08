@@ -54,6 +54,7 @@ export component MainWindow inherits Window {
     in property <string> fingerprint-full;
     in property <string> lan-addr;
     in property <string> local-ip;
+    in property <string> pairing-uri;
     in property <string> download-dir;
     in property <bool> pin-required;
     in property <bool> auto-accept;
@@ -139,6 +140,7 @@ export component MainWindow inherits Window {
     callback submit-settings();
     callback open-settings();
     callback open-share(int, string);
+    callback open-pairing();
     callback save-ticket(string);
     callback save-qr(string);
     callback fs-open(string);
@@ -237,9 +239,15 @@ export component MainWindow inherits Window {
                         Rectangle { vertical-stretch: 1; }
                         // me card
                         Rectangle {
-                            height: 96px; border-radius: Theme.radius; background: Theme.bg3; border-width: 1px; border-color: Theme.line;
+                            height: 102px; border-radius: Theme.radius; background: Theme.bg3; border-width: 1px; border-color: Theme.line;
                             VerticalLayout { padding: 10px; spacing: 3px;
-                                Text { text: device-name; color: Theme.fg; font-weight: 600; overflow: elide; }
+                                HorizontalLayout { spacing: 6px;
+                                    Text { text: device-name; color: Theme.fg; font-weight: 600; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
+                                    Rectangle { width: 22px; height: 22px; border-radius: Theme.radius-sm; background: pqa.has-hover ? Theme.bg2 : transparent;
+                                        Icon { name: "qr"; tint: pqa.has-hover ? Theme.fg : Theme.fg3; size: 14px; x: 4px; y: 4px; height: 14px; }
+                                        pqa := TouchArea { mouse-cursor: pointer; clicked => { root.open-pairing(); } }
+                                    }
+                                }
                                 Text { text: fingerprint; color: Theme.fg3; font-size: 11px; font-family: Theme.mono; }
                                 HorizontalLayout { Text { text: "LAN"; color: Theme.fg2; font-size: 12px; horizontal-stretch: 1; } Text { text: local-ip + ":" + lan-addr; color: Theme.fg3; font-size: 11px; font-family: Theme.mono; overflow: elide; } }
                                 HorizontalLayout { Text { text: pin-required ? "PIN requerido" : "Sin PIN"; color: Theme.fg2; font-size: 12px; horizontal-stretch: 1; } Text { text: auto-accept ? "auto-aceptar" : "confirmar"; color: Theme.fg2; font-size: 12px; } }
@@ -475,18 +483,19 @@ export component MainWindow inherits Window {
         }
     }
 
-    if root.dialog == "share": Dialog { title: root.sel().name == "" ? "Compartir" : "Compartir «" + root.sel().name + "»"; dialog-width: 820px; close => { root.dialog = ""; }
+    if root.dialog == "share": Dialog { title: root.share-what == "pair" ? "Emparejar con este dispositivo" : root.sel().name == "" ? "Compartir" : "Compartir «" + root.sel().name + "»"; dialog-width: 820px; close => { root.dialog = ""; }
         VerticalLayout { padding: 18px; spacing: 14px;
-            if root.sel().link != "" && root.sel().ticket-uri != "": Segmented { items: ["Link público", "Ticket .unishare"]; current: root.share-what == "ticket" ? 1 : 0; changed(i) => { root.open-share(root.selected, i == 1 ? "ticket" : "link"); } }
+            if root.share-what != "pair" && root.sel().link != "" && root.sel().ticket-uri != "": Segmented { items: ["Link público", "Ticket .unishare"]; current: root.share-what == "ticket" ? 1 : 0; changed(i) => { root.open-share(root.selected, i == 1 ? "ticket" : "link"); } }
             HorizontalLayout { spacing: 20px;
                 Rectangle { width: 240px; height: 240px; border-radius: 12px; background: white; Image { source: qr-image; x: 10px; y: 10px; width: 220px; height: 220px; image-rendering: pixelated; } }
                 VerticalLayout { spacing: 8px; alignment: start; horizontal-stretch: 1;
-                    FieldLabel { text: root.share-what == "ticket" ? "Ticket .unishare" : "Link público"; }
+                    FieldLabel { text: root.share-what == "ticket" ? "Ticket .unishare" : root.share-what == "pair" ? "Ticket de emparejamiento LAN" : "Link público"; }
                     HorizontalLayout { spacing: 8px; Input { text: root.qr-caption; read-only: true; mono: true; horizontal-stretch: 1; } Button { text: "Copiar"; icon: "copy"; clicked => { root.copy-text(root.qr-caption); } } }
-                    Hint { text: root.share-what == "ticket" ? "El QR/URI contiene los links alternativos, la contraseña y los digests BLAKE3. El destinatario lo escanea con el móvil o abre el fichero .unishare." : "Cualquiera con el link puede descargar (si tiene contraseña, la pedirá). Escanea el QR con el móvil para abrirlo."; }
+                    if root.share-what == "pair": Text { text: device-name + "  ·  " + local-ip + ":" + lan-addr + "  ·  " + fingerprint + (pin-required ? "  ·  PIN incluido" : ""); color: Theme.fg2; font-size: Theme.fs-sm; font-family: Theme.mono; wrap: word-wrap; }
+                    Hint { text: root.share-what == "ticket" ? "El QR/URI contiene los links alternativos, la contraseña y los digests BLAKE3. El destinatario lo escanea con el móvil o abre el fichero .unishare." : root.share-what == "pair" ? "Quien escanee este QR (o pegue el ticket en «Enviar por LAN → dirección manual» / `send-lan --to`) podrá enviarte archivos sin descubrimiento mDNS, con tu huella TLS fijada y el PIN ya incluido. No lo publiques: equivale a tu PIN." : "Cualquiera con el link puede descargar (si tiene contraseña, la pedirá). Escanea el QR con el móvil para abrirlo."; }
                     HorizontalLayout { spacing: 8px; alignment: start;
                         if root.share-what == "link": Button { text: "Abrir en el navegador"; clicked => { root.open-url(root.qr-caption); } }
-                        if root.share-what == "ticket": Button { text: "Guardar .unishare…"; icon: "ticket"; clicked => { root.save-ticket(root.qr-caption); } }
+                        if root.share-what == "ticket" || root.share-what == "pair": Button { text: "Guardar .unishare…"; icon: "ticket"; clicked => { root.save-ticket(root.qr-caption); } }
                         if root.share-what == "ticket" && root.sel().ticket-path != "": Button { text: "Abrir carpeta del ticket"; icon: "folder"; clicked => { root.open-path(root.sel().ticket-path); } }
                         Button { text: "Guardar QR (SVG)…"; icon: "qr"; clicked => { root.save-qr(root.qr-caption); } }
                     }
@@ -570,7 +579,7 @@ export component MainWindow inherits Window {
                         TouchArea { mouse-cursor: pointer; clicked => { root.f-device = i; root.f-target = ""; } } }
                 }
                 HorizontalLayout { spacing: 12px;
-                    VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "o dirección manual (ip[:puerto])"; } Input { text <=> root.f-target; placeholder: "192.168.1.20:47820"; edited => { root.f-device = -1; } } }
+                    VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "o dirección manual (ip[:puerto]) / ticket de emparejamiento"; } Input { text <=> root.f-target; placeholder: "192.168.1.20:47820  ·  unishare:…"; edited => { root.f-device = -1; } } }
                     VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "PIN (si lo exige el receptor)"; } Input { text <=> root.f-pin; } }
                 }
                 Check { text: "Comprimir carpeta en .tar.zst antes de enviar"; checked <=> root.f-compress; }

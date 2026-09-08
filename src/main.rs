@@ -71,7 +71,8 @@ pub enum Command {
 pub struct SendLanArgs {
     /// File or folder to send
     pub path: PathBuf,
-    /// Target device name or ip[:port] (skips interactive selection)
+    /// Target: device name, ip[:port], or a LAN pairing ticket (`unishare:` URI / .unishare file
+    /// from `receive --qr`) — the ticket pins the receiver's fingerprint and supplies the PIN
     #[arg(long)]
     pub to: Option<String>,
     /// Pairing PIN if the receiver requires one
@@ -142,6 +143,13 @@ pub struct ReceiveArgs {
     /// Exit after the first completed transfer
     #[arg(long)]
     pub once: bool,
+    /// Print a pairing ticket as QR (ip/port/fingerprint/PIN) so senders can
+    /// target this receiver without mDNS discovery
+    #[arg(long)]
+    pub qr: bool,
+    /// Also save the pairing ticket to this .unishare file (implies --qr)
+    #[arg(long, value_name = "FILE")]
+    pub ticket: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]

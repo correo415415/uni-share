@@ -34,6 +34,15 @@
 //! `unishare:<base64url(container)>` — safe in chats, e-mails and QR codes.
 //! When a ticket is too big for a comfortable QR, [`Ticket::to_uri_compact`]
 //! drops per-file details (the downloader then simply skips verification).
+//!
+//! ### LAN pairing tickets
+//!
+//! A ticket whose source is [`Source::Lan`] does not describe a download but a
+//! **receiver**: host, port, TLS fingerprint and (optionally) the PIN it
+//! demands. The receiver prints it as a QR (`uni-share receive --qr`) and the
+//! sender uses it as target (`uni-share send-lan <path> --to <ticket>`), which
+//! works without mDNS discovery (guest Wi-Fi, VLANs, VPNs) and pins the
+//! receiver's certificate from the very first connection.
 
 use anyhow::{Context, Result, bail, ensure};
 use base64::Engine;
@@ -78,17 +87,52 @@ pub enum Source {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         filename: Option<String>,
     },
+    /// A uni-share **receiver** on the local network (pairing ticket): the
+    /// holder can *send* to it without discovery, with the TLS fingerprint
+    /// pinned and the PIN pre-filled.
+    Lan {
+        /// IP address (v4/v6) or host name.
+        host: String,
+        port: u16,
+        /// Lower-case hex SHA-256 of the receiver's TLS certificate.
+        fingerprint: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pin: Option<String>,
+        /// Receiver's device name (informative).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+}
+
+/// Where a LAN pairing ticket points to (see [`Source::Lan`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LanEndpoint {
+    pub host: String,
+    pub port: u16,
+    pub fingerprint: String,
+    pub pin: Option<String>,
+    pub name: Option<String>,
+}
+
+impl LanEndpoint {
+    /// `host:port` with IPv6 bracketed.
+    pub fn addr(&self) -> String {
+        if self.host.contains(':') && !self.host.starts_with('[') { format!("[{}]:{}", self.host, self.port) } else { format!("{}:{}", self.host, self.port) }
+    }
 }
 
 impl Source {
-    pub fn url(&self) -> &str {
+    /// Download URL, or `unishare-lan://host:port` for pairing sources.
+    pub fn url(&self) -> String {
         match self {
-            Source::StorageTo { url, .. } | Source::SwissTransfer { url, .. } | Source::Http { url, .. } => url,
+            Source::StorageTo { url, .. } | Source::SwissTransfer { url, .. } | Source::Http { url, .. } => url.clone(),
+            Source::Lan { .. } => format!("unishare-lan://{}", self.lan_endpoint().map(|e| e.addr()).unwrap_or_default()),
         }
     }
     pub fn password(&self) -> Option<&str> {
         match self {
             Source::StorageTo { password, .. } | Source::SwissTransfer { password, .. } => password.as_deref(),
+            Source::Lan { pin, .. } => pin.as_deref(),
             Source::Http { .. } => None,
         }
     }
@@ -97,6 +141,22 @@ impl Source {
             Source::StorageTo { .. } => "storage.to",
             Source::SwissTransfer { .. } => "SwissTransfer",
             Source::Http { .. } => "HTTP",
+            Source::Lan { .. } => "LAN",
+        }
+    }
+    pub fn is_lan(&self) -> bool {
+        matches!(self, Source::Lan { .. })
+    }
+    pub fn lan_endpoint(&self) -> Option<LanEndpoint> {
+        match self {
+            Source::Lan { host, port, fingerprint, pin, name } => Some(LanEndpoint {
+                host: host.trim_matches(['[', ']']).to_string(),
+                port: *port,
+                fingerprint: fingerprint.clone(),
+                pin: pin.clone(),
+                name: name.clone(),
+            }),
+            _ => None,
         }
     }
     /// Build the right source variant for a share URL.
@@ -181,12 +241,50 @@ impl Ticket {
         t
     }
 
+    /// Pairing ticket for a LAN receiver (`receive --qr`). `name` doubles as
+    /// the ticket title and the receiver's device name.
+    pub fn lan_pairing(name: &str, host: &str, port: u16, fingerprint: &str, pin: Option<&str>) -> Self {
+        let mut t = Ticket::new(if name.trim().is_empty() { "uni-share" } else { name });
+        t.sender = Some(t.name.clone());
+        t.sources.push(Source::Lan {
+            host: host.trim_matches(['[', ']']).to_string(),
+            port,
+            fingerprint: fingerprint.to_lowercase(),
+            pin: pin.map(str::to_string).filter(|p| !p.is_empty()),
+            name: Some(t.name.clone()),
+        });
+        t
+    }
+
+    /// `true` when this is a LAN pairing ticket (target for `send-lan`, not a download).
+    pub fn is_lan(&self) -> bool {
+        self.sources.iter().any(Source::is_lan)
+    }
+
+    /// First LAN endpoint of the ticket, if any.
+    pub fn lan_endpoint(&self) -> Option<LanEndpoint> {
+        self.sources.iter().find_map(Source::lan_endpoint)
+    }
+
     pub fn validate(&self) -> Result<()> {
         ensure!(self.v == 1, "unsupported ticket schema v{}", self.v);
         ensure!(!self.sources.is_empty(), "ticket has no sources");
         ensure!(!self.name.trim().is_empty(), "ticket has no name");
         for s in &self.sources {
-            ensure!(s.url().starts_with("http://") || s.url().starts_with("https://"), "invalid source url {}", s.url());
+            match s {
+                Source::Lan { host, port, fingerprint, .. } => {
+                    ensure!(!host.trim().is_empty() && !host.contains(['/', ' ']), "invalid LAN host {host:?}");
+                    ensure!(*port > 0, "invalid LAN port");
+                    ensure!(
+                        fingerprint.len() == 64 && fingerprint.bytes().all(|b| b.is_ascii_hexdigit()),
+                        "invalid TLS fingerprint in LAN source"
+                    );
+                }
+                _ => {
+                    let url = s.url();
+                    ensure!(url.starts_with("http://") || url.starts_with("https://"), "invalid source url {url}");
+                }
+            }
         }
         for f in &self.files {
             ensure!(!f.path.is_empty() && !f.path.contains(".."), "invalid file path {:?}", f.path);
@@ -287,6 +385,15 @@ impl Ticket {
 
     /// One-line human summary.
     pub fn summary(&self) -> String {
+        if let Some(ep) = self.lan_endpoint() {
+            return format!(
+                "Emparejamiento LAN con «{}» — {} · huella {} · {}",
+                ep.name.as_deref().unwrap_or(&self.name),
+                ep.addr(),
+                crate::lan::tls::short_fingerprint(&ep.fingerprint),
+                if ep.pin.is_some() { "PIN incluido" } else { "sin PIN" }
+            );
+        }
         let files = if self.files.is_empty() { String::new() } else { format!(", {} archivo(s)", self.files.len()) };
         let srcs: Vec<&str> = self.sources.iter().map(|s| s.label()).collect();
         format!("«{}» — {}{} · fuentes: {}", self.name, crate::fsutil::human_bytes(self.total_size), files, srcs.join(", "))
@@ -409,6 +516,34 @@ mod tests {
         assert!(msg.contains("checksum") || msg.contains("zstd"), "{msg}");
         assert!(Ticket::decode(&bytes[..20]).is_err());
         assert!(Ticket::decode(b"hello").is_err());
+    }
+
+    #[test]
+    fn lan_pairing_ticket() {
+        let fp = "ab".repeat(32);
+        let t = Ticket::lan_pairing("PC-Sala", "192.168.1.20", 47820, &fp, Some("1234"));
+        assert!(t.is_lan());
+        let uri = t.to_uri().unwrap();
+        assert!(uri.len() < QR_SOFT_LIMIT, "pairing ticket must fit in a QR ({})", uri.len());
+        let back = Ticket::from_uri(&uri).unwrap();
+        let ep = back.lan_endpoint().unwrap();
+        assert_eq!(ep.addr(), "192.168.1.20:47820");
+        assert_eq!(ep.fingerprint, fp);
+        assert_eq!(ep.pin.as_deref(), Some("1234"));
+        assert_eq!(ep.name.as_deref(), Some("PC-Sala"));
+        assert!(back.summary().contains("Emparejamiento LAN"));
+        assert_eq!(back.sources[0].label(), "LAN");
+        assert!(back.sources[0].url().starts_with("unishare-lan://"));
+
+        // IPv6 hosts are bracketed in addr().
+        let t6 = Ticket::lan_pairing("x", "fe80::1", 1, &fp, None);
+        assert_eq!(t6.lan_endpoint().unwrap().addr(), "[fe80::1]:1");
+        assert!(t6.lan_endpoint().unwrap().pin.is_none());
+
+        // Validation rejects bad fingerprints / ports.
+        assert!(Ticket::lan_pairing("x", "10.0.0.1", 1, "zz", None).encode().is_err());
+        assert!(Ticket::lan_pairing("x", "10.0.0.1", 0, &fp, None).encode().is_err());
+        assert!(Ticket::lan_pairing("x", "", 1, &fp, None).encode().is_err());
     }
 
     #[test]

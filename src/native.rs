@@ -197,9 +197,18 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
         // `associate`) or with a plain URL: pre-fill the download dialog and
         // show the ticket preview straight away.
         let open = open.strip_prefix("file://").map(|p| percent_decode(p)).unwrap_or(open);
-        win.set_new_mode(2);
+        let is_pairing = Engine::parse_ticket(&open).map(|t| t.is_lan()).unwrap_or(false);
         win.set_preview_text(preview_ticket(&open).into());
-        win.set_f_url(open.into());
+        if is_pairing {
+            // A LAN pairing ticket is a *target*, not a download: open "Enviar por LAN"
+            // with the ticket as manual address.
+            win.set_new_mode(0);
+            win.set_f_device(-1);
+            win.set_f_target(open.into());
+        } else {
+            win.set_new_mode(2);
+            win.set_f_url(open.into());
+        }
         win.set_dialog("new".into());
     }
     if let Some((_, tab)) = opts.select {
@@ -390,6 +399,7 @@ fn render(ctx: &UiCtx) {
     win.set_fingerprint_full(snap.fingerprint_full.clone().into());
     win.set_lan_addr(snap.lan_port.to_string().into());
     win.set_local_ip(snap.local_ips.first().cloned().unwrap_or_default().into());
+    win.set_pairing_uri(snap.pairing_uri.clone().into());
     win.set_download_dir(snap.download_dir.display().to_string().into());
     win.set_pin_required(snap.pin_required);
     win.set_auto_accept(snap.auto_accept);
@@ -720,6 +730,18 @@ fn wire_callbacks(win: &MainWindow, ctx: &UiCtx) {
         w.set_dialog("share".into());
     });
     let c = ctx.clone();
+    win.on_open_pairing(move || {
+        let Some(w) = c.win.upgrade() else { return };
+        let data = w.get_pairing_uri().to_string();
+        if data.is_empty() {
+            return c.toast("Sin dirección LAN: no se puede generar el ticket de emparejamiento", "err");
+        }
+        w.set_share_what("pair".into());
+        w.set_qr_caption(data.clone().into());
+        w.set_qr_image(qr_image(&data));
+        w.set_dialog("share".into());
+    });
+    let c = ctx.clone();
     win.on_save_ticket(move |uri| {
         let etx = c.etx.clone();
         let t = match crate::ticket::Ticket::from_uri(&uri) {
@@ -915,7 +937,16 @@ fn preview_ticket(v: &str) -> String {
         Ok(t) => {
             let mut s = format!("🎫 {}{}\n", t.summary(), if t.is_expired() { "  (EXPIRADO)" } else { "" });
             for src in &t.sources {
-                s.push_str(&format!("[{}] {}{}\n", src.label(), src.url(), if src.password().is_some() { " 🔒" } else { "" }));
+                match src.lan_endpoint() {
+                    Some(ep) => s.push_str(&format!(
+                        "[LAN] {} · {} · huella {}{}\n",
+                        ep.name.as_deref().unwrap_or("receptor"),
+                        ep.addr(),
+                        crate::lan::tls::short_fingerprint(&ep.fingerprint),
+                        if ep.pin.is_some() { " · PIN incluido" } else { "" }
+                    )),
+                    None => s.push_str(&format!("[{}] {}{}\n", src.label(), src.url(), if src.password().is_some() { " 🔒" } else { "" })),
+                }
             }
             for f in t.files.iter().take(40) {
                 s.push_str(&format!("{}  ({}){}\n", f.path, human_bytes(f.size), if f.blake3.is_some() { " ✓" } else { "" }));

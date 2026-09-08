@@ -187,6 +187,8 @@ pub struct Snapshot {
     pub lan_addr: String,
     pub lan_port: u16,
     pub local_ips: Vec<String>,
+    /// `unishare:` pairing ticket for this receiver (empty when no LAN address).
+    pub pairing_uri: String,
     pub download_dir: PathBuf,
     pub pin_required: bool,
     pub auto_accept: bool,
@@ -245,6 +247,7 @@ impl Snapshot {
             lan_addr: "0.0.0.0:47820".into(),
             lan_port: 47820,
             local_ips: vec!["192.168.1.78".into()],
+            pairing_uri: Ticket::lan_pairing("Portátil de Ana", "192.168.1.78", 47820, &"3f".repeat(32), None).to_uri().unwrap_or_default(),
             download_dir: PathBuf::from("/home/user/Descargas"),
             pin_required: false,
             auto_accept: false,
@@ -779,6 +782,11 @@ impl Engine {
             lan_addr: self.lan_addr.to_string(),
             lan_port: self.lan_addr.port(),
             local_ips: local_ips(),
+            pairing_uri: local_ips()
+                .first()
+                .map(|ip| Ticket::lan_pairing(&cfg.device_name, ip, self.lan_addr.port(), &self.identity.fingerprint, cfg.pin.as_deref()))
+                .and_then(|t| t.to_uri().ok())
+                .unwrap_or_default(),
             download_dir: cfg.download_dir.clone(),
             pin_required: cfg.pin.is_some(),
             auto_accept: cfg.auto_accept,
@@ -812,18 +820,36 @@ impl Engine {
         ensure!(path.exists(), "path not found: {}", req.path);
         let lan_port = self.cfg.read().await.lan_port;
         let mut fingerprint = req.fingerprint.clone().filter(|f| !f.is_empty());
-        let (ip, port) = match parse_target(&req.target, req.port.unwrap_or(lan_port)) {
-            Some(t) => t,
-            None => {
-                let dev = self
-                    .devices()
-                    .await
-                    .into_iter()
-                    .find(|d| d.name.eq_ignore_ascii_case(req.target.trim()))
-                    .context("target must be ip[:port] or a discovered device name")?;
-                fingerprint.get_or_insert(dev.fingerprint.clone());
-                (dev.best_addr().context("device has no address")?, dev.port)
+        let mut pin = req.pin.clone().filter(|p| !p.is_empty());
+        let target = req.target.trim().to_string();
+        // A LAN pairing ticket (from `receive --qr`) pins the fingerprint and carries the PIN.
+        let pairing = if crate::ticket::looks_like_ticket(&target) || target.starts_with('{') {
+            let t = Self::parse_ticket(&target).context("reading pairing ticket")?;
+            Some(t.lan_endpoint().context("this ticket is a download ticket, not a LAN pairing ticket")?)
+        } else {
+            None
+        };
+        let (ip, port) = match &pairing {
+            Some(ep) => {
+                fingerprint = Some(ep.fingerprint.clone());
+                if pin.is_none() {
+                    pin = ep.pin.clone();
+                }
+                (crate::lan::discovery::resolve_host(&ep.host, ep.port).await?, ep.port)
             }
+            None => match parse_target(&target, req.port.unwrap_or(lan_port)) {
+                Some(t) => t,
+                None => {
+                    let dev = self
+                        .devices()
+                        .await
+                        .into_iter()
+                        .find(|d| d.name.eq_ignore_ascii_case(&target))
+                        .context("target must be ip[:port], a discovered device name or a pairing ticket")?;
+                    fingerprint.get_or_insert(dev.fingerprint.clone());
+                    (dev.best_addr().context("device has no address")?, dev.port)
+                }
+            },
         };
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let (job, sink) = self.new_job(JobKind::LanSend, &name, &format!("{ip}:{port}"), 0, Vec::new()).await;
@@ -852,7 +878,7 @@ impl Engine {
                     (c.device_name.clone(), c.rate_limit_mbps as u64 * 125_000)
                 };
                 let manifest = build_manifest(&device_name, &e.identity.fingerprint, &name, &files, &hashes);
-                let sender = Sender::new(ip, port, fingerprint.as_deref(), req.pin.clone().filter(|p| !p.is_empty()))?;
+                let sender = Sender::new(ip, port, fingerprint.as_deref(), pin.clone())?;
                 let info = sender.info().await?;
                 e.update_job(job, |j| j.peer = format!("{} ({ip})", info.name)).await;
                 e.log(job, format!("Oferta enviada a {} — esperando aceptación…", info.name)).await;
@@ -979,6 +1005,9 @@ impl Engine {
         ensure!(!src.is_empty(), "empty url");
         let dest = req.dest.clone().filter(|d| !d.trim().is_empty()).map(PathBuf::from).unwrap_or(self.download_dir().await);
         let is_ticket = crate::ticket::looks_like_ticket(&src);
+        if is_ticket && Self::parse_ticket(&src).map(|t| t.is_lan()).unwrap_or(false) {
+            bail!("es un ticket de emparejamiento LAN (un receptor, no una descarga): úsalo como destino en «Enviar por LAN»");
+        }
         let short = if is_ticket { "ticket".to_string() } else { src.clone() };
         let (job, sink) = self.new_job(JobKind::Download, &short, &short, 0, Vec::new()).await;
         self.update_job(job, |j| j.dest = Some(dest.display().to_string())).await;

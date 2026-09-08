@@ -174,6 +174,23 @@ pub fn parse_target(s: &str, default_port: u16) -> Option<(IpAddr, u16)> {
     None
 }
 
+/// Resolve a host from a pairing ticket: IP literal (v4/v6, optionally
+/// bracketed) or a DNS/mDNS name looked up through the system resolver.
+pub async fn resolve_host(host: &str, port: u16) -> anyhow::Result<IpAddr> {
+    let h = host.trim().trim_matches(['[', ']']);
+    if let Ok(ip) = h.parse::<IpAddr>() {
+        return Ok(ip);
+    }
+    let all: Vec<std::net::SocketAddr> =
+        tokio::net::lookup_host((h, port)).await.map_err(|e| anyhow::anyhow!("cannot resolve host {h:?}: {e}"))?.collect();
+    // Prefer IPv4 (most home LANs), fall back to whatever came first.
+    all.iter()
+        .find(|a| a.is_ipv4())
+        .or(all.first())
+        .map(|a| a.ip())
+        .ok_or_else(|| anyhow::anyhow!("host {h:?} has no addresses"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

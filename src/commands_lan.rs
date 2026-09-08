@@ -8,7 +8,7 @@ use std::time::Duration;
 use uni_share::fsutil::{collect_files, human_bytes, total_size, tree_preview};
 use uni_share::history::{Kind, Status};
 use uni_share::lan::client::{Sender, build_manifest, compress_to_temp, hash_all};
-use uni_share::lan::discovery::{Announcer, Device, discover, parse_target};
+use uni_share::lan::discovery::{Announcer, Device, discover, parse_target, resolve_host};
 use uni_share::lan::server::{Decision, ServerOptions, start};
 use uni_share::lan::tls::{Identity, short_fingerprint};
 
@@ -81,6 +81,22 @@ pub async fn receive(ctx: Ctx, a: ReceiveArgs) -> Result<()> {
     }
     if auto_accept {
         ui::warn(S, "auto-aceptación activada");
+    }
+    if a.qr || a.ticket.is_some() {
+        let ips = uni_share::engine::local_ips();
+        let host = ips.first().cloned().context("no LAN address found for the pairing ticket")?;
+        let t = uni_share::ticket::Ticket::lan_pairing(&ctx.cfg.device_name, &host, server.addr.port(), &id.fingerprint, pin.as_deref());
+        let uri = t.to_uri()?;
+        ui::info(S, format!("Ticket de emparejamiento ({}): envía con `uni-share send-lan <ruta> --to '<ticket>'`", style(&host).bold()));
+        ui::print_qr(S, &uri);
+        eprintln!("    {uri}");
+        if pin.is_some() {
+            ui::warn(S, "el ticket incluye el PIN: compártelo solo con quien deba enviarte archivos");
+        }
+        if let Some(p) = &a.ticket {
+            t.save(p)?;
+            ui::ok(S, format!("Ticket guardado en {}", style(p.display()).bold()));
+        }
     }
 
     let history = ctx.history.clone();
@@ -172,7 +188,19 @@ pub async fn send_lan(ctx: Ctx, a: SendLanArgs) -> Result<()> {
     let id = identity(&ctx)?;
 
     // 1. Resolve target device.
+    let mut pin = a.pin.clone();
     let (ip, port, fingerprint, target_name) = match &a.to {
+        Some(t) if uni_share::ticket::looks_like_ticket(t) => {
+            let ticket = uni_share::ticket::resolve(t).context("reading pairing ticket")?;
+            let ep = ticket.lan_endpoint().context("the ticket is a download ticket, not a LAN pairing ticket (use `download`)")?;
+            let ip = resolve_host(&ep.host, ep.port).await?;
+            if pin.is_none() {
+                pin = ep.pin.clone();
+            }
+            let name = ep.name.clone().unwrap_or_else(|| ticket.name.clone());
+            ui::info(S, format!("Ticket de emparejamiento: {} en {} (huella fijada)", style(&name).bold(), ep.addr()));
+            (ip, ep.port, Some(ep.fingerprint.clone()), name)
+        }
         Some(t) => match parse_target(t, ctx.cfg.lan_port) {
             Some((ip, port)) => (ip, port, None, t.clone()),
             None => {
@@ -238,10 +266,10 @@ pub async fn send_lan(ctx: Ctx, a: SendLanArgs) -> Result<()> {
     manifest.compressed_archive = compress && a.path.is_dir();
 
     // 3. Connect + offer.
-    let sender = Sender::new(ip, port, fingerprint.as_deref(), a.pin.clone())?;
+    let sender = Sender::new(ip, port, fingerprint.as_deref(), pin.clone())?;
     let info = sender.info().await.with_context(|| format!("cannot reach {target_name} at {ip}:{port}"))?;
     ui::info(S, format!("Conectado a {} — huella {}", style(&info.name).bold(), short_fingerprint(&info.fingerprint)));
-    if info.requires_pin && a.pin.is_none() {
+    if info.requires_pin && pin.is_none() {
         bail!("{} requiere PIN: usa --pin", info.name);
     }
     let rid = ctx.history.start(Kind::LanSend, &name, total, &info.name, files.len() as u32)?;

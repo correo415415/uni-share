@@ -28,6 +28,9 @@ pub async fn download_ticket(
     on_source: impl Fn(&Source, Option<&anyhow::Error>),
 ) -> Result<TicketReport> {
     t.validate()?;
+    if t.is_lan() && t.sources.iter().all(Source::is_lan) {
+        bail!("this is a LAN pairing ticket (a receiver, not a download): use `uni-share send-lan <path> --to <ticket>`");
+    }
     if t.is_expired() {
         tracing::warn!("ticket expired at {:?}; trying anyway", t.expires);
     }
@@ -41,7 +44,7 @@ pub async fn download_ticket(
                 return Ok(TicketReport { source: src.label().into(), saved, verified, unverified });
             }
             Err(e) => {
-                tracing::warn!(source = src.url(), "source failed: {e:#}");
+                tracing::warn!(source = %src.url(), "source failed: {e:#}");
                 last_err = Some(e);
             }
         }
@@ -93,6 +96,7 @@ async fn fetch_from(
             download_resumable(&client, url, &dest, expected, progress, 3).await?;
             Ok(vec![dest])
         }
+        Source::Lan { .. } => bail!("LAN pairing source cannot be downloaded from"),
     }
 }
 

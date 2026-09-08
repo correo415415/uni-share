@@ -238,3 +238,53 @@ async fn resume_across_receiver_restarts() {
     // … and the record is gone.
     assert_eq!(std::fs::read_dir(&rec_path).unwrap().count(), 0);
 }
+
+/// A pairing ticket (`receive --qr`) carries host/port/fingerprint/PIN: the
+/// sender connects with the fingerprint pinned and the PIN pre-filled, without
+/// any mDNS discovery.
+#[tokio::test]
+async fn pairing_ticket_targets_receiver_without_discovery() {
+    use uni_share::lan::protocol::UploadResult;
+    use uni_share::ticket::Ticket;
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    std::fs::write(src.path().join("f.txt"), b"paired").unwrap();
+    let (mut server, id) = spawn_receiver(dst.path().to_path_buf(), Some("4321"), false).await;
+    let port = server.addr.port();
+    let dest = dst.path().to_path_buf();
+    tokio::spawn(async move {
+        while let Some(offer) = server.offers.recv().await {
+            let _ = offer.decision.send(Decision::Accept { dest_dir: dest.clone() });
+        }
+    });
+
+    // Receiver side: build + serialise the ticket (what `receive --qr` prints).
+    let uri = Ticket::lan_pairing("Receptor", "127.0.0.1", port, &id.fingerprint, Some("4321")).to_uri().unwrap();
+    assert!(uri.len() < uni_share::ticket::QR_SOFT_LIMIT);
+
+    // Sender side: parse the ticket and connect using only its contents.
+    let t = uni_share::ticket::resolve(&uri).unwrap();
+    assert!(t.is_lan());
+    let ep = t.lan_endpoint().unwrap();
+    let ip = uni_share::lan::discovery::resolve_host(&ep.host, ep.port).await.unwrap();
+    assert_eq!(ep.port, port);
+    let sender = Sender::new(ip, ep.port, Some(&ep.fingerprint), ep.pin.clone()).unwrap();
+    let info = sender.info().await.unwrap();
+    assert_eq!(info.fingerprint, id.fingerprint);
+    assert!(info.requires_pin);
+
+    let files = collect_files(&src.path().join("f.txt")).unwrap();
+    let hashes = hash_all(&files, |_| {}).await.unwrap();
+    let manifest = build_manifest("S", "", "f.txt", &files, &hashes);
+    let tid = sender.offer(&manifest, Duration::from_secs(5)).await.unwrap();
+    let progress: uni_share::lan::client::ProgressFn = Arc::new(|_, _| {});
+    let r = sender.upload_file(&tid, 0, &files[0], &hashes[0], &progress, 0).await.unwrap();
+    assert!(matches!(r, UploadResult::Ok { .. }), "receiver must verify the file");
+    assert_eq!(std::fs::read(dst.path().join("f.txt")).unwrap(), b"paired");
+
+    // A download ticket is *not* a pairing ticket.
+    let mut dl = Ticket::new("x");
+    dl.sources.push(uni_share::ticket::Source::Http { url: "https://example.com/a".into(), filename: None });
+    assert!(dl.lan_endpoint().is_none());
+    assert!(!dl.is_lan());
+}

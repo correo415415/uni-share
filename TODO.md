@@ -92,6 +92,21 @@ Decisión: Slint (Rust puro, renderizado propio con `winit`+`femtovg`/`skia`, si
 ## Fase 8 — Smash (aparcado)
 - [ ] Smash queda como backend **experimental**: oculto de la ayuda por defecto, sin más desarrollo hasta nueva orden. La API key nunca se versiona.
 
+## Fase 9 — Android (propuesta de diseño)
+
+Objetivo: el mismo binario/engine Rust en el móvil, con una UI táctil, sin reescribir la lógica. Plan por etapas:
+
+1. **Compilar el engine como biblioteca Android** (`cargo-ndk`, targets `aarch64-linux-android` + `x86_64-linux-android` para el emulador). Todo lo que usa el `engine` ya es Rust puro o crates con soporte Android: tokio, rustls/ring (rcgen), reqwest (`rustls-no-provider`), rusqlite (`bundled`), blake3, zstd, mdns-sd (sockets UDP multicast → requiere `MulticastLock` desde Java: `WifiManager.createMulticastLock`). Sustituir `directories`/`local-ip-address` por rutas y direcciones que pasa la app Android (`filesDir`, `ConnectivityManager`). Feature `android` en `Cargo.toml` que quita `notify-rust`, `arboard`, `rfd`, `open`.
+2. **Puente Rust ↔ Kotlin con UniFFI** (`uniffi = "0.28"`): exponer `Engine` (start/stop, snapshot, send_lan, accept/reject, download, create_ticket, config) y un callback `on_event` → genera bindings Kotlin. La UI hace polling de `snapshot()` como ya hacen las GUIs web/Slint (mismo contrato JSON que `/api/state`).
+3. **UI Android en Kotlin + Jetpack Compose** con el mismo sistema de diseño "Graphite" (tokens de `ui/theme.slint` → `Color`/`Shapes`/`Typography` de Material 3 personalizados; una sola lista de transferencias con tarjetas de 56 dp, bottom bar con Enviar/Recibir/Escanear, hoja inferior para ofertas entrantes). Alternativa sin Kotlin: **Slint tiene backend Android** (`slint::android`, feature `backend-android-activity`) → reutilizaríamos `ui/*.slint` con una variante de layout compacta (`Theme.compact`) y `cargo apk`; menos código pero peor integración con el sistema (share sheet, notificaciones, archivos).
+4. **Integración con Android**: `Intent.ACTION_SEND`/`SEND_MULTIPLE` (compartir desde Galería/Archivos → `send-lan`/`send-global`), `ACTION_VIEW` para `.unishare` y `unishare:` (equivalente a `associate`), `Storage Access Framework` (`ACTION_OPEN_DOCUMENT_TREE` → persistir permiso URI; el engine lee/escribe vía `ParcelFileDescriptor` → `File::from_raw_fd`), `ForegroundService` con notificación de progreso para recibir en segundo plano (Doze), `CameraX + ML Kit`/`zxing` para escanear QR de tickets y emparejamiento, `NsdManager` como fallback de descubrimiento si mDNS-sd multicast está bloqueado, `WifiManager`/`ConnectivityManager` para la IP local, `Network Security Config` no necesaria (rustls hace el pinning).
+5. **Empaquetado**: `.apk`/`.aab` con Gradle; CI en el runner local con SDK/NDK cacheados (job `android` en `build.yml`, `runs-on: self-hosted`), firma con keystore de desarrollo; publicación en la release nightly junto a los binarios de escritorio; F-Droid a futuro (todo es open source, sin dependencias propietarias si se usa `zxing` en vez de ML Kit).
+6. **Limitaciones/decisiones**: no hay daemon permanente (Android lo mata) → recepción sólo con la app abierta o servicio en primer plano; puerto LAN fijo 47820 requiere estar en la misma Wi-Fi (sin AP isolation); las carpetas se envían como `.tar.zst` por defecto (SAF no da rutas reales); el escaneo antivirus local se limita a las heurísticas (ClamAV no disponible).
+
+- [ ] Etapa 1: `--features android` + `cargo ndk` compilando el engine (sin UI) en CI.
+- [ ] Etapa 2: `uniffi` con `Engine` mínimo (snapshot + send_lan + accept) y app Compose "hola mundo" que lista dispositivos.
+- [ ] Etapa 3+: UI completa, intents, SAF, servicio en primer plano, QR, empaquetado.
+
 ## Pendiente / mejoras conocidas
 - [ ] Cloudflare puede exigir captcha (Turnstile) en descargas de storage.to según reputación de IP: entonces se muestra un mensaje pidiendo abrir el link en el navegador
 - [ ] Descarga de links Smash (requiere token de destinatario del flujo web) — se indica abrir en navegador

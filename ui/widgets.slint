@@ -34,7 +34,7 @@ export component Icon inherits Rectangle {
         : name == "arrow-up" ? "M12 19 V7 M7 12 L12 7 L17 12"
         : name == "arrow-down" ? "M12 5 V17 M7 12 L12 17 L17 12"
         : name == "globe" ? "M12 3 A9 9 0 1 0 12 21 A9 9 0 1 0 12 3 M12 16 V8 M9 11 L12 8 L15 11"
-        : name == "check" ? "M5 13 L9 17 L19 7"
+        : name == "check" ? "M7 12.5 L10.5 16 L17 8.5"
         : name == "x-circle" ? "M12 3 A9 9 0 1 0 12 21 A9 9 0 1 0 12 3 M15 9 L9 15 M9 9 L15 15"
         : name == "refresh" ? "M20 12 A8 8 0 1 1 17.7 6.3 M20 4 V9 H15"
         : name == "x" ? "M6 6 L18 18 M18 6 L6 18"
@@ -143,7 +143,7 @@ export component Check inherits Rectangle {
             width: 16px; height: 16px; y: 4px; border-radius: 3px;
             background: checked ? Theme.accent : Theme.bg2; border-width: 1px; border-color: checked ? Theme.accent : Theme.line2;
             animate background { duration: 100ms; }
-            if checked: Icon { name: "check"; tint: Theme.on-accent; size: 12px; stroke-width: 2.4px; x: 2px; y: 2px; }
+            if checked: Icon { name: "check"; tint: Theme.on-accent; size: 16px; height: 16px; x: 0; y: 0; stroke-width: 2.2px; }
         }
         lbl := Text { text: root.text; color: Theme.fg2; font-size: Theme.fs; vertical-alignment: center; wrap: word-wrap; horizontal-stretch: 1; min-width: 0px; }
     }

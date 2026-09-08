@@ -169,6 +169,8 @@ jobs:
           shot main
           shot details-general --select 1:0
           shot details-files   --select 1:1
+          shot details-failed  --select 5:0
+          shot details-received --select 4:0
           shot details-share   --select 3:2
           shot details-log     --select 1:3
           shot new      --dialog new

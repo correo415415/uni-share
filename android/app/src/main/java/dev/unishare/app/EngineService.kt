@@ -6,6 +6,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -18,7 +19,22 @@ import androidx.core.content.ContextCompat
  */
 class EngineService : Service() {
 
+    /** mDNS needs multicast; many vendors drop multicast packets unless the app holds a lock. */
+    private var multicast: WifiManager.MulticastLock? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        try {
+            val wifi = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
+            multicast = wifi.createMulticastLock("uni-share-mdns").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (_: Exception) {
+        }
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground()
@@ -33,8 +49,13 @@ class EngineService : Service() {
     }
 
     override fun onDestroy() {
+        try {
+            multicast?.takeIf { it.isHeld }?.release()
+        } catch (_: Exception) {
+        }
+        multicast = null
+        // The activity may still be showing the WebView; the engine itself only stops on ACTION_STOP.
         super.onDestroy()
-        // The activity may still be showing the WebView; only stop the engine when explicitly asked.
     }
 
     private fun startForeground() {

@@ -139,8 +139,20 @@ pub struct Job {
     /// Files written to disk by this job (receptions/downloads) — lets the user re-scan later.
     #[serde(skip)]
     saved: Vec<PathBuf>,
+    /// Original request, kept so a failed/cancelled job can be retried.
+    #[serde(skip)]
+    origin: Option<JobOrigin>,
+    /// `true` when the job can be re-launched from the UI (failed/cancelled send/upload/download).
+    pub retryable: bool,
     #[serde(skip)]
     samples: VecDeque<(Instant, u64)>,
+}
+
+#[derive(Clone, Debug)]
+pub enum JobOrigin {
+    Lan(SendLanReq),
+    Global(SendGlobalReq),
+    Download(DownloadReq),
 }
 
 impl Job {
@@ -254,6 +266,8 @@ impl Snapshot {
             ],
             scan: (matches!(kind, JobKind::LanReceive | JobKind::Download) && state == JobState::Completed).then_some(crate::scan::Severity::Info),
             saved: Vec::new(),
+            origin: None,
+            retryable: matches!(state, JobState::Failed | JobState::Cancelled) && kind != JobKind::LanReceive,
             samples: VecDeque::new(),
         };
         let gib = 1024u64 * 1024 * 1024;
@@ -584,6 +598,8 @@ impl Engine {
             log: Vec::new(),
             scan: None,
             saved: Vec::new(),
+            origin: None,
+            retryable: false,
             samples: VecDeque::new(),
         };
         {
@@ -678,6 +694,26 @@ impl Engine {
         Ok(self.scan_with(Some(id), paths, cfg).await.expect("scan enabled"))
     }
 
+    /// Re-launch a failed/cancelled send/upload/download with its original request.
+    /// The old entry is removed from the list; returns the new job id.
+    pub async fn retry_job(self: &Arc<Self>, id: u64) -> Result<u64> {
+        let job = self.job(id).await.context("transferencia no encontrada")?;
+        ensure!(!job.is_active(), "la transferencia todavía está en curso");
+        let origin = job.origin.clone().context("esta transferencia no se puede reintentar (recepción LAN o entrada antigua)")?;
+        let new = match origin {
+            JobOrigin::Lan(r) => self.send_lan(r).await?,
+            JobOrigin::Global(r) => self.send_global(r).await?,
+            JobOrigin::Download(mut r) => {
+                // Resume partial downloads instead of failing on existing files.
+                r.force = true;
+                self.download(r).await?
+            }
+        };
+        self.remove_job(id).await;
+        self.log(new, format!("Reintento de la transferencia #{id}")).await;
+        Ok(new)
+    }
+
     async fn scan_with(&self, job: Option<u64>, paths: Vec<PathBuf>, cfg: crate::scan::ScanConfig) -> Option<crate::scan::Report> {
         if let Some(id) = job {
             self.log(id, "Análisis de seguridad en curso…").await;
@@ -715,6 +751,7 @@ impl Engine {
         self.update_job(id, |j| {
             j.state = state;
             j.message = message.clone();
+            j.retryable = matches!(state, JobState::Failed | JobState::Cancelled) && j.origin.is_some();
             j.finished = Some(chrono::Utc::now().timestamp_millis());
             if state == JobState::Completed {
                 j.done = j.total.max(j.done);
@@ -1020,6 +1057,8 @@ impl Engine {
         };
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let (job, sink) = self.new_job(JobKind::LanSend, &name, &format!("{ip}:{port}"), 0, Vec::new()).await;
+        let origin = JobOrigin::Lan(req.clone());
+        self.update_job(job, move |j| j.origin = Some(origin)).await;
         let e = self.clone();
         let task = tokio::spawn(async move {
             let res: Result<()> = async {
@@ -1078,6 +1117,8 @@ impl Engine {
         }
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let (job, sink) = self.new_job(JobKind::GlobalUpload, &name, "storage.to", 0, Vec::new()).await;
+        let origin = JobOrigin::Global(req.clone());
+        self.update_job(job, move |j| j.origin = Some(origin)).await;
         let e = self.clone();
         let task = tokio::spawn(async move {
             let res: Result<()> = async {
@@ -1181,6 +1222,8 @@ impl Engine {
         }
         let short = if is_ticket { "ticket".to_string() } else { src.clone() };
         let (job, sink) = self.new_job(JobKind::Download, &short, &short, 0, Vec::new()).await;
+        let origin = JobOrigin::Download(req.clone());
+        self.update_job(job, move |j| j.origin = Some(origin)).await;
         self.update_job(job, |j| j.dest = Some(dest.display().to_string())).await;
         let e = self.clone();
         let task = tokio::spawn(async move {
@@ -1476,6 +1519,8 @@ mod tests {
             log: vec![],
             scan: None,
             saved: Vec::new(),
+            origin: None,
+            retryable: false,
             samples: VecDeque::new(),
         };
         assert_eq!(j.percent(), 25.0);

@@ -38,6 +38,7 @@ export struct JobRow {
     indeterminate: bool,
     scan: string,        // "" | info | warning | danger
     scan-label: string,
+    retryable: bool,
 }
 export struct FileRow { path: string, size-text: string }
 export struct DeviceRow { name: string, addr: string, fingerprint: string, pin: bool }
@@ -146,6 +147,7 @@ export component MainWindow inherits Window {
     callback cancel-job(int);
     callback remove-job(int);
     callback rescan-job(int);
+    callback retry-job(int);
     callback clear-finished();
     callback rescan();
     callback accept-offer(string, string);
@@ -403,7 +405,7 @@ export component MainWindow inherits Window {
                                         VerticalLayout { spacing: 4px; horizontal-stretch: 1;
                                             KV { k: "Nombre"; v: root.sel().name; }
                                             KV { k: "Tipo"; v: root.sel().kind-label; }
-                                            HorizontalLayout { spacing: 12px; height: 22px; Text { text: "Estado"; color: Theme.fg3; width: 110px; vertical-alignment: center; } Badge { y: 2px; text: root.sel().state-label; kind: root.sel().state; } if root.sel().scan != "": Badge { y: 2px; text: root.sel().scan-label; kind: root.sel().scan == "info" ? "completed" : root.sel().scan == "warning" ? "warn" : "danger"; } if (root.sel().kind == "lan_receive" || root.sel().kind == "download") && root.sel().state == "completed": Button { y: -4px; height: 30px; icon: "shield"; tooltip: "Analizar de nuevo (seguridad)"; clicked => { root.rescan-job(root.sel().id); } } Text { text: root.sel().message; color: Theme.fg3; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; } }
+                                            HorizontalLayout { spacing: 12px; height: 22px; Text { text: "Estado"; color: Theme.fg3; width: 110px; vertical-alignment: center; } Badge { y: 2px; text: root.sel().state-label; kind: root.sel().state; } if root.sel().scan != "": Badge { y: 2px; text: root.sel().scan-label; kind: root.sel().scan == "info" ? "completed" : root.sel().scan == "warning" ? "warn" : "danger"; } if (root.sel().kind == "lan_receive" || root.sel().kind == "download") && root.sel().state == "completed": Button { y: -4px; height: 30px; icon: "shield"; tooltip: "Analizar de nuevo (seguridad)"; clicked => { root.rescan-job(root.sel().id); } } if root.sel().retryable: Button { y: -4px; height: 30px; text: "Reintentar"; icon: "refresh"; clicked => { root.retry-job(root.sel().id); } } Text { text: root.sel().message; color: Theme.fg3; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; } }
                                             KV { k: "Progreso"; v: root.sel().done-text + " / " + root.sel().size-text + "  (" + round(root.sel().percent) + "%)"; mono: true; }
                                             KV { k: "Velocidad"; v: root.sel().state == "running" ? root.sel().speed-text + " · ETA " + root.sel().eta-text : "—"; mono: true; }
                                             KV { k: "Archivo actual"; v: root.sel().current-file == "" ? "—" : root.sel().current-file; mono: true; }

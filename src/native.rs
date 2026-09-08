@@ -31,6 +31,7 @@ enum Cmd {
     Cancel(u64),
     Remove(u64),
     RescanJob(u64),
+    RetryJob(u64),
     ClearFinished,
     Rescan,
     Accept(String, Option<PathBuf>),
@@ -283,6 +284,7 @@ async fn handle_cmd(engine: &Arc<Engine>, cmd: Cmd, etx: &std::sync::mpsc::Sende
             engine.remove_job(id).await;
             Ok(None)
         }
+        Cmd::RetryJob(id) => engine.retry_job(id).await.map(|_| Some(Evt::Toast("Reintentando…".into(), "ok"))),
         Cmd::RescanJob(id) => engine.rescan_job(id).await.map(|r| {
             let kind = match r.severity() {
                 Severity::Danger => "err",
@@ -464,6 +466,7 @@ fn render(ctx: &UiCtx) {
                 indeterminate: j.state == JobState::Running && j.total == 0,
                 scan: j.scan.map(|s| match s { Severity::Info => "info", Severity::Warning => "warning", Severity::Danger => "danger" }).unwrap_or("").into(),
                 scan_label: j.scan.map(|s| match s { Severity::Info => "Análisis OK", Severity::Warning => "Avisos", Severity::Danger => "PELIGRO" }).unwrap_or("").into(),
+                retryable: j.retryable,
             }
         })
         .collect();
@@ -716,6 +719,8 @@ fn wire_callbacks(win: &MainWindow, ctx: &UiCtx) {
     win.on_remove_job(move |id| c.send(Cmd::Remove(id as u64)));
     let c = ctx.clone();
     win.on_rescan_job(move |id| c.send(Cmd::RescanJob(id as u64)));
+    let c = ctx.clone();
+    win.on_retry_job(move |id| c.send(Cmd::RetryJob(id as u64)));
     let c = ctx.clone();
     win.on_clear_finished(move || c.send(Cmd::ClearFinished));
     let c = ctx.clone();

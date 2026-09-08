@@ -200,6 +200,12 @@ pub struct Ticket {
     pub sources: Vec<Source>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<TicketFile>,
+    /// Ed25519 public key of the signer (base64url, 43 chars). See [`crate::signing`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer: Option<String>,
+    /// Ed25519 signature (base64url, 86 chars) over [`Ticket::signing_bytes`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 impl Ticket {
@@ -215,7 +221,52 @@ impl Ticket {
             total_size: 0,
             sources: Vec::new(),
             files: Vec::new(),
+            signer: None,
+            signature: None,
         }
+    }
+
+    /// Canonical bytes covered by the signature: the ticket's JSON with the
+    /// `signature` field removed (the `signer` key *is* covered, so a forger
+    /// cannot swap the public key). serde_json writes struct fields in
+    /// declaration order, so this is deterministic for a given payload.
+    pub fn signing_bytes(&self) -> Result<Vec<u8>> {
+        let mut unsigned = self.clone();
+        unsigned.signature = None;
+        serde_json::to_vec(&unsigned).context("serialising ticket for signing")
+    }
+
+    /// Sign in place with the given key (replaces any previous signature).
+    pub fn sign(&mut self, key: &crate::signing::SigningKey) -> Result<()> {
+        self.signer = Some(key.public_b64());
+        self.signature = None;
+        let msg = self.signing_bytes()?;
+        self.signature = Some(key.sign_b64(&msg));
+        Ok(())
+    }
+
+    pub fn is_signed(&self) -> bool {
+        self.signature.is_some()
+    }
+
+    /// Check the signature (if any). Never fails: the outcome is a status the
+    /// caller displays or acts upon.
+    pub fn verify_signature(&self) -> crate::signing::SignatureStatus {
+        use crate::signing::SignatureStatus as S;
+        match (&self.signer, &self.signature) {
+            (None, None) => S::Unsigned,
+            (None, Some(_)) => S::Invalid { reason: "firma sin clave pública".into() },
+            (Some(_), None) => S::Invalid { reason: "clave pública sin firma".into() },
+            (Some(pk), Some(sig)) => match self.signing_bytes().and_then(|m| crate::signing::verify(pk, &m, sig)) {
+                Ok(()) => S::Valid { fingerprint: crate::signing::fingerprint_of_b64(pk).unwrap_or_default(), signer: pk.clone() },
+                Err(e) => S::Invalid { reason: format!("{e:#}") },
+            },
+        }
+    }
+
+    /// Fingerprint of the signer key (only meaningful when the signature is valid).
+    pub fn signer_fingerprint(&self) -> Option<String> {
+        self.signer.as_deref().and_then(|pk| crate::signing::fingerprint_of_b64(pk).ok())
     }
 
     /// Ticket for an upload we just made (`send-global --ticket`).
@@ -292,6 +343,9 @@ impl Ticket {
                 ensure!(h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()), "invalid BLAKE3 digest for {}", f.path);
             }
         }
+        if let Some(pk) = &self.signer {
+            crate::signing::decode_public(pk)?;
+        }
         Ok(())
     }
 
@@ -339,7 +393,11 @@ impl Ticket {
         if full.len() <= QR_SOFT_LIMIT {
             return Ok(full);
         }
+        // Dropping content invalidates an existing signature: the compact
+        // form is unsigned (the full .unishare file keeps the signature).
         let mut slim = self.clone();
+        slim.signer = None;
+        slim.signature = None;
         // First drop hashes, then the whole list.
         for f in &mut slim.files {
             f.blake3 = None;
@@ -385,6 +443,10 @@ impl Ticket {
 
     /// One-line human summary.
     pub fn summary(&self) -> String {
+        let sig = match self.verify_signature() {
+            crate::signing::SignatureStatus::Unsigned => String::new(),
+            s => format!(" · {}", s.label()),
+        };
         if let Some(ep) = self.lan_endpoint() {
             return format!(
                 "Emparejamiento LAN con «{}» — {} · huella {} · {}",
@@ -392,11 +454,11 @@ impl Ticket {
                 ep.addr(),
                 crate::lan::tls::short_fingerprint(&ep.fingerprint),
                 if ep.pin.is_some() { "PIN incluido" } else { "sin PIN" }
-            );
+            ) + &sig;
         }
         let files = if self.files.is_empty() { String::new() } else { format!(", {} archivo(s)", self.files.len()) };
         let srcs: Vec<&str> = self.sources.iter().map(|s| s.label()).collect();
-        format!("«{}» — {}{} · fuentes: {}", self.name, crate::fsutil::human_bytes(self.total_size), files, srcs.join(", "))
+        format!("«{}» — {}{} · fuentes: {}{}", self.name, crate::fsutil::human_bytes(self.total_size), files, srcs.join(", "), sig)
     }
 }
 
@@ -516,6 +578,54 @@ mod tests {
         assert!(msg.contains("checksum") || msg.contains("zstd"), "{msg}");
         assert!(Ticket::decode(&bytes[..20]).is_err());
         assert!(Ticket::decode(b"hello").is_err());
+    }
+
+    #[test]
+    fn signature_roundtrip_and_tamper_detection() {
+        use crate::signing::{SignatureStatus, SigningKey};
+        let key = SigningKey::generate().unwrap();
+        let mut t = sample();
+        assert_eq!(t.verify_signature(), SignatureStatus::Unsigned);
+        t.sign(&key).unwrap();
+        assert!(t.is_signed());
+        let st = t.verify_signature();
+        assert!(matches!(&st, SignatureStatus::Valid { fingerprint, .. } if *fingerprint == key.fingerprint()), "{st:?}");
+
+        // Survives the binary container and the URI form.
+        let back = Ticket::decode(&t.encode().unwrap()).unwrap();
+        assert_eq!(back, t);
+        assert!(matches!(back.verify_signature(), SignatureStatus::Valid { .. }));
+        assert!(matches!(Ticket::from_uri(&t.to_uri().unwrap()).unwrap().verify_signature(), SignatureStatus::Valid { .. }));
+
+        // Any change to the covered content breaks it.
+        let mut tampered = t.clone();
+        tampered.sources[0] = Source::Http { url: "https://evil.example/x".into(), filename: None };
+        assert!(tampered.verify_signature().is_invalid());
+        let mut tampered = t.clone();
+        tampered.message = Some("pwned".into());
+        assert!(tampered.verify_signature().is_invalid());
+        // Swapping the public key for another one is detected too.
+        let mut swapped = t.clone();
+        swapped.signer = Some(SigningKey::generate().unwrap().public_b64());
+        assert!(swapped.verify_signature().is_invalid());
+        // Half-signed tickets are invalid, not "unsigned".
+        let mut half = t.clone();
+        half.signature = None;
+        assert!(half.verify_signature().is_invalid());
+        // Garbage signer fails validation up-front.
+        let mut bad = t.clone();
+        bad.signer = Some("short".into());
+        assert!(bad.encode().is_err());
+        assert!(t.summary().contains("firma válida"));
+
+        // Compact QR form drops the signature rather than shipping a broken one.
+        let mut big = t.clone();
+        for i in 0..80 {
+            big.files.push(TicketFile { path: format!("dir/file-{i}.bin"), size: i, blake3: Some(crate::hash::hash_bytes(&[i as u8])) });
+        }
+        big.sign(&key).unwrap();
+        let compact = Ticket::from_uri(&big.to_uri_compact().unwrap()).unwrap();
+        assert_eq!(compact.verify_signature(), SignatureStatus::Unsigned);
     }
 
     #[test]

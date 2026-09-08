@@ -90,7 +90,10 @@ pub async fn send_global(mut ctx: Ctx, a: SendGlobalArgs) -> Result<()> {
             let mut ticket_uri: Option<String> = None;
             if want_ticket {
                 let expires = o.expires_at.as_deref().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()).map(|d| d.with_timezone(&chrono::Utc));
-                let t = uni_share::ticket::Ticket::from_upload(&name, &o.url, a.password.as_deref(), &ctx.cfg.device_name, &files, &hashes, expires);
+                let mut t = uni_share::ticket::Ticket::from_upload(&name, &o.url, a.password.as_deref(), &ctx.cfg.device_name, &files, &hashes, expires);
+                if let Some(fp) = crate::commands_ticket::maybe_sign(&mut t, ctx.cfg.sign_tickets && !a.no_sign)? {
+                    ui::info(S, format!("Ticket firmado (Ed25519, huella {fp})"));
+                }
                 let out = match a.ticket.as_deref() {
                     Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
                     _ => a.path.parent().map(|d| d.to_path_buf()).unwrap_or_default().join(t.default_filename()),

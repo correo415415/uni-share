@@ -400,6 +400,7 @@ fn render(ctx: &UiCtx) {
     win.set_lan_addr(snap.lan_port.to_string().into());
     win.set_local_ip(snap.local_ips.first().cloned().unwrap_or_default().into());
     win.set_pairing_uri(snap.pairing_uri.clone().into());
+    win.set_signer_fingerprint(snap.signer_fingerprint.clone().into());
     win.set_download_dir(snap.download_dir.display().to_string().into());
     win.set_pin_required(snap.pin_required);
     win.set_auto_accept(snap.auto_accept);
@@ -559,6 +560,7 @@ fn handle_evt(ctx: &UiCtx, evt: Evt) {
                 w.set_s_auto(c.auto_accept);
                 w.set_s_notif(c.notifications);
                 w.set_s_compress(c.compress_folders);
+                w.set_s_sign(c.sign_tickets);
                 w.set_f_dest(c.download_dir.display().to_string().into());
             }
         }
@@ -836,6 +838,7 @@ fn wire_callbacks(win: &MainWindow, ctx: &UiCtx) {
             pin: Some(w.get_s_pin().to_string()),
             notifications: Some(w.get_s_notif()),
             compress_folders: Some(w.get_s_compress()),
+            sign_tickets: Some(w.get_s_sign()),
             expiry_days: w.get_s_expiry().trim().parse().ok(),
             parallel_parts: w.get_s_parallel().trim().parse().ok(),
         };
@@ -936,6 +939,11 @@ fn preview_ticket(v: &str) -> String {
     match Engine::parse_ticket(v) {
         Ok(t) => {
             let mut s = format!("🎫 {}{}\n", t.summary(), if t.is_expired() { "  (EXPIRADO)" } else { "" });
+            match t.verify_signature() {
+                crate::signing::SignatureStatus::Invalid { reason } => s.push_str(&format!("✗ FIRMA INVÁLIDA: {reason} — ticket manipulado o falsificado\n")),
+                crate::signing::SignatureStatus::Valid { fingerprint, .. } => s.push_str(&format!("✓ Firma Ed25519 válida · firmante {fingerprint}\n")),
+                crate::signing::SignatureStatus::Unsigned => {}
+            }
             for src in &t.sources {
                 match src.lan_endpoint() {
                     Some(ep) => s.push_str(&format!(

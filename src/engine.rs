@@ -22,6 +22,7 @@ use crate::lan::client::{Sender, build_manifest, hash_all};
 use crate::lan::discovery::{Announcer, Device, discover, parse_target};
 use crate::lan::server::{Decision, IncomingOffer, Progress, ServerHandle, ServerOptions};
 use crate::lan::tls::Identity;
+use crate::signing::SigningKey;
 use crate::ticket::{Source, Ticket, TicketFile};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
@@ -189,6 +190,9 @@ pub struct Snapshot {
     pub local_ips: Vec<String>,
     /// `unishare:` pairing ticket for this receiver (empty when no LAN address).
     pub pairing_uri: String,
+    /// Fingerprint of this device's Ed25519 ticket-signing key.
+    pub signer_fingerprint: String,
+    pub sign_tickets: bool,
     pub download_dir: PathBuf,
     pub pin_required: bool,
     pub auto_accept: bool,
@@ -248,6 +252,8 @@ impl Snapshot {
             lan_port: 47820,
             local_ips: vec!["192.168.1.78".into()],
             pairing_uri: Ticket::lan_pairing("Portátil de Ana", "192.168.1.78", 47820, &"3f".repeat(32), None).to_uri().unwrap_or_default(),
+            signer_fingerprint: "9c1e:7a40:b2f3:0d58:e6a1:44c9:1b7d:f02e".into(),
+            sign_tickets: true,
             download_dir: PathBuf::from("/home/user/Descargas"),
             pin_required: false,
             auto_accept: false,
@@ -358,6 +364,7 @@ pub struct ConfigPatch {
     pub pin: Option<String>,
     pub notifications: Option<bool>,
     pub compress_folders: Option<bool>,
+    pub sign_tickets: Option<bool>,
     pub expiry_days: Option<u32>,
     pub parallel_parts: Option<usize>,
 }
@@ -376,6 +383,8 @@ pub struct Engine {
     pub cfg_path: PathBuf,
     pub history: History,
     pub identity: Identity,
+    /// Ed25519 key used to sign the tickets this device creates.
+    pub signing_key: SigningKey,
     pub lan_addr: SocketAddr,
     pub started_at: Instant,
     pending: RwLock<HashMap<String, (PendingOffer, oneshot::Sender<Decision>)>>,
@@ -393,6 +402,7 @@ impl Engine {
     /// Start the LAN receiver + announcer and the background tasks.
     pub async fn start(cfg: Config, cfg_path: PathBuf, history: History) -> Result<Arc<Self>> {
         let identity = Identity::load_or_generate(&crate::config::data_dir(), &cfg.device_name)?;
+        let signing_key = SigningKey::load_or_generate(&crate::config::data_dir())?;
         tokio::fs::create_dir_all(&cfg.download_dir).await.ok();
         let mut lan: ServerHandle = crate::lan::server::start(
             identity.clone(),
@@ -413,6 +423,7 @@ impl Engine {
             cfg_path,
             history,
             identity,
+            signing_key,
             lan_addr: lan.addr,
             started_at: Instant::now(),
             pending: RwLock::new(HashMap::new()),
@@ -746,6 +757,9 @@ impl Engine {
         if let Some(v) = p.compress_folders {
             cfg.compress_folders = v;
         }
+        if let Some(v) = p.sign_tickets {
+            cfg.sign_tickets = v;
+        }
         if let Some(v) = p.expiry_days {
             cfg.global.expiry_days = v.clamp(1, 7);
         }
@@ -785,8 +799,15 @@ impl Engine {
             pairing_uri: local_ips()
                 .first()
                 .map(|ip| Ticket::lan_pairing(&cfg.device_name, ip, self.lan_addr.port(), &self.identity.fingerprint, cfg.pin.as_deref()))
-                .and_then(|t| t.to_uri().ok())
+                .and_then(|mut t| {
+                    if cfg.sign_tickets {
+                        t.sign(&self.signing_key).ok()?;
+                    }
+                    t.to_uri().ok()
+                })
                 .unwrap_or_default(),
+            signer_fingerprint: self.signing_key.fingerprint(),
+            sign_tickets: cfg.sign_tickets,
             download_dir: cfg.download_dir.clone(),
             pin_required: cfg.pin.is_some(),
             auto_accept: cfg.auto_accept,
@@ -825,6 +846,9 @@ impl Engine {
         // A LAN pairing ticket (from `receive --qr`) pins the fingerprint and carries the PIN.
         let pairing = if crate::ticket::looks_like_ticket(&target) || target.starts_with('{') {
             let t = Self::parse_ticket(&target).context("reading pairing ticket")?;
+            if let crate::signing::SignatureStatus::Invalid { reason } = t.verify_signature() {
+                bail!("firma del ticket de emparejamiento inválida ({reason}): ticket manipulado");
+            }
             Some(t.lan_endpoint().context("this ticket is a download ticket, not a LAN pairing ticket")?)
         } else {
             None
@@ -970,6 +994,10 @@ impl Engine {
                     let expires = o.expires_at.as_deref().and_then(|x| chrono::DateTime::parse_from_rfc3339(x).ok()).map(|d| d.with_timezone(&chrono::Utc));
                     let mut t = Ticket::from_upload(&name, &o.url, password.as_deref(), &device_name, &files, &hashes, expires);
                     t.message = req.message.clone().filter(|m| !m.trim().is_empty());
+                    if e.cfg.read().await.sign_tickets {
+                        t.sign(&e.signing_key)?;
+                        e.log(job, format!("Ticket firmado (Ed25519, huella {})", e.signing_key.fingerprint())).await;
+                    }
                     let out = path.parent().map(Path::to_path_buf).unwrap_or_default().join(t.default_filename());
                     t.save(&out)?;
                     ticket_uri = Some(t.to_uri_compact()?);
@@ -1034,6 +1062,15 @@ impl Engine {
                 };
                 if is_ticket {
                     let t = crate::ticket::resolve(&src)?;
+                    match t.verify_signature() {
+                        crate::signing::SignatureStatus::Invalid { reason } => {
+                            bail!("firma Ed25519 del ticket INVÁLIDA ({reason}): ticket manipulado o falsificado, no se descarga");
+                        }
+                        crate::signing::SignatureStatus::Valid { fingerprint, .. } => {
+                            e.log(job, format!("Firma Ed25519 válida · huella del firmante {fingerprint}")).await;
+                        }
+                        crate::signing::SignatureStatus::Unsigned => e.log(job, "Ticket sin firma (no se puede verificar el remitente)").await,
+                    }
                     let jf = t.files.iter().map(|f| JobFile { path: f.path.clone(), size: f.size }).collect();
                     let srcs = t.sources.iter().map(|x| x.label()).collect::<Vec<_>>().join(", ");
                     set_meta(t.name.clone(), t.total_size, jf, format!("ticket · {srcs}")).await;
@@ -1129,6 +1166,9 @@ impl Engine {
             let hashes = hash_all(&files, |_| {}).await?;
             t.files = files.iter().zip(hashes.iter()).map(|(f, h)| TicketFile { path: f.rel_path.clone(), size: f.size, blake3: Some(h.clone()) }).collect();
             t.total_size = total_size(&files);
+        }
+        if self.cfg.read().await.sign_tickets {
+            t.sign(&self.signing_key)?;
         }
         let out = match r.output.filter(|o| !o.trim().is_empty()) {
             Some(o) => PathBuf::from(o),

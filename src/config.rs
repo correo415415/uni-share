@@ -35,6 +35,9 @@ pub struct Config {
     pub notifications: bool,
     /// Compress folders into .tar.zst before sending (default: keep hierarchy).
     pub compress_folders: bool,
+    /// Sign the tickets this device creates with its Ed25519 key
+    /// (`<data_dir>/signing.key`), so recipients can verify the sender.
+    pub sign_tickets: bool,
     /// Global backend section.
     pub global: GlobalConfig,
 }
@@ -86,6 +89,7 @@ impl Default for Config {
             pin: None,
             notifications: true,
             compress_folders: false,
+            sign_tickets: true,
             global: GlobalConfig::default(),
         }
     }

@@ -121,6 +121,9 @@ pub struct SendGlobalArgs {
     /// Print the QR of the ticket instead of the plain link (implies --ticket)
     #[arg(long)]
     pub ticket_qr: bool,
+    /// Do not sign the ticket with this device's Ed25519 key (config `sign_tickets`)
+    #[arg(long)]
+    pub no_sign: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -183,7 +186,7 @@ pub struct TicketArgs {
 pub enum TicketAction {
     /// Build a ticket from one or more existing share links
     Create(TicketCreateArgs),
-    /// Show the contents of a ticket (file or unishare: URI)
+    /// Show the contents of a ticket (file or unishare: URI) and verify its signature
     Show {
         /// Path to .unishare file or unishare: URI
         ticket: String,
@@ -191,6 +194,16 @@ pub enum TicketAction {
         #[arg(long)]
         json: bool,
     },
+    /// Sign an existing ticket with this device's Ed25519 key (in place or to --output)
+    Sign {
+        /// Path to .unishare file or unishare: URI
+        ticket: String,
+        /// Output file (default: overwrite the input file / <name>.unishare for URIs)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Show this device's ticket-signing identity (Ed25519 public key + fingerprint)
+    Identity,
     /// Print a ticket as a QR code / unishare: URI to share it
     Qr {
         /// Path to .unishare file or unishare: URI
@@ -233,6 +246,12 @@ pub struct TicketCreateArgs {
     /// Also print a QR code of the ticket
     #[arg(long)]
     pub qr: bool,
+    /// Sign the ticket with this device's Ed25519 key (default from config `sign_tickets`)
+    #[arg(long, overrides_with = "no_sign")]
+    pub sign: bool,
+    /// Do not sign the ticket
+    #[arg(long, overrides_with = "sign")]
+    pub no_sign: bool,
 }
 
 #[derive(Args, Debug)]

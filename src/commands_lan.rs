@@ -85,7 +85,8 @@ pub async fn receive(ctx: Ctx, a: ReceiveArgs) -> Result<()> {
     if a.qr || a.ticket.is_some() {
         let ips = uni_share::engine::local_ips();
         let host = ips.first().cloned().context("no LAN address found for the pairing ticket")?;
-        let t = uni_share::ticket::Ticket::lan_pairing(&ctx.cfg.device_name, &host, server.addr.port(), &id.fingerprint, pin.as_deref());
+        let mut t = uni_share::ticket::Ticket::lan_pairing(&ctx.cfg.device_name, &host, server.addr.port(), &id.fingerprint, pin.as_deref());
+        crate::commands_ticket::maybe_sign(&mut t, ctx.cfg.sign_tickets)?;
         let uri = t.to_uri()?;
         ui::info(S, format!("Ticket de emparejamiento ({}): envía con `uni-share send-lan <ruta> --to '<ticket>'`", style(&host).bold()));
         ui::print_qr(S, &uri);
@@ -192,6 +193,13 @@ pub async fn send_lan(ctx: Ctx, a: SendLanArgs) -> Result<()> {
     let (ip, port, fingerprint, target_name) = match &a.to {
         Some(t) if uni_share::ticket::looks_like_ticket(t) => {
             let ticket = uni_share::ticket::resolve(t).context("reading pairing ticket")?;
+            let sig = ticket.verify_signature();
+            if sig.is_invalid() {
+                bail!("la firma del ticket de emparejamiento no es válida ({}) — ticket manipulado", sig.label());
+            }
+            if let uni_share::signing::SignatureStatus::Valid { fingerprint, .. } = &sig {
+                ui::info(S, format!("Ticket firmado · huella del firmante {}", style(fingerprint).bold()));
+            }
             let ep = ticket.lan_endpoint().context("the ticket is a download ticket, not a LAN pairing ticket (use `download`)")?;
             let ip = resolve_host(&ep.host, ep.port).await?;
             if pin.is_none() {

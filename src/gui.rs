@@ -205,7 +205,7 @@ struct TicketParseReq {
 async fn api_ticket_parse(Json(r): Json<TicketParseReq>) -> Response {
     res_json(Engine::parse_ticket(&r.data).map(|t| {
         let uri = t.to_uri_compact().unwrap_or_default();
-        serde_json::json!({ "ticket": t, "uri": uri, "expired": t.is_expired(), "summary": t.summary() })
+        serde_json::json!({ "ticket": t, "uri": uri, "expired": t.is_expired(), "summary": t.summary(), "signature": t.verify_signature(), "lan": t.is_lan() })
     }))
 }
 async fn api_ticket_create(State(e): St, Json(r): Json<TicketCreateReq>) -> Response {

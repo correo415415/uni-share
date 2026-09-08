@@ -117,6 +117,8 @@ export component MainWindow inherits Window {
     in-out property <bool> s-auto;
     in-out property <bool> s-notif;
     in-out property <bool> s-compress;
+    in-out property <bool> s-sign;
+    in property <string> signer-fingerprint;
     in-out property <string> fs-target-field;   // which field the fs dialog fills
     in-out property <bool> fs-dirs-only;
 
@@ -239,7 +241,7 @@ export component MainWindow inherits Window {
                         Rectangle { vertical-stretch: 1; }
                         // me card
                         Rectangle {
-                            height: 102px; border-radius: Theme.radius; background: Theme.bg3; border-width: 1px; border-color: Theme.line;
+                            height: 118px; border-radius: Theme.radius; background: Theme.bg3; border-width: 1px; border-color: Theme.line;
                             VerticalLayout { padding: 10px; spacing: 3px;
                                 HorizontalLayout { spacing: 6px;
                                     Text { text: device-name; color: Theme.fg; font-weight: 600; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
@@ -249,6 +251,7 @@ export component MainWindow inherits Window {
                                     }
                                 }
                                 Text { text: fingerprint; color: Theme.fg3; font-size: 11px; font-family: Theme.mono; }
+                                Text { text: "✎ " + signer-fingerprint; color: Theme.fg3; font-size: 11px; font-family: Theme.mono; overflow: elide; }
                                 HorizontalLayout { Text { text: "LAN"; color: Theme.fg2; font-size: 12px; horizontal-stretch: 1; } Text { text: local-ip + ":" + lan-addr; color: Theme.fg3; font-size: 11px; font-family: Theme.mono; overflow: elide; } }
                                 HorizontalLayout { Text { text: pin-required ? "PIN requerido" : "Sin PIN"; color: Theme.fg2; font-size: 12px; horizontal-stretch: 1; } Text { text: auto-accept ? "auto-aceptar" : "confirmar"; color: Theme.fg2; font-size: 12px; } }
                             }
@@ -520,8 +523,13 @@ export component MainWindow inherits Window {
             Check { text: "Aceptar automáticamente las transferencias LAN entrantes"; checked <=> root.s-auto; }
             Check { text: "Notificaciones de escritorio"; checked <=> root.s-notif; }
             Check { text: "Comprimir carpetas (.tar.zst) por defecto"; checked <=> root.s-compress; }
-            Rectangle { height: 40px; border-radius: Theme.radius; background: Theme.bg3; border-width: 1px; border-color: Theme.line;
-                Text { x: 12px; text: "Huella TLS de este equipo: " + fingerprint-full; color: Theme.fg2; font-size: 12px; font-family: Theme.mono; vertical-alignment: center; height: parent.height; overflow: elide; width: parent.width - 24px; } }
+            Check { text: "Firmar los tickets con la clave Ed25519 de este equipo (el destinatario puede verificar el remitente)"; checked <=> root.s-sign; }
+            Rectangle { height: 58px; border-radius: Theme.radius; background: Theme.bg3; border-width: 1px; border-color: Theme.line;
+                VerticalLayout { padding-left: 12px; padding-right: 12px; spacing: 2px; alignment: center;
+                    Text { text: "Huella TLS de este equipo: " + fingerprint-full; color: Theme.fg2; font-size: 12px; font-family: Theme.mono; overflow: elide; }
+                    Text { text: "Huella de firma de tickets (Ed25519): " + signer-fingerprint; color: Theme.fg2; font-size: 12px; font-family: Theme.mono; overflow: elide; }
+                }
+            }
             HorizontalLayout { spacing: 8px; alignment: end; Text { text: root.dialog-error; color: Theme.err; vertical-alignment: center; horizontal-stretch: 1; } Button { text: "Cancelar"; clicked => { root.dialog = ""; } } Button { text: "Guardar"; primary: true; clicked => { root.submit-settings(); } } }
         }
     }

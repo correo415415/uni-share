@@ -18,11 +18,37 @@ pub async fn ticket(ctx: Ctx, a: TicketArgs) -> Result<()> {
         TicketAction::Create(c) => create(ctx, c).await,
         TicketAction::Show { ticket, json } => {
             let t = uni_share::ticket::resolve(&ticket)?;
+            let sig = t.verify_signature();
             if json {
-                println!("{}", serde_json::to_string_pretty(&t)?);
+                let mut v = serde_json::to_value(&t)?;
+                v["signature_status"] = serde_json::to_value(&sig)?;
+                println!("{}", serde_json::to_string_pretty(&v)?);
             } else {
                 print_ticket(&t);
             }
+            if sig.is_invalid() {
+                anyhow::bail!("la firma del ticket NO es válida: {}", sig.label());
+            }
+            Ok(())
+        }
+        TicketAction::Sign { ticket, output } => {
+            let mut t = uni_share::ticket::resolve(&ticket)?;
+            let key = signing_key()?;
+            t.sign(&key)?;
+            let out = output.unwrap_or_else(|| {
+                if uni_share::ticket::is_uri(&ticket) { PathBuf::from(t.default_filename()) } else { PathBuf::from(&ticket) }
+            });
+            t.save(&out)?;
+            ui::ok(S, format!("Ticket firmado ({}) → {}", style(key.fingerprint()).bold(), style(out.display()).bold()));
+            println!("{}", t.to_uri()?);
+            Ok(())
+        }
+        TicketAction::Identity => {
+            let key = signing_key()?;
+            ui::info(S, format!("Huella de firma: {}", style(key.fingerprint()).bold()));
+            ui::info(S, format!("Clave pública (Ed25519, base64url): {}", key.public_b64()));
+            ui::info(S, format!("Fichero: {}", uni_share::signing::SigningKey::key_path(&uni_share::config::data_dir()).display()));
+            ui::info(S, "Comparte la huella por otro canal: quien reciba tus tickets podrá comprobar que los firmaste tú.");
             Ok(())
         }
         TicketAction::Qr { ticket, uri_only } => {
@@ -45,6 +71,21 @@ pub async fn ticket(ctx: Ctx, a: TicketArgs) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// This device's Ed25519 ticket-signing key (created on first use).
+pub fn signing_key() -> Result<uni_share::signing::SigningKey> {
+    uni_share::signing::SigningKey::load_or_generate(&uni_share::config::data_dir()).context("loading signing key")
+}
+
+/// Sign `t` when the CLI flags / config ask for it. Returns the signer fingerprint.
+pub fn maybe_sign(t: &mut Ticket, want: bool) -> Result<Option<String>> {
+    if !want {
+        return Ok(None);
+    }
+    let key = signing_key()?;
+    t.sign(&key)?;
+    Ok(Some(key.fingerprint()))
 }
 
 async fn create(ctx: Ctx, a: TicketCreateArgs) -> Result<()> {
@@ -75,6 +116,8 @@ async fn create(ctx: Ctx, a: TicketCreateArgs) -> Result<()> {
             .collect();
         t.total_size = files.iter().map(|f| f.size).sum();
     }
+    let want_sign = if a.sign { true } else if a.no_sign { false } else { ctx.cfg.sign_tickets };
+    maybe_sign(&mut t, want_sign)?;
     let out = a.output.clone().unwrap_or_else(|| PathBuf::from(t.default_filename()));
     t.save(&out)?;
     ui::ok(S, format!("Ticket creado: {}  ({})", style(out.display()).bold(), t.summary()));
@@ -95,6 +138,11 @@ pub fn print_ticket(t: &Ticket) {
         eprintln!("    mensaje: {m}");
     }
     eprintln!("    tamaño: {}   archivos: {}", human_bytes(t.total_size), if t.files.is_empty() { "?".into() } else { t.files.len().to_string() });
+    match t.verify_signature() {
+        uni_share::signing::SignatureStatus::Unsigned => eprintln!("    firma: {}", style("ninguna").dim()),
+        uni_share::signing::SignatureStatus::Valid { fingerprint, .. } => eprintln!("    firma: {} Ed25519 válida · huella del firmante {}", style("✓").green(), style(fingerprint).bold()),
+        uni_share::signing::SignatureStatus::Invalid { reason } => eprintln!("    firma: {} INVÁLIDA — {} (ticket manipulado o falsificado)", style("✗").red().bold(), reason),
+    }
     eprintln!("    fuentes:");
     for (i, s) in t.sources.iter().enumerate() {
         match s.lan_endpoint() {
@@ -129,6 +177,9 @@ pub async fn download_from_ticket(ctx: Ctx, a: DownloadArgs, dest: PathBuf) -> R
     }
     if t.is_lan() && t.sources.iter().all(Source::is_lan) {
         anyhow::bail!("es un ticket de emparejamiento LAN (un receptor, no una descarga): usa `uni-share send-lan <ruta> --to '{}'`", a.url);
+    }
+    if t.verify_signature().is_invalid() {
+        anyhow::bail!("la firma Ed25519 del ticket no es válida: el ticket ha sido manipulado o falsificado. No se descarga nada.");
     }
     if t.is_expired() {
         ui::warn(S, "el ticket indica que la compartición ha expirado; se intentará igualmente");

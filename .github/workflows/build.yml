@@ -73,7 +73,7 @@ jobs:
             DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq --no-install-recommends \
               pkg-config libfontconfig1-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev \
               libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libgtk-3-dev \
-              libdbus-1-dev || echo "::warning::No se pudieron instalar libs de sistema (¿sin sudo?)"
+              libdbus-1-dev clang ninja-build python3 || echo "::warning::No se pudieron instalar libs de sistema (¿sin sudo?)"
           fi
 
       - name: Metadata

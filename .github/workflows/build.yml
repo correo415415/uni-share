@@ -158,7 +158,14 @@ jobs:
           if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
             if command -v xvfb-run >/dev/null 2>&1; then RUN="xvfb-run -a -s '-screen 0 1400x900x24' $BIN"; else echo "::warning::sin DISPLAY ni xvfb-run: no hay capturas"; exit 0; fi
           fi
-          shot() { timeout 60 bash -c "$RUN app --demo --screenshot shots/app-$1.png ${*:2}" || echo "::warning::captura $1 falló"; }
+          shot() {
+            local name="$1"; shift
+            if RUST_BACKTRACE=1 timeout 60 bash -c "$RUN app --demo --screenshot shots/app-$name.png $*" > "shots/$name.log" 2>&1; then
+              rm -f "shots/$name.log"
+            else
+              echo "::warning::captura $name falló (exit $?)"; tail -40 "shots/$name.log"
+            fi
+          }
           shot main
           shot details-general --select 1:0
           shot details-files   --select 1:1

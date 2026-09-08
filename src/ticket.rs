@@ -363,13 +363,17 @@ impl Ticket {
     /// Parse a binary container (also accepts the URI form and raw JSON for
     /// convenience, e.g. when a user pastes a ticket into the GUI).
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let trimmed = trim_ascii(bytes);
-        if trimmed.starts_with(MAGIC) {
-            let json = decode_container(trimmed)?;
+        // Only strip *leading* whitespace before looking for the magic: the binary
+        // container ends with a BLAKE3 digest whose last byte may legitimately be
+        // 0x09-0x0d/0x20, and trimming it would truncate the payload.
+        let start = bytes.iter().position(|c| !c.is_ascii_whitespace()).unwrap_or(bytes.len());
+        if bytes[start..].starts_with(MAGIC) {
+            let json = decode_container(&bytes[start..])?;
             let t: Ticket = serde_json::from_slice(&json).context("ticket JSON")?;
             t.validate()?;
             return Ok(t);
         }
+        let trimmed = trim_ascii(bytes);
         if let Ok(s) = std::str::from_utf8(trimmed) {
             if is_uri(s) {
                 return Self::from_uri(s);
@@ -617,6 +621,23 @@ mod tests {
         bad.signer = Some("short".into());
         assert!(bad.encode().is_err());
         assert!(t.summary().contains("firma válida"));
+
+        // Regression: a container whose trailing digest byte is ASCII whitespace
+        // must still decode (decode() used to trim it away → "truncated").
+        let mut ws = t.clone();
+        let mut found = false;
+        for i in 0..4000u32 {
+            ws.message = Some(format!("m{i}"));
+            let json = serde_json::to_vec(&ws).unwrap();
+            if blake3::hash(&json).as_bytes()[31].is_ascii_whitespace() {
+                found = true;
+                break;
+            }
+        }
+        assert!(found);
+        let enc = ws.encode().unwrap();
+        assert!(enc.last().unwrap().is_ascii_whitespace());
+        assert_eq!(Ticket::decode(&enc).unwrap(), ws);
 
         // Compact QR form drops the signature rather than shipping a broken one.
         let mut big = t.clone();

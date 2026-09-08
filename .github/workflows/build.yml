@@ -181,6 +181,29 @@ jobs:
           shot light-settings --light --dialog settings
           ls -la shots || true
 
+      # Android: solo si el runner tiene SDK + NDK (ANDROID_HOME / ANDROID_NDK_HOME o
+      # ~/Android/Sdk). No falla el build si faltan: se avisa y se sigue.
+      - name: Android (cargo-ndk + APK debug, si hay SDK/NDK)
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
+          if [ -z "${ANDROID_NDK_HOME:-}" ] && [ -d "$ANDROID_HOME/ndk" ]; then
+            export ANDROID_NDK_HOME="$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)"
+          fi
+          if [ ! -d "$ANDROID_HOME/platforms" ] || [ -z "${ANDROID_NDK_HOME:-}" ] || [ ! -d "$ANDROID_NDK_HOME" ]; then
+            echo "::notice::Android SDK/NDK no encontrados en el runner (ANDROID_HOME=$ANDROID_HOME); se omite la APK."
+            exit 0
+          fi
+          echo "SDK: $ANDROID_HOME · NDK: $ANDROID_NDK_HOME"
+          command -v cargo-ndk >/dev/null 2>&1 || cargo install cargo-ndk --locked
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android >/dev/null 2>&1 || true
+          android/build-android.sh --apk
+          mkdir -p dist-android
+          cp android/app/build/outputs/apk/debug/app-debug.apk "dist-android/uni-share-${{ steps.meta.outputs.version }}-android-debug.apk"
+          ls -la dist-android
+
       - name: Package
         id: pkg
         shell: bash
@@ -193,6 +216,8 @@ jobs:
           set -euo pipefail
           rm -rf dist && mkdir -p dist
           BASE="uni-share-${VERSION}-${TARGET}"
+          # APK (si el paso Android la generó)
+          cp dist-android/*.apk dist/ 2>/dev/null || true
           # CLI + GUI web
           cp "target/release/uni-share${EXE}" "dist/uni-share-${TARGET}${EXE}"
           if [ -f "target/slint/release/uni-share${EXE}" ]; then
@@ -216,6 +241,7 @@ jobs:
             echo "- \`uni-share-${TARGET}${EXE}\`: CLI + GUI web (\`uni-share gui\`)."
             [ -f "dist/uni-share-app-${TARGET}${EXE}" ] && echo "- \`uni-share-app-${TARGET}${EXE}\`: igual + app nativa Slint (\`uni-share app\`)."
             echo "- \`${BASE}.tar.gz\` / \`.zip\`: binarios + docs + script python de fallback."
+            ls dist/*.apk >/dev/null 2>&1 && echo "- \`$(basename dist/*.apk)\`: app Android (debug, WebView sobre el core Rust)."
             echo
             echo "Commit: ${GITHUB_SHA} · Rama/tag: ${GITHUB_REF_NAME} · Compilado en el runner local (${{ runner.os }}/${{ runner.arch }})."
           } > dist/RELEASE_NOTES.md

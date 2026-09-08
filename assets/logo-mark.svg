@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <!-- uni-share monochrome mark (currentColor) for toolbars / favicons -->
+  <g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8.5 19.5V5M4.5 9l4-4 4 4"/>
+    <path d="M15.5 4.5V19M11.5 15l4 4 4-4"/>
+  </g>
+</svg>

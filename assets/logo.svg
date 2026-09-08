@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- uni-share app icon — Graphite design system: bg2 #1b1e21, accent #4c8dff -->
+  <rect x="0" y="0" width="256" height="256" rx="58" ry="58" fill="#1b1e21"/>
+  <g fill="none" stroke="#4c8dff" stroke-width="22" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M96 190 V70 M62 104 L96 70 L130 104"/>
+    <path d="M160 66 V186 M126 152 L160 186 L194 152"/>
+  </g>
+</svg>

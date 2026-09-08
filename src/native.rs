@@ -193,7 +193,12 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
     set_filters(&win, None);
 
     if let Some(open) = opts.open {
+        // Launched by the OS for a `.unishare` file or a `unishare:` link (see
+        // `associate`) or with a plain URL: pre-fill the download dialog and
+        // show the ticket preview straight away.
+        let open = open.strip_prefix("file://").map(|p| percent_decode(p)).unwrap_or(open);
         win.set_new_mode(2);
+        win.set_preview_text(preview_ticket(&open).into());
         win.set_f_url(open.into());
         win.set_dialog("new".into());
     }
@@ -880,6 +885,25 @@ fn preview_path(p: &str) -> String {
         }
         Err(e) => format!("{e:#}"),
     }
+}
+
+/// Minimal `%XX` decoding for `file://` URIs handed over by desktop launchers.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn preview_ticket(v: &str) -> String {

@@ -63,6 +63,8 @@ pub enum Command {
     App(AppArgs),
     /// Show or edit configuration
     Config(ConfigArgs),
+    /// Register the .unishare file type and unishare: links to open the desktop app (per user)
+    Associate(AssociateArgs),
 }
 
 #[derive(Args, Debug)]
@@ -308,6 +310,19 @@ pub struct AppArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct AssociateArgs {
+    /// Remove the association instead of creating it
+    #[arg(long)]
+    pub remove: bool,
+    /// Only show the current handler
+    #[arg(long)]
+    pub status: bool,
+    /// Binary to register (default: this executable)
+    #[arg(long, value_name = "PATH")]
+    pub exe: Option<PathBuf>,
+}
+
+#[derive(Args, Debug)]
 pub struct ConfigArgs {
     /// Print the path of the active config file
     #[arg(long)]
@@ -377,5 +392,6 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Gui(a) => commands::gui(ctx, a).await,
         Command::App(_) => unreachable!("handled in main"),
         Command::Config(a) => commands::config(ctx, a).await,
+        Command::Associate(a) => commands::associate(ctx, a).await,
     }
 }

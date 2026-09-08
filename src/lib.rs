@@ -14,6 +14,7 @@ pub mod global;
 pub mod download;
 pub mod daemon;
 pub mod gui;
+pub mod associate;
 pub mod ticket;
 pub mod engine;
 #[cfg(feature = "slint")]

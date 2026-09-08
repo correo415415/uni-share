@@ -21,6 +21,43 @@ pub async fn config(ctx: Ctx, a: ConfigArgs) -> Result<()> {
     Ok(())
 }
 
+pub async fn associate(_ctx: Ctx, a: AssociateArgs) -> Result<()> {
+    use uni_share::associate as assoc;
+    const S: &str = "ASSOC";
+    if a.status {
+        match assoc::status()? {
+            Some(h) => ui::info(S, format!(".unishare → {h}")),
+            None => ui::warn(S, ".unishare no está asociado a ninguna aplicación"),
+        }
+        return Ok(());
+    }
+    let report = if a.remove {
+        assoc::remove()?
+    } else {
+        let exe = match a.exe {
+            Some(p) => p.canonicalize().unwrap_or(p),
+            None => assoc::current_exe()?,
+        };
+        anyhow::ensure!(exe.exists(), "binary not found: {}", exe.display());
+        assoc::install(&exe)?
+    };
+    for line in &report.actions {
+        ui::info(S, line);
+    }
+    for w in &report.warnings {
+        ui::warn(S, w);
+    }
+    if a.remove {
+        ui::ok(S, "Asociación eliminada");
+    } else {
+        ui::ok(S, "Doble clic en un .unishare (o un enlace unishare:) abrirá uni-share");
+        if cfg!(target_os = "linux") {
+            ui::info(S, "Si el gestor de archivos no lo refleja, cierra sesión y vuelve a entrar.");
+        }
+    }
+    Ok(())
+}
+
 pub async fn history(ctx: Ctx, a: HistoryArgs) -> Result<()> {
     if a.clear {
         let n = ctx.history.clear()?;

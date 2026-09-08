@@ -182,6 +182,8 @@ pub struct Progress {
     pub finished: bool,
     pub error: Option<String>,
     pub dest_dir: Option<PathBuf>,
+    /// Paths written to disk (set on completion): files, or the unpacked folder.
+    pub saved: Vec<PathBuf>,
 }
 
 pub struct Transfer {
@@ -663,6 +665,7 @@ async fn complete(State(s): State<Arc<ServerState>>, AxPath(id): AxPath<String>)
             return err(StatusCode::CONFLICT, format!("{} file(s) not yet received", missing.len()));
         }
         let mut dest_dir = t.dest_dir.clone();
+        let mut saved = t.targets.clone();
         // Optional archive unpacking.
         if t.manifest.compressed_archive && t.targets.len() == 1 {
             let archive = t.targets[0].clone();
@@ -671,6 +674,7 @@ async fn complete(State(s): State<Arc<ServerState>>, AxPath(id): AxPath<String>)
             match res {
                 Ok(Ok(())) => {
                     let _ = tokio::fs::remove_file(&t.targets[0]).await;
+                    saved = vec![t.dest_dir.join(&t.manifest.name)];
                 }
                 Ok(Err(e)) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("unpack: {e}")),
                 Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("unpack task: {e}")),
@@ -706,6 +710,7 @@ async fn complete(State(s): State<Arc<ServerState>>, AxPath(id): AxPath<String>)
             files_total: t.manifest.files.len(),
             finished: true,
             dest_dir: Some(dest_dir),
+            saved,
             ..Default::default()
         }
     };

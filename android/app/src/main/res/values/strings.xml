@@ -6,5 +6,7 @@
     <string name="notif_text">Visible en la red local · toca para abrir</string>
     <string name="engine_error">No se pudo iniciar el motor de uni-share.\nRevisa logcat (etiqueta uni-share).</string>
     <string name="retry">Reintentar</string>
+    <string name="notif_offers_channel">Transferencias entrantes</string>
+    <string name="notif_offers_desc">Solicitudes de envío desde la red local, con Aceptar y Rechazar</string>
     <string name="scan_prompt">Apunta al código QR del ticket o del emparejamiento</string>
 </resources>

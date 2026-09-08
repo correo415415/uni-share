@@ -6291,6 +6291,7 @@ dependencies = [
  "crc32fast",
  "dialoguer",
  "directories",
+ "flate2",
  "futures",
  "hex",
  "hostname",

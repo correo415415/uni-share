@@ -136,8 +136,9 @@ pub struct Job {
     /// Outcome of the safety scan (receptions/downloads), once finished.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scan: Option<crate::scan::Severity>,
-    /// Files written to disk by this job (receptions/downloads) — lets the user re-scan later.
-    #[serde(skip)]
+    /// Files written to disk by this job (receptions/downloads) — lets the user re-scan later
+    /// and lets the Android shell export them to the user's SAF folder.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     saved: Vec<PathBuf>,
     /// Original request, kept so a failed/cancelled job can be retried.
     #[serde(skip)]

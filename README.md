@@ -12,7 +12,7 @@ Estado: ver [`TODO.md`](TODO.md). Fases 1-7 implementadas y probadas en vivo (LA
 
 ## Instalación
 
-Requisitos: Rust ≥ 1.85 (edition 2024). En Linux, `libdbus` para notificaciones es opcional (`notify-rust` usa D-Bus puro Rust).
+Requisitos: Rust ≥ 1.85 (edition 2024; ≥ 1.92 con la feature `slint`). En Linux, `libdbus` para notificaciones es opcional (`notify-rust` usa D-Bus puro Rust).
 
 ```bash
 git clone https://github.com/correo415415/uni-share && cd uni-share
@@ -31,6 +31,8 @@ cargo build --release --features slint     # necesita clang + ninja (renderer Sk
 
 La GUI nativa incrusta sus propias fuentes (`ui/fonts/`: Inter para la interfaz y JetBrains Mono para hashes, puertos y velocidades; licencia OFL) y usa el renderer **Skia** con FemtoVG como alternativa, de modo que el texto se ve igual de nítido en cualquier equipo aunque no tenga esas fuentes instaladas.
 
+Extras de escritorio: **arrastrar y soltar** sobre la ventana (un archivo o carpeta abre «Enviar LAN» con la ruta; varios del mismo directorio, la carpeta; un ticket `.unishare` abre «Descargar» o el emparejamiento), **bandeja del sistema** con menú rápido (Mostrar/Ocultar · Enviar por LAN · Compartir link · Descargar · Abrir ticket · Salir) y el ajuste «minimizar a la bandeja al cerrar» para seguir recibiendo con la ventana oculta (en Linux hace falta un host StatusNotifierItem: KDE, o la extensión AppIndicator en GNOME). Para revisar el diseño sin red: `uni-share app --demo [--empty] [--size 1024x600] [--light] [--dialog new|share|settings|fs|confirm] [--drag-over] [--screenshot out.png]`.
+
 ### Android
 
 La app Android (`android/`, paquete `dev.unishare.app`) es una cáscara Kotlin que arranca el mismo core Rust como biblioteca (`libuni_share.so`, JNI en `src/android.rs`) y muestra la GUI web servida en `127.0.0.1`. Requisitos: Android SDK + NDK r26+, `cargo install cargo-ndk`, `rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android`.
@@ -42,7 +44,7 @@ android/build-android.sh --release  # + APK firmado con android/release.keystore
                                     #   contraseña en UNISHARE_KEYSTORE_PASS, alias en UNISHARE_KEY_ALIAS)
 ```
 
-En Windows, `android\build-android.bat` con los mismos argumentos. Funciones: compartir archivos desde cualquier app («Enviar con uni-share»), abrir links `unishare:` y tickets `.unishare`, servicio en primer plano para seguir recibiendo con la pantalla apagada. Las descargas van a `Android/data/dev.unishare.app/files/Download/`.
+En Windows, `android\build-android.bat` con los mismos argumentos. Funciones: compartir archivos desde cualquier app («Enviar con uni-share»), abrir links `unishare:` y tickets `.unishare`, servicio en primer plano para seguir recibiendo con la pantalla apagada, **escáner QR** (botón «Escanear QR»: tickets `.unishare`, emparejamiento LAN y links), **compartir** links/tickets con la hoja del sistema y **carpeta de descargas propia** elegida con el selector de Android (Ajustes → «Carpeta de descargas (Android)», Storage Access Framework): el motor escribe en `Android/data/dev.unishare.app/files/Download/` y, al terminar cada recepción o descarga, la app copia los archivos a la carpeta elegida respetando las subcarpetas.
 
 ### Marca
 

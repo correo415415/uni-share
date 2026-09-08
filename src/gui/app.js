@@ -142,10 +142,38 @@ function renderStatus() {
 function render() { renderSidebar(); renderOffers(); renderTable(); renderDetails(); renderStatus(); }
 
 let lastPending = 0, lastStates = new Map(), es = null, pollTimer = null;
+// ── Android shell bridge (window.Android is injected by the Kotlin WebView; see android/…/Bridge.kt) ──
+const mobile = typeof window !== 'undefined' && !!window.Android;
+function androidInfo() { try { return mobile ? JSON.parse(Android.info()) : null; } catch { return null; } }
+/** Camera QR → ticket (download or LAN pairing), link, or manual LAN target. */
+async function openScanned(text) {
+  const t = (text || '').trim(); if (!t) return;
+  if (/^unishare:/i.test(t)) {
+    try { const r = await api('/api/ticket/parse', { method: 'POST', body: { data: t } }); if (r.lan) return openNew('lan', { target: t }); } catch { /* fall through: let the download dialog show the error */ }
+    return openNew('download', { url: t });
+  }
+  if (/^https?:\/\//i.test(t)) return openNew('download', { url: t });
+  if (/^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(t)) return openNew('lan', { target: t });
+  toast('El código no es un ticket ni un link de uni-share', 'warn', 6000);
+}
+/** Events pushed by the shell: folder picked, files exported to the SAF folder, toasts. */
+function androidEvent(kind, payload) {
+  if (kind === 'toast') return toast(String(payload), 'info');
+  if (kind === 'folder') { toast(payload ? `Carpeta de descargas: ${payload}` : 'Se usará la carpeta privada de la app', 'ok'); const f = $('#s-folder'); if (f) f.textContent = payload || 'carpeta privada de la app'; return; }
+  if (kind === 'exported') return toast(`«${payload.name}»: ${payload.files} archivo(s) copiados a ${payload.folder}`, 'ok', 6000);
+}
+/** Finished receptions/downloads are mirrored into the user's SAF folder (engine writes to the app dir). */
+function exportToSaf(j) {
+  if (!mobile || !j.saved || !j.saved.length) return;
+  try { Android.exportJob(j.id, JSON.stringify(j.saved), j.name); } catch { /* bridge unavailable */ }
+}
+window.openScanned = openScanned; window.androidEvent = androidEvent;
+
 function applyState(d) {
   S.online = true;
   for (const j of d.jobs) {
     const prev = lastStates.get(j.id);
+    if (prev && prev !== j.state && j.state === 'completed' && (j.kind === 'lan_receive' || j.kind === 'download')) exportToSaf(j);
     if (prev && prev !== j.state && (j.state === 'completed' || j.state === 'failed')) { toast(`${KIND[j.kind]} «${j.name}»: ${STATE[j.state]}${j.state === 'failed' ? ' — ' + j.message : ''}`, j.state === 'completed' ? 'ok' : 'err', 6000); if (j.state === 'completed' && j.link) { S.sel = j.id; S.tab = 'share'; } }
     lastStates.set(j.id, j.state);
   }
@@ -208,7 +236,7 @@ function openNew(mode = 'lan', preset = {}) {
   const srcField = () => `<div class="field"><label>Archivo o carpeta</label><div class="with-btn"><input type="text" id="f-path" placeholder="/ruta/al/archivo-o-carpeta" value="${h(preset.path || '')}"><button class="btn" id="f-browse">Explorar…</button></div><div class="preview" id="f-prev" hidden></div></div>`;
   const draw = () => {
     $$('#nt-seg button', m).forEach(b => b.classList.toggle('active', b.dataset.m === cur));
-    if (cur === 'lan') body.innerHTML = srcField() + `<div class="field"><label>Dispositivo destino</label><div class="devpick" id="f-devs"></div></div><div class="grid2"><div class="field"><label>o dirección manual <span class="hint">ip[:puerto] o ticket de emparejamiento</span></label><input type="text" id="f-target" placeholder="192.168.1.20:47820 · unishare:…"></div><div class="field"><label>PIN (si lo exige el receptor)</label><input type="text" id="f-pin" inputmode="numeric"></div></div><label class="check"><input type="checkbox" id="f-compress"> Comprimir carpeta en .tar.zst antes de enviar</label>`;
+    if (cur === 'lan') body.innerHTML = srcField() + `<div class="field"><label>Dispositivo destino</label><div class="devpick" id="f-devs"></div></div><div class="grid2"><div class="field"><label>o dirección manual <span class="hint">ip[:puerto] o ticket de emparejamiento</span></label><input type="text" id="f-target" placeholder="192.168.1.20:47820 · unishare:…" value="${h(preset.target || '')}"></div><div class="field"><label>PIN (si lo exige el receptor)</label><input type="text" id="f-pin" inputmode="numeric"></div></div><label class="check"><input type="checkbox" id="f-compress"> Comprimir carpeta en .tar.zst antes de enviar</label>`;
     else if (cur === 'global') body.innerHTML = srcField() + `<div class="grid2"><div class="field"><label>Contraseña (opcional, 4-100)</label><input type="password" id="f-pw" autocomplete="new-password"></div><div class="field"><label>Caducidad (días, 1-7)</label><input type="number" id="f-exp" min="1" max="7" value="${S.cfg?.global?.expiry_days || 7}"></div><div class="field"><label>Máx. descargas (opcional)</label><input type="number" id="f-max" min="1" max="1000" placeholder="∞"></div><div class="field"><label>Mensaje para el ticket</label><input type="text" id="f-msg"></div></div>
       <label class="check"><input type="checkbox" id="f-ticket" checked> Generar ticket <b>.unishare</b> (link + contraseña + digests BLAKE3, compartible por QR)</label><label class="check"><input type="checkbox" id="f-compress"> Comprimir carpeta en un único .tar.zst (en vez de colección)</label>
       <div class="alert">Se sube a <b>storage.to</b> (≤ 25 GB, anónimo). El link y el QR aparecerán en <b>Compartir</b> al terminar.</div>`;
@@ -253,6 +281,7 @@ function openShare(j, what = j.ticket_uri ? 'ticket' : 'link') {
     $('#sh-body', m).innerHTML = `<div class="share"><div class="qr"><img src="/api/qr?data=${encodeURIComponent(it[2])}" alt="QR"></div><div><h3>${it[1]}</h3><div class="linkbox"><input readonly value="${h(it[2])}"><button class="btn" id="sh-cp">Copiar</button></div>
       ${cur === 'ticket' ? `<p class="hint">El QR/URI contiene los links alternativos${it[2].length > 900 ? ' (lista de archivos resumida para caber en el QR)' : ', la contraseña y los digests BLAKE3'}. El destinatario lo escanea o abre el fichero .unishare.</p><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn" href="/api/ticket/file?uri=${encodeURIComponent(it[2])}" download="${h(j.name)}.unishare">⬇ Guardar .unishare</a>${j.ticket_path ? `<button class="btn" id="sh-open">Abrir carpeta del ticket</button>` : ''}<a class="btn" href="/api/qr?data=${encodeURIComponent(it[2])}" download="qr-${h(j.name)}.svg">Guardar QR (SVG)</a></div>`
         : `<p class="hint">Cualquiera con el link puede descargar (si tiene contraseña, la pedirá). Escanea el QR con el móvil.</p><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn" href="${h(it[2])}" target="_blank" rel="noopener">Abrir en el navegador</a><a class="btn" href="/api/qr?data=${encodeURIComponent(it[2])}" download="qr.svg">Guardar QR (SVG)</a></div>`}</div></div>`;
+    if (mobile) { const cp = $('#sh-cp', m); const nb = document.createElement('button'); nb.className = 'btn primary'; nb.textContent = 'Compartir…'; nb.onclick = () => (cur === 'ticket' && j.ticket_path ? Android.shareFile(j.ticket_path, `${j.name}.unishare`) : Android.shareText(it[2], j.name)); cp.after(nb); }
     $('#sh-cp', m).onclick = () => copy(it[2]); const so = $('#sh-open', m); if (so) so.onclick = () => api('/api/open', { method: 'POST', body: { path: j.ticket_path } }).catch(e => toast(e.message, 'err'));
   };
   $$('#sh-seg button', m).forEach(b => b.onclick = () => { cur = b.dataset.w; draw(); }); draw();
@@ -263,7 +292,8 @@ async function openSettings() {
   const c = d.config; S.cfg = c;
   const m = modal(`<div class="m-head"><h2>Ajustes</h2><span class="hint mono">${h(d.path)}</span><button class="btn icon ghost" data-close>✕</button></div><div class="m-body settings"><h3>Dispositivo</h3>
     <div class="grid2"><div class="field"><label>Nombre visible en la LAN</label><input type="text" id="s-name" value="${h(c.device_name)}"></div><div class="field"><label>PIN de emparejamiento (vacío = sin PIN)</label><input type="text" id="s-pin" value="${h(c.pin || '')}" placeholder="4-6 dígitos"></div></div>
-    <div class="field"><label>Carpeta de descargas</label><div class="with-btn"><input type="text" id="s-dir" value="${h(c.download_dir)}"><button class="btn" id="s-browse">…</button></div></div>
+    ${mobile ? `<div class="field"><label>Carpeta de descargas (Android)</label><div class="with-btn"><span class="hint" id="s-folder" style="flex:1;align-self:center">${h((androidInfo() || {}).downloadTree || 'carpeta privada de la app')}</span><button class="btn" id="s-saf">Elegir carpeta…</button><button class="btn" id="s-saf-clear" title="Volver a la carpeta privada">✕</button></div><p class="hint">Los archivos recibidos se guardan en la app y, al terminar, se copian a la carpeta elegida (Storage Access Framework).</p></div>`
+      : `<div class="field"><label>Carpeta de descargas</label><div class="with-btn"><input type="text" id="s-dir" value="${h(c.download_dir)}"><button class="btn" id="s-browse">…</button></div></div>`}
     <div class="grid2"><div class="field"><label>Límite de velocidad (Mbit/s, 0 = sin límite)</label><input type="number" id="s-rate" min="0" value="${c.rate_limit_mbps}"></div><div class="field"><label>Partes paralelas (multipart)</label><input type="number" id="s-par" min="1" max="16" value="${c.global.parallel_parts}"></div></div>
     <label class="check"><input type="checkbox" id="s-auto" ${c.auto_accept ? 'checked' : ''}> Aceptar automáticamente las transferencias LAN entrantes</label><label class="check"><input type="checkbox" id="s-notif" ${c.notifications ? 'checked' : ''}> Notificaciones de escritorio</label><label class="check"><input type="checkbox" id="s-comp" ${c.compress_folders ? 'checked' : ''}> Comprimir carpetas (.tar.zst) por defecto</label><label class="check"><input type="checkbox" id="s-sign" ${c.sign_tickets ? 'checked' : ''}> Firmar los tickets con la clave Ed25519 de este dispositivo <span class="hint">(huella ${h(S.data.signer_fingerprint || '')})</span></label>
     <h3>Seguridad</h3>
@@ -274,9 +304,10 @@ async function openSettings() {
     <h3>Interfaz</h3><div class="field"><label>Columnas visibles</label><div style="display:flex;flex-wrap:wrap;gap:10px">${Object.keys(COLS).map(k => `<label class="check"><input type="checkbox" data-col="${k}" ${S.cols.includes(k) ? 'checked' : ''}> ${COLS[k][0]}</label>`).join('')}</div></div>
     <div class="alert">Huella TLS de este equipo: <code class="mono">${h(S.data.fingerprint_full || '')}</code></div></div>
     <div class="m-foot"><span id="s-err" style="flex:1;color:var(--err)"></span><button class="btn" data-close>Cancelar</button><button class="btn primary" id="s-save">Guardar</button></div>`);
-  $('#s-browse', m).onclick = () => pickPath({ dirsOnly: true, title: 'Carpeta de descargas' }).then(p => p && ($('#s-dir', m).value = p));
+  const sb = $('#s-browse', m); if (sb) sb.onclick = () => pickPath({ dirsOnly: true, title: 'Carpeta de descargas' }).then(p => p && ($('#s-dir', m).value = p));
+  const saf = $('#s-saf', m); if (saf) { saf.onclick = () => Android.pickDownloadFolder(); $('#s-saf-clear', m).onclick = () => Android.clearDownloadFolder(); }
   $('#s-save', m).onclick = async () => { const v = (id) => $(id, m).value.trim(), c2 = (id) => $(id, m).checked;
-    try { const r = await api('/api/config', { method: 'PUT', body: { device_name: v('#s-name'), pin: v('#s-pin'), download_dir: v('#s-dir'), rate_limit_mbps: Number(v('#s-rate')) || 0, parallel_parts: Number(v('#s-par')) || 4, auto_accept: c2('#s-auto'), notifications: c2('#s-notif'), compress_folders: c2('#s-comp'), sign_tickets: c2('#s-sign'), scan_enabled: c2('#s-scan'), scan_clamav: c2('#s-clam'), scan_on_danger: v('#s-danger'), expiry_days: Number(v('#s-exp')) || 7 } });
+    try { const r = await api('/api/config', { method: 'PUT', body: { device_name: v('#s-name'), pin: v('#s-pin'), download_dir: mobile ? undefined : v('#s-dir'), rate_limit_mbps: Number(v('#s-rate')) || 0, parallel_parts: Number(v('#s-par')) || 4, auto_accept: c2('#s-auto'), notifications: c2('#s-notif'), compress_folders: c2('#s-comp'), sign_tickets: c2('#s-sign'), scan_enabled: c2('#s-scan'), scan_clamav: c2('#s-clam'), scan_on_danger: v('#s-danger'), expiry_days: Number(v('#s-exp')) || 7 } });
       S.cols = Object.keys(COLS).filter(k => $(`[data-col=${k}]`, m).checked); if (!S.cols.length) S.cols = ['name', 'progress', 'state']; localStorage.cols = JSON.stringify(S.cols);
       toast(r.restart_needed ? 'Guardado. Nombre/PIN/puerto se aplican al reiniciar la GUI.' : 'Ajustes guardados', 'ok', 5000); m.close(); render(); } catch (e) { $('#s-err', m).textContent = e.message; } };
 }
@@ -321,6 +352,7 @@ function init() {
   $('#b-theme').onclick = () => { const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = t; localStorage.theme = t; };
   $('#b-new').onclick = () => openNew('lan'); $('#b-sendlan').onclick = () => openNew('lan'); $('#b-upload').onclick = () => openNew('global'); $('#b-download').onclick = () => openNew('download'); $('#b-ticket').onclick = () => openNew('ticket');
   $('#b-settings').onclick = openSettings; $('#b-cancel').onclick = cancelSel;
+  if (mobile) { document.documentElement.classList.add('mobile'); const q = $('#b-qr'); q.hidden = false; q.onclick = () => Android.scanQr(); }
   $('#b-clear').onclick = () => api('/api/jobs/clear-finished', { method: 'POST' }).then(r => toast(`${r.removed} eliminada(s)`, 'info', 2000));
   $('#b-scan').onclick = async () => { $('#b-scan').disabled = true; try { S.data.devices = await api('/api/devices'); render(); } finally { $('#b-scan').disabled = false; } };
   $('#q').oninput = (e) => { S.q = e.target.value; renderTable(); };

@@ -1,13 +1,14 @@
 # uni-share
 
-Herramienta híbrida de compartición de archivos escrita en **Rust (edition 2024, tokio)** con GUI web local:
+Herramienta híbrida de compartición de archivos escrita en **Rust (edition 2024, tokio)** con CLI, GUI web local y aplicación de escritorio nativa (Slint):
 
 - **Modo LAN** — descubrimiento automático por mDNS, transferencia directa cifrada con **TLS 1.3** (certificados auto-firmados generados al vuelo y *pinning* de huella), aceptación explícita del receptor con previsualización, verificación **BLAKE3** por archivo con reintento del archivo fallido, reanudación por offset, límite de velocidad, PIN opcional.
-- **Modo Global** — subida a **storage.to** (anónimo, hasta 25 GB, multipart paralelo, carpetas como *collection* preservando la jerarquía) o **Smash** (con API key); genera link, QR en terminal y lo copia al portapapeles. El emisor puede apagarse.
-- **Descargas** — desde storage.to (archivos y colecciones, contraseña, reanudación `Range`) y **SwissTransfer** (port nativo en Rust de `swisstransfer-dl`, con `--python` para usar el script original).
-- **Daemon** en segundo plano, **historial SQLite**, **notificaciones** nativas, **GUI web** (`uni-share gui`).
+- **Modo Global** — subida a **storage.to** (anónimo, hasta 25 GB, multipart paralelo, carpetas como *collection* preservando la jerarquía); genera link, **QR** y **ticket `.unishare`**, y copia el link al portapapeles. El emisor puede apagarse. (Backend **Smash** presente pero experimental/aparcado.)
+- **Tickets `.unishare`** — formato propio de fichero que empaqueta todo lo necesario para descargar (fuentes con contraseña embebida, lista de archivos con tamaño y BLAKE3, caducidad, mensaje). Se comparte como fichero, como URI `unishare:…` o como **QR**; `uni-share download fotos.unishare` verifica cada archivo tras la descarga.
+- **Descargas** — desde storage.to (archivos y colecciones, contraseña, reanudación `Range`), **SwissTransfer** (port nativo en Rust de `swisstransfer-dl`, con `--python` para usar el script original) y tickets.
+- **Daemon** en segundo plano, **historial SQLite**, **notificaciones** nativas, **GUI web** (`uni-share gui`) y **app nativa** (`uni-share app`, Slint, feature `slint`).
 
-Estado: todas las fases del [`TODO.md`](TODO.md) implementadas y probadas en vivo (LAN loopback, storage.to, Smash).
+Estado: ver [`TODO.md`](TODO.md). Fases 1-7 implementadas y probadas en vivo (LAN loopback, storage.to, tickets, GUI web); fase 7b (app Slint) en desarrollo.
 
 ## Instalación
 
@@ -33,19 +34,31 @@ uni-share receive [-o DIR] [-p PUERTO] [--auto-accept] [--pin 1234] [--force] [-
 # Enviar por LAN (interactivo, o --to nombre | ip[:puerto])
 uni-share send-lan ~/Videos/proyecto/ [--to PC-Sala] [--pin 1234] [--compress]
 
-# Subir a storage.to (o Smash) y obtener link + QR + portapapeles
-uni-share send-global ~/Videos/proyecto/ [--backend storage_to|smash] [--password xxxx] \
-                      [--expiry-days 7] [--max-downloads 5] [--compress] [--json]
+# Subir a storage.to y obtener link + QR + portapapeles (+ ticket .unishare opcional)
+uni-share send-global ~/Videos/proyecto/ [--password xxxx] [--expiry-days 7] [--max-downloads 5] \
+                      [--compress] [--ticket [fotos.unishare]] [--ticket-qr] [--json]
 
-# Descargar
+# Tickets .unishare (fichero propio con las fuentes, contraseña, lista de archivos y hashes)
+uni-share ticket create https://storage.to/c/XXXX --password xxxx --name fotos \
+                        [--message "…"] [--verify-from ./fotos] [-o fotos.unishare] [--qr]
+uni-share ticket show fotos.unishare [--json]
+uni-share ticket qr fotos.unishare [--uri-only]
+uni-share ticket save "unishare:…" -o fotos.unishare
+
+# QR de cualquier texto/link (terminal o SVG)
+uni-share qr https://storage.to/XXXX [--svg qr.svg]
+
+# Descargar (link, colección, SwissTransfer o ticket)
 uni-share download https://storage.to/XXXX [-o DIR] [--password xxxx] [--force] [--list]
 uni-share download https://storage.to/c/XXXX --password xxxx
 uni-share download https://www.swisstransfer.com/dl/<uuid> [--python]
+uni-share download fotos.unishare            # o "unishare:…" — verifica BLAKE3 al terminar
 
-# Historial, daemon, GUI, config
+# Historial, daemon, GUIs, config
 uni-share history [-n 20] [--json] [--clear]
 uni-share daemon start|stop|status
-uni-share gui [--port 47900] [--no-open]
+uni-share gui [--port 47900] [--no-open]     # GUI web local
+uni-share app [fotos.unishare]               # app nativa Slint (cargo build --features slint)
 uni-share config [--path]
 ```
 
@@ -134,9 +147,14 @@ src/
 ├── download/
 │   ├── http.rs              descarga reanudable (.part + Range) con reintentos
 │   ├── storage_to.rs        parser de la página (turbo-stream) + endpoints de descarga
-│   └── swisstransfer.rs     port nativo del flujo Inertia
+│   ├── swisstransfer.rs     port nativo del flujo Inertia
+│   └── ticket.rs            descarga desde ticket (fuentes en orden, verificación BLAKE3)
+├── ticket.rs                formato .unishare (contenedor binario / URI / JSON, QR compacto)
+├── engine.rs                motor headless compartido por las GUIs (jobs, ofertas, dispositivos)
 ├── daemon.rs                start/stop/status (pidfile, proceso desacoplado)
-└── gui.rs + gui/index.html  GUI web local (axum, SPA embebida)
+├── gui.rs + gui/{index.html,app.css,app.js}   GUI web local (axum sobre el engine, SPA embebida)
+└── native.rs                app de escritorio Slint (feature `slint`): puente UI ↔ engine
+ui/{theme,widgets,app}.slint app nativa: sistema de diseño propio + ventana principal + diálogos
 python/swisstransfer_dl.py   script original (fallback `download --python`)
 tests/lan_integration.rs     E2E LAN: TLS pinned, carpeta, duplicados, PIN, rechazo, hash mismatch
 ```
@@ -162,11 +180,12 @@ El receptor escribe en `archivo.part`, hashea mientras escribe y renombra solo s
 | **Transporte LAN** | **HTTP/2 sobre TLS 1.3** (`axum` + `hyper`, `axum-server`) | Streaming nativo de cuerpos grandes (>10 GB sin cargar en memoria), reanudación trivial con offset/`Range`, multiplexación, depurable con `curl`, y el mismo stack sirve para la GUI. QUIC (`quinn`) aporta poco en LAN (sin pérdida ni handover) y complica firewalls (UDP); TCP crudo obliga a diseñar framing, control de flujo y reanudación a mano. |
 | **Cifrado** | **TLS 1.3 auto-firmado** (`rcgen`) + **pinning** del SHA-256 del certificado anunciado por mDNS (`rustls` con verificador propio) | Sin CA ni configuración; la huella publicada en mDNS y mostrada en ambas terminales evita MITM. `ring` como proveedor criptográfico (sin `cmake`/C++, compila rápido en cualquier plataforma). Noise habría exigido implementar el transporte completo y no reutiliza HTTP. |
 | **Integridad** | **BLAKE3** | 5-10× más rápido que SHA-256, paralelo (`rayon`), seguro. Hash incremental mientras se escribe → sin segunda pasada de lectura. |
-| **UI** | **CLI** (`clap` + `indicatif` + `console` + `dialoguer`) **y GUI web local** (axum + HTML embebido) | Barras con bytes/velocidad/ETA y prompts interactivos en la CLI; la GUI da una interfaz gráfica multiplataforma sin toolkits nativos ni dependencias de sistema, y permite aceptar/rechazar solicitudes con previsualización desde el navegador. `ratatui` (TUI completo) queda en backlog: aportaría poco frente a CLI+GUI. |
+| **UI** | **CLI** (`clap` + `indicatif` + `console` + `dialoguer`), **GUI web local** (axum + SPA embebida) y **app nativa Slint** (opcional, feature `slint`) — las tres sobre el mismo **engine** headless | La CLI da barras/prompts; la GUI web funciona en cualquier plataforma sin toolkits; Slint aporta una app de escritorio real (ventana nativa, diálogos de ficheros, bandeja) con un sistema de diseño propio (sin widgets de stock), renderizado por GPU y binario pequeño frente a Electron/Tauri. El engine centraliza jobs, ofertas, descubrimiento y config para que las GUIs sean capas finas. |
+| **Formato `.unishare`** | Contenedor binario propio: `UNISHARE` + versión + compresión (zstd) + JSON + BLAKE3; también como URI `unishare:<base64url>` | Un solo artefacto contiene fuentes (con contraseña), lista de archivos con tamaños y hashes, caducidad y mensaje → el receptor descarga y **verifica** sin más datos. La variante URI compacta (sin hashes/lista si hace falta) cabe en un QR. JSON dentro para extensibilidad; el hash final detecta corrupción/truncado. |
 | **Historial** | **SQLite** (`rusqlite` *bundled*, WAL) | Escrituras atómicas y lectores concurrentes (daemon + CLI + GUI a la vez), consultas indexadas, sin dependencias del sistema. Un JSON se corrompe con escrituras concurrentes y no escala. |
 | **Visitor token storage.to** | 32 bytes aleatorios hex, persistido en `config.toml` (`global.storage_to_visitor_token`); *owner tokens* guardados en el historial (`meta`) | Mismo esquema que el CLI oficial de storage.to; el owner token permite borrar / proteger / cambiar expiración después aunque cambie la IP. |
 | **Carpetas en global** | **Collection** con rutas relativas en `filename` (por defecto); `--compress` → un solo `.tar.zst` | Probado: storage.to acepta `sub/dir/a.txt` como nombre y la descarga recrea la jerarquía. Comprimir es opcional (útil para miles de archivos pequeños). |
-| **Backend Smash** | Opcional, con API key (`Bearer`) en host regional `transfer.<region>.fromsmash.co` | Smash no tiene subida anónima por API; se implementa el flujo create transfer → create file → PUT parts S3 (con CRC32 y ETag **con comillas**) → update file → lock. La región se extrae del JWT. |
+| **Backend Smash** | **Aparcado** (experimental): opcional, con API key (`Bearer`) en host regional `transfer.<region>.fromsmash.co` | Smash no tiene subida anónima por API; el flujo create transfer → file → PUT parts S3 → lock está implementado pero no se prioriza (storage.to cubre el caso anónimo). |
 | **Descarga storage.to** | Parser del *turbo-stream* de React Router de la página (`mint_proof`) + `GET /{id}/download` / `POST /c/{id}/urls`; **fallback a `curl`** si Cloudflare desafía al cliente rustls | storage.to no publica API de descarga; los endpoints del sitio están tras Cloudflare Bot Management que discrimina por huella TLS. `curl` (presente en Linux, macOS y Windows 10+) pasa el filtro; el CDN final acepta `Range` y se descarga con reqwest. |
 | **SwissTransfer** | Port nativo en Rust del script Python (solo descarga) + `--python` como fallback | Cumple la restricción de no automatizar subidas a SwissTransfer; el script original se conserva en `python/`. |
 | **Errores / async** | `anyhow` + `thiserror`, `tokio` en todo el I/O, sin `unwrap` en rutas de producción | `tokio` es el runtime con más ecosistema (axum, reqwest, hyper). Los `unwrap` quedan solo en tests. |

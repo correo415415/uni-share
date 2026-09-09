@@ -108,6 +108,74 @@ impl JobState {
     }
 }
 
+/// Compact, UI-oriented view of a [`crate::scan::Report`] attached to a job.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct ScanSummary {
+    pub severity: crate::scan::Severity,
+    pub summary: String,
+    /// Engines that ran (`heuristics`, `clamav (…)`).
+    pub engines: Vec<String>,
+    pub files: usize,
+    pub dangers: usize,
+    pub warnings: usize,
+    pub duration_ms: u64,
+    /// Unix ms when the scan finished.
+    pub at: i64,
+    /// Only files with findings, worst first.
+    pub findings: Vec<ScanFileSummary>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct ScanFileSummary {
+    pub path: String,
+    pub kind: String,
+    pub severity: crate::scan::Severity,
+    pub findings: Vec<ScanFinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quarantined: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct ScanFinding {
+    pub severity: crate::scan::Severity,
+    pub code: String,
+    pub message: String,
+}
+
+impl ScanSummary {
+    pub fn from_report(r: &crate::scan::Report) -> Self {
+        let mut findings: Vec<ScanFileSummary> = r
+            .files
+            .iter()
+            .filter(|f| !f.is_clean())
+            .map(|f| ScanFileSummary {
+                path: f.path.display().to_string(),
+                kind: f.kind.clone(),
+                severity: f.severity(),
+                findings: f
+                    .findings
+                    .iter()
+                    .filter(|x| x.severity != crate::scan::Severity::Info)
+                    .map(|x| ScanFinding { severity: x.severity, code: x.code.clone(), message: x.message.clone() })
+                    .collect(),
+                quarantined: f.quarantined.as_ref().map(|q| q.display().to_string()),
+            })
+            .collect();
+        findings.sort_by(|a, b| b.severity.cmp(&a.severity).then_with(|| a.path.cmp(&b.path)));
+        Self {
+            severity: r.severity(),
+            summary: r.summary(),
+            engines: r.engines.clone(),
+            files: r.files.len(),
+            dangers: r.dangers(),
+            warnings: r.warnings(),
+            duration_ms: r.duration_ms,
+            at: chrono::Utc::now().timestamp_millis(),
+            findings,
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Debug)]
 pub struct Job {
     pub id: u64,
@@ -136,6 +204,10 @@ pub struct Job {
     /// Outcome of the safety scan (receptions/downloads), once finished.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scan: Option<crate::scan::Severity>,
+    /// Structured result of the last safety scan, so the UIs can show *what* was found
+    /// (per-file findings) instead of burying it in the job log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_report: Option<ScanSummary>,
     /// Files written to disk by this job (receptions/downloads) — lets the user re-scan later
     /// and lets the Android shell export them to the user's SAF folder.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -265,7 +337,31 @@ impl Snapshot {
                 "Manifiesto aceptado (3 archivos, 1.9 GiB)".into(),
                 format!("Enviando {}…", files.first().map(|f| f.0).unwrap_or("")),
             ],
-            scan: (matches!(kind, JobKind::LanReceive | JobKind::Download) && state == JobState::Completed).then_some(crate::scan::Severity::Info),
+            scan: (matches!(kind, JobKind::LanReceive | JobKind::Download) && state == JobState::Completed).then_some(if id == 4 { crate::scan::Severity::Warning } else { crate::scan::Severity::Info }),
+            scan_report: (matches!(kind, JobKind::LanReceive | JobKind::Download) && state == JobState::Completed).then(|| ScanSummary {
+                severity: if id == 4 { crate::scan::Severity::Warning } else { crate::scan::Severity::Info },
+                summary: if id == 4 { "Análisis de seguridad: 0 peligroso(s), 1 con avisos de 3 archivo(s) (heuristics, clamav (clamdscan 1.4.1))".into() } else { "Análisis de seguridad: 1 archivo(s) sin hallazgos (heuristics)".into() },
+                engines: vec!["heuristics".into(), "clamav (clamdscan 1.4.1)".into()],
+                files: if id == 4 { 3 } else { 1 },
+                dangers: 0,
+                warnings: usize::from(id == 4),
+                duration_ms: 1_840,
+                at: now - 1000 * 20 * id as i64 + 1_900,
+                findings: if id == 4 {
+                    vec![ScanFileSummary {
+                        path: format!("/home/user/Descargas/{name}/DCIM/instalador-fotos.jpg.exe"),
+                        kind: "pe".into(),
+                        severity: crate::scan::Severity::Warning,
+                        findings: vec![
+                            ScanFinding { severity: crate::scan::Severity::Warning, code: "double_extension".into(), message: "Doble extensión: parece una imagen pero es un ejecutable de Windows".into() },
+                            ScanFinding { severity: crate::scan::Severity::Warning, code: "magic_mismatch".into(), message: "El contenido (PE) no coincide con la extensión .jpg".into() },
+                        ],
+                        quarantined: None,
+                    }]
+                } else {
+                    vec![]
+                },
+            }),
             saved: Vec::new(),
             origin: None,
             retryable: matches!(state, JobState::Failed | JobState::Cancelled) && kind != JobKind::LanReceive,
@@ -603,6 +699,7 @@ impl Engine {
             eta: None,
             log: Vec::new(),
             scan: None,
+            scan_report: None,
             saved: Vec::new(),
             origin: None,
             retryable: false,
@@ -747,13 +844,35 @@ impl Engine {
             for line in report.detail().lines() {
                 self.log(id, line.trim_end()).await;
             }
+            let structured = ScanSummary::from_report(&report);
             self.update_job(id, |j| {
                 j.scan = Some(severity);
+                j.scan_report = Some(structured.clone());
                 if severity != crate::scan::Severity::Info {
                     j.message = summary.clone();
                 }
             })
             .await;
+            // Keep the verdict with the history record too (the record is closed before the scan runs).
+            if let Some((kind, name)) = self.jobs.read().await.iter().find(|j| j.id == id).map(|j| (j.kind, j.name.clone())) {
+                let hk = match kind {
+                    JobKind::LanReceive => Some(Kind::LanReceive),
+                    JobKind::Download => Some(Kind::Download),
+                    _ => None,
+                };
+                if let Some(hk) = hk {
+                    let patch = serde_json::json!({
+                        "scan": severity,
+                        "scan_summary": summary,
+                        "scan_dangers": structured.dangers,
+                        "scan_warnings": structured.warnings,
+                        "scan_files": structured.files,
+                    });
+                    if let Err(e) = self.history.merge_meta_latest(hk, &name, &patch) {
+                        tracing::debug!("history meta (scan): {e:#}");
+                    }
+                }
+            }
         }
         match severity {
             crate::scan::Severity::Info => tracing::info!("{summary}"),
@@ -1548,6 +1667,7 @@ mod tests {
             eta: None,
             log: vec![],
             scan: None,
+            scan_report: None,
             saved: Vec::new(),
             origin: None,
             retryable: false,

@@ -273,3 +273,12 @@ html.shot *{animation:none!important;transition:none!important}
 .ll{display:grid;grid-template-columns:auto auto 1fr;gap:0 8px;padding:3px 0;border-bottom:1px solid var(--line);color:var(--fg-2);line-height:1.35}.ll:last-child{border-bottom:0}
 .ll .ts{color:var(--fg-3)}.ll .lv{font-weight:700;color:var(--fg-3)}.ll .tg{color:var(--fg-3);grid-column:3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ll .msg{grid-column:1/4;color:var(--fg);white-space:pre-wrap;word-break:break-word}
 .ll.warn .lv{color:var(--warn)}.ll.error .lv,.ll.error .msg{color:var(--err)}.ll.debug,.ll.trace{opacity:.75}
+
+/* swipe-to-act rows (Transferencias) */
+.swipe{position:relative;overflow:hidden}.swipe>.row{position:relative;z-index:1;background:var(--bg-2)}
+.swipe-act{position:absolute;top:0;right:0;bottom:0;width:96px;border:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:var(--fs-xs);font-weight:600;color:#fff;background:var(--err);cursor:pointer;opacity:0;transition:opacity var(--t)}
+.swipe-act.remove{background:var(--fg-3)}.swipe.open .swipe-act,.swipe.moving .swipe-act{opacity:1}.swipe-act svg{width:20px;height:20px}
+/* pull to refresh (Dispositivos) */
+.ptr{height:0;overflow:hidden;display:flex;align-items:center;justify-content:center;gap:8px;color:var(--fg-3);font-size:var(--fs-sm);transition:height .15s ease}
+.ptr svg{width:16px;height:16px;transition:transform .2s}.ptr.ready svg{transform:rotate(180deg);color:var(--accent)}.ptr.busy svg{animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}

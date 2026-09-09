@@ -794,8 +794,51 @@ async function rescanJob(j) {
 }
 
 // ───────────────────────── wiring, theme, init ─────────────────────────
+/** Swipe a job row left to reveal Cancelar (active) / Quitar (finished); tap the action or swipe far to trigger it. */
+function wireSwipe(root) {
+  if (S.shot) return;
+  $$('.list [data-job]', root).forEach(row => {
+    const j = job(Number(row.dataset.job)); if (!j) return;
+    const act = isActive(j); const label = act ? T.swipe.cancel : T.swipe.remove;
+    const wrap = h('div', { class: 'swipe' }); row.replaceWith(wrap);
+    const btn = h('button', { class: `swipe-act ${act ? 'cancel' : 'remove'}`, tabindex: -1, html: ico(act ? 'stop' : 'trash') + label });
+    wrap.append(btn, row);
+    let x0 = null, y0 = null, dx = 0, horiz = null; const OPEN = 96;
+    const setX = (x, anim) => { row.style.transition = anim ? 'transform .18s ease' : ''; row.style.transform = x ? `translateX(${x}px)` : ''; wrap.classList.toggle('open', x <= -OPEN + 4); wrap.classList.toggle('moving', x < 0); };
+    row.addEventListener('touchstart', e => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = wrap.classList.contains('open') ? -OPEN : 0; horiz = null; }, { passive: true });
+    row.addEventListener('touchmove', e => {
+      if (x0 == null) return; const mx = e.touches[0].clientX - x0, my = e.touches[0].clientY - y0;
+      if (horiz == null) { if (Math.abs(mx) < 6 && Math.abs(my) < 6) return; horiz = Math.abs(mx) > Math.abs(my); }
+      if (!horiz) return; const base = wrap.classList.contains('open') ? -OPEN : 0; dx = Math.min(0, Math.max(-OPEN * 1.9, base + mx)); setX(dx, false);
+    }, { passive: true });
+    row.addEventListener('touchend', () => {
+      if (x0 == null) return; x0 = null; if (!horiz) return;
+      row.dataset.swiped = '1'; setTimeout(() => delete row.dataset.swiped, 350);
+      if (dx < -OPEN * 1.7) { setX(-OPEN, true); vib(20); btn.click(); } else setX(dx < -OPEN / 2 ? -OPEN : 0, true);
+    });
+    // A tap right after a swipe (or while open) only closes the row instead of opening the detail.
+    row.addEventListener('click', e => { if (wrap.classList.contains('open') || row.dataset.swiped) { e.stopImmediatePropagation(); e.preventDefault(); setX(0, true); } }, true);
+    btn.onclick = () => { setX(0, true); act ? cancelJob(j) : removeJob(j); };
+  });
+}
+/** Pull down at the top of Dispositivos to re-scan the LAN. */
+function wirePullToRefresh(page) {
+  if (S.shot || S.tab !== 'devices' || S.stack.length || !page) return;
+  const ind = h('div', { class: 'ptr', html: ico('refresh') + `<span>${T.ptr.pull}</span>` }); page.prepend(ind);
+  let y0 = null, dy = 0; const TH = 72;
+  const onStart = e => { if (page.scrollTop > 0 || S.scanning) return; y0 = e.touches[0].clientY; dy = 0; };
+  const onMove = e => { if (y0 == null) return; dy = Math.max(0, (e.touches[0].clientY - y0) * 0.55); if (page.scrollTop === 0) { ind.style.height = Math.min(dy, TH + 20) + 'px'; ind.classList.toggle('ready', dy >= TH); ind.querySelector('span').textContent = dy >= TH ? T.ptr.release : T.ptr.pull; } };
+  const onEnd = () => { if (y0 == null) return; y0 = null; if (dy >= TH) { ind.classList.add('busy'); ind.querySelector('span').textContent = T.ptr.busy; vib(20); rescanDevices(); } else { ind.style.height = ''; ind.classList.remove('ready'); } };
+  // Listeners live on the page element and are replaced on every render (page.innerHTML is rebuilt, but the element is not).
+  if (page._ptr) for (const [k, f] of Object.entries(page._ptr)) page.removeEventListener(k, f);
+  page._ptr = { touchstart: onStart, touchmove: onMove, touchend: onEnd };
+  for (const [k, f] of Object.entries(page._ptr)) page.addEventListener(k, f, { passive: true });
+}
 function wire(root, top) {
   wireCommon(root);
+  wireSwipe(root);
+  const page = $('#page'); if (page && page._ptr && (S.tab !== 'devices' || top)) { for (const [k, f] of Object.entries(page._ptr)) page.removeEventListener(k, f); page._ptr = null; }
+  wirePullToRefresh(page);
   if (top) { if (top.kind === 'job') wireJob(root, top.id); else if (top.kind === 'security') wireSecurity(root); else if (top.kind === 'history') wireHistory(root); else if (top.kind === 'logs') wireLogs(root); return; }
   ({ home: wireHome, jobs: wireJobs, devices: wireDevices, share: wireShare, settings: wireSettings })[S.tab](root);
 }

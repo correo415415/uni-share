@@ -23,10 +23,28 @@ function fmtS(n) { return n ? fmtB(n) + '/s' : '—'; }
 function fmtT(s) { if (s == null) return '—'; s = Math.round(s); if (s < 60) return s + ' s'; if (s < 3600) return Math.floor(s / 60) + ' min ' + (s % 60) + ' s'; return Math.floor(s / 3600) + ' h ' + Math.floor((s % 3600) / 60) + ' min'; }
 function fmtAgo(ms) { if (!ms) return ''; const d = Math.max(0, Date.now() - ms) / 1000; if (d < 45) return 'ahora'; if (d < 3600) return Math.round(d / 60) + ' min'; if (d < 86400) return Math.round(d / 3600) + ' h'; return Math.round(d / 86400) + ' d'; }
 function fmtDate(ms) { if (!ms) return '—'; const d = new Date(ms); return d.toLocaleDateString('es', { day: '2-digit', month: 'short' }) + ' ' + d.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }); }
-const KIND = { lan_send: 'Envío LAN', lan_receive: 'Recepción LAN', global_upload: 'Subida (link)', download: 'Descarga' };
+// ── i18n preparation ──
+// Shared label tables flow through `T`. Only `es` exists today; a second locale is a new
+// object with the same keys (missing keys fall back to `es`). Locale: `#…&lang=xx`, then
+// `localStorage.mlang`, then `navigator.language`.
+const I18N = {
+  es: {
+    kind: { lan_send: 'Envío LAN', lan_receive: 'Recepción LAN', global_upload: 'Subida (link)', download: 'Descarga' },
+    state: { queued: 'En cola', running: 'En curso', completed: 'Completada', failed: 'Fallida', cancelled: 'Cancelada' },
+    scan: { info: 'Limpio', warning: 'Aviso', danger: 'PELIGRO' },
+    titles: { home: '', jobs: 'Transferencias', devices: 'Dispositivos', share: 'Compartir', settings: 'Ajustes' },
+    views: { history: 'Historial', security: 'Seguridad', logs: 'Registro', about: 'Acerca de' },
+    swipe: { cancel: 'Cancelar', remove: 'Quitar' },
+    ptr: { pull: 'Desliza para buscar dispositivos', release: 'Suelta para buscar', busy: 'Buscando…' },
+  },
+};
+const LANG = (() => { const q = new URLSearchParams(location.hash.replace(/^#/, '').replace(/^([a-z]+)(&|$)/, 'tab=$1$2')).get('lang'); const l = (q || localStorage.mlang || navigator.language || 'es').slice(0, 2).toLowerCase(); return I18N[l] ? l : 'es'; })();
+const T = Object.assign({}, I18N.es, I18N[LANG]);
+document.documentElement.lang = LANG;
+const KIND = T.kind;
 const KICON = { lan_send: ['send', 'up'], lan_receive: ['inbox', 'down'], global_upload: ['ul', 'up'], download: ['dl', 'down'] };
-const STATE = { queued: 'En cola', running: 'En curso', completed: 'Completada', failed: 'Fallida', cancelled: 'Cancelada' };
-const SCAN = { info: ['ok', 'Limpio'], warning: ['warn', 'Aviso'], danger: ['danger', 'PELIGRO'] };
+const STATE = T.state;
+const SCAN = { info: ['ok', T.scan.info], warning: ['warn', T.scan.warning], danger: ['danger', T.scan.danger] };
 const isActive = j => j.state === 'queued' || j.state === 'running';
 const pct = j => j.total ? Math.min(100, Math.round(j.done * 100 / j.total)) : (j.state === 'completed' ? 100 : 0);
 
@@ -182,7 +200,7 @@ function go(tab) { S.tab = tab; localStorage.mtab = tab; S.stack = []; render();
 function push(view) { S.stack.push(view); render(); syncBack(); }
 function pop() { if (S.stack.length) { S.stack.pop(); render(); syncBack(); } }
 
-const TITLES = { home: '', jobs: 'Transferencias', devices: 'Dispositivos', share: 'Compartir', settings: 'Ajustes' };
+const TITLES = T.titles;
 let renderKey = '';
 function render(opts = {}) {
   const page = $('#page'); const top = S.stack[S.stack.length - 1];
@@ -260,7 +278,7 @@ function wireCommon(root) {
   });
   $$('[data-empty-act]', root).forEach(b => b.onclick = () => { const a = b.dataset.emptyAct; if (a === 'scan') return mobile ? Android.scanQr() : openNew('download'); if (a === 'qr') return go('share'); openNew(a === 'new' ? 'lan' : a); });
   $$('[data-go]', root).forEach(b => b.onclick = () => go(b.dataset.go));
-  $$('[data-push]', root).forEach(b => b.onclick = () => push({ kind: b.dataset.push, title: b.dataset.title || { history: 'Historial', security: 'Seguridad', logs: 'Registro', about: 'Acerca de' }[b.dataset.push] }));
+  $$('[data-push]', root).forEach(b => b.onclick = () => push({ kind: b.dataset.push, title: b.dataset.title || T.views[b.dataset.push] }));
   $$('[data-copy]', root).forEach(b => b.onclick = () => copy(b.dataset.copy, b.dataset.what || 'Copiado'));
 }
 
@@ -803,7 +821,7 @@ function init() {
     poll().then(() => {
       if (!S.data) return;
       const jid = Number(hp.get('job')); const j = jid && job(jid); if (j) push({ kind: 'job', id: j.id, title: KIND[j.kind] });
-      const v = hp.get('view'); if (v && ['history', 'security', 'logs', 'about'].includes(v)) push({ kind: v, title: { history: 'Historial', security: 'Seguridad', logs: 'Registro', about: 'Acerca de' }[v] });
+      const v = hp.get('view'); if (v && ['history', 'security', 'logs', 'about'].includes(v)) push({ kind: v, title: T.views[v] });
       const sh = hp.get('sheet'); if (sh === 'new') openNew(hp.get('mode') || 'lan'); else if (sh === 'receive') receiveSheet(); else if (sh === 'share') { const l = S.data.jobs.find(x => x.link || x.ticket_uri); if (l) openShareSheet(l); }
     });
   } else connect();

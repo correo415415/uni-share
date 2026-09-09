@@ -120,7 +120,16 @@ pub fn demo_router(cfg: Config, cfg_path: PathBuf) -> Router {
             s
         }
     }
-    let d = Demo { snap: Snapshot::demo(), cfg, cfg_path, t0: std::time::Instant::now() };
+    // Coherent with the snapshot and free of the host's real name/paths (screenshots are published).
+    let snap = Snapshot::demo();
+    let mut cfg = cfg;
+    cfg.device_name = snap.device_name.clone();
+    cfg.download_dir = snap.download_dir.clone();
+    cfg.pin = None;
+    cfg.global.smash_api_key = None;
+    cfg.global.storage_to_token = None;
+    let cfg_path = if cfg_path.as_os_str().is_empty() { cfg_path } else { PathBuf::from("/home/user/.config/uni-share/config.toml") };
+    let d = Demo { snap, cfg, cfg_path, t0: std::time::Instant::now() };
     async fn ok() -> Response {
         Json(serde_json::json!({ "ok": true })).into_response()
     }

@@ -289,6 +289,38 @@ function openShare(j, what = j.ticket_uri ? 'ticket' : 'link') {
   $$('#sh-seg button', m).forEach(b => b.onclick = () => { cur = b.dataset.w; draw(); }); draw();
 }
 
+/** "Registro": engine (and Android shell) log lines from /api/logs with level filter, search, live tail. */
+const LOGLV = [['error', 'Errores'], ['warn', 'Avisos'], ['info', 'Info'], ['debug', 'Depuración'], ['trace', 'Todo']];
+async function openLogs() {
+  let level = localStorage.loglevel || 'info', q = '', entries = [], seq = 0, file = null, total = 0, timer = 0;
+  const m = modal(`<div class="m-head"><h2>Registro</h2><button class="btn icon ghost" data-close>✕</button></div>
+    <div class="m-body logs"><div class="log-tools"><div class="seg" id="lg-lv">${LOGLV.map(([k, l]) => `<button class="${k === level ? 'active' : ''}" data-lv="${k}">${l}</button>`).join('')}</div>
+      <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input id="lg-q" type="search" placeholder="Filtrar mensajes…"></div></div>
+      <div class="loglist" id="lg-list"><div class="muted">Cargando…</div></div><div class="hint" id="lg-info"></div></div>
+    <div class="m-foot"><button class="btn" id="lg-copy">Copiar</button><a class="btn" id="lg-dl" href="/api/logs/text" download="uni-share.log">Descargar .log</a><button class="btn danger" id="lg-clear">Vaciar</button><span style="flex:1"></span><button class="btn" data-close>Cerrar</button></div>`, 'wide');
+  const fmtTs = ms => { const d = new Date(ms); return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + '.' + String(d.getMilliseconds()).padStart(3, '0'); };
+  const short = t => (t || '').replace(/^uni_share::/, '').replace(/^android::/, 'app·');
+  const draw = () => {
+    const list = $('#lg-list', m); const atEnd = list.scrollTop + list.clientHeight >= list.scrollHeight - 8;
+    const qq = q.trim().toLowerCase(); const rows = entries.filter(e => !qq || e.message.toLowerCase().includes(qq) || e.target.toLowerCase().includes(qq)).slice(-1500);
+    list.innerHTML = rows.length ? rows.map(e => `<div class="ll ${e.level}"><span class="ts">${fmtTs(e.ts)}</span><span class="lv">${e.level.toUpperCase().slice(0, 5)}</span><span class="tg" title="${h(e.target)}">${h(short(e.target))}</span><span class="msg">${h(e.message)}</span></div>`).join('') : `<div class="muted">${qq ? 'Ningún mensaje coincide con el filtro.' : 'Con este nivel no hay mensajes todavía.'}</div>`;
+    $('#lg-info', m).textContent = `${rows.length} línea(s)${total ? ` · ${total} desde el arranque` : ''}${file ? ` · fichero: ${file}` : ''}`;
+    if (atEnd || !qq) list.scrollTop = list.scrollHeight;
+  };
+  const load = async (inc) => {
+    try { const r = await api(`/api/logs?after=${inc ? seq : 0}&level=${level === 'trace' ? '' : level}&limit=${inc ? 500 : 1500}`);
+      if (!inc) entries = r.entries; else if (r.entries.length) entries = entries.concat(r.entries).slice(-2000);
+      seq = r.last_seq || seq; file = r.file; total = r.total; if (!inc || r.entries.length) draw();
+    } catch (e) { if (!inc) toast(e.message, 'err'); }
+  };
+  $$('#lg-lv button', m).forEach(b => b.onclick = () => { level = b.dataset.lv; localStorage.loglevel = level; $$('#lg-lv button', m).forEach(x => x.classList.toggle('active', x === b)); load(false); });
+  $('#lg-q', m).oninput = e => { q = e.target.value; draw(); };
+  $('#lg-copy', m).onclick = () => copy(entries.map(e => `${new Date(e.ts).toISOString()} ${e.level.toUpperCase().padStart(5)} ${e.target}  ${e.message}`).join('\n'));
+  $('#lg-dl', m).onclick = () => { $('#lg-dl', m).href = `/api/logs/text?level=${level === 'trace' ? '' : level}`; };
+  $('#lg-clear', m).onclick = () => confirmDlg('¿Vaciar el registro en memoria? El fichero en disco no se toca.').then(ok => ok && api('/api/logs', { method: 'DELETE' }).then(() => { seq = 0; load(false); }));
+  await load(false);
+  timer = setInterval(() => load(true), 2000); m.addEventListener('closed', () => clearInterval(timer));
+}
 async function openSettings() {
   let d; try { d = await api('/api/config'); } catch (e) { return toast(e.message, 'err'); }
   const c = d.config; S.cfg = c;
@@ -362,7 +394,7 @@ function init() {
   document.documentElement.dataset.theme = localStorage.theme || 'dark';
   $('#b-theme').onclick = () => { const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = t; localStorage.theme = t; };
   $('#b-new').onclick = () => openNew('lan'); $('#b-sendlan').onclick = () => openNew('lan'); $('#b-upload').onclick = () => openNew('global'); $('#b-download').onclick = () => openNew('download'); $('#b-ticket').onclick = () => openNew('ticket');
-  $('#b-settings').onclick = openSettings; $('#b-cancel').onclick = cancelSel;
+  $('#b-settings').onclick = openSettings; $('#b-logs').onclick = openLogs; $('#b-cancel').onclick = cancelSel;
   if (mobile) { document.documentElement.classList.add('mobile'); const q = $('#b-qr'); q.hidden = false; q.onclick = () => Android.scanQr(); }
   $('#b-clear').onclick = () => api('/api/jobs/clear-finished', { method: 'POST' }).then(r => { if (S.data) { S.data.jobs = S.data.jobs.filter(j => j.state === 'queued' || j.state === 'running'); render(); } toast(`${r.removed} eliminada(s)`, 'info', 2000); }).catch(e => toast(e.message, 'err'));
   $('#b-scan').onclick = async () => { $('#b-scan').disabled = true; try { S.data.devices = await api('/api/devices'); render(); } finally { $('#b-scan').disabled = false; } };
@@ -376,7 +408,7 @@ function init() {
   addEventListener('keydown', (e) => {
     if ($('.overlay') || e.target.matches('input,textarea,select')) { if (e.key === 'Escape' && e.target.id === 'q') { e.target.value = ''; S.q = ''; renderTable(); e.target.blur(); } return; }
     const k = e.key.toLowerCase();
-    if (k === 'n' || k === 'l') openNew('lan'); else if (k === 'u') openNew('global'); else if (k === 'd') openNew('download'); else if (k === 't') openNew('ticket'); else if (k === ',') openSettings();
+    if (k === 'n' || k === 'l') openNew('lan'); else if (k === 'u') openNew('global'); else if (k === 'd') openNew('download'); else if (k === 't') openNew('ticket'); else if (k === ',') openSettings(); else if (k === 'g') openLogs();
     else if (k === '/') { e.preventDefault(); $('#q').focus(); } else if (k === 'delete') cancelSel();
     else if (k === 'enter') { if (job(S.sel)) { main.classList.remove('details-collapsed'); S.tab = 'general'; renderDetails(); } }
     else if (k === 'arrowdown' || k === 'arrowup') { const l = visibleJobs(); if (!l.length) return; const i = l.findIndex(j => j.id === S.sel); S.sel = l[k === 'arrowdown' ? Math.min(l.length - 1, i + 1) : Math.max(0, i - 1)].id; render(); e.preventDefault(); }

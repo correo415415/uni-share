@@ -127,3 +127,11 @@ html.shot *{animation:none!important;transition:none!important}
 
 /* security scan section in the details pane */
 .scan-sec{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}.scan-sec h3{margin:0 0 8px;font-size:var(--fs);font-weight:600}.scan-head{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;font-size:var(--fs-sm)}.scan-table td{vertical-align:top}.scan-table td:first-child{white-space:nowrap}
+
+/* Registro (logs) dialog */
+.m-body.logs{gap:10px}.log-tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.log-tools .search{flex:1;min-width:200px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}.seg button{height:30px;padding:0 10px;border:0;background:var(--bg-3);color:var(--fg-2);font:inherit;font-size:var(--fs-sm);cursor:pointer;border-right:1px solid var(--line)}.seg button:last-child{border-right:0}.seg button.active{background:var(--accent);color:var(--on-accent,#fff)}
+.loglist{font-family:var(--mono);font-size:var(--fs-sm);background:var(--bg-3);border:1px solid var(--line);border-radius:var(--radius);padding:8px 10px;height:min(52vh,520px);overflow:auto}
+.ll{display:grid;grid-template-columns:auto 3.2em minmax(90px,14em) 1fr;gap:0 10px;padding:2px 0;border-bottom:1px solid var(--line);color:var(--fg-2);line-height:1.4}.ll:last-child{border-bottom:0}
+.ll .ts,.ll .tg{color:var(--fg-3)}.ll .tg{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ll .lv{font-weight:700;color:var(--fg-3)}.ll .msg{color:var(--fg);white-space:pre-wrap;word-break:break-word}
+.ll.warn .lv{color:var(--warn,#d99a2b)}.ll.error .lv,.ll.error .msg{color:var(--danger,#e5484d)}.ll.debug,.ll.trace{opacity:.75}

@@ -505,7 +505,7 @@ fn logs_level_filter(i: i32) -> Option<&'static str> {
 }
 
 /// Fill the "Registro" dialog model from the shared buffer, honouring level + text filter.
-fn refresh_logs(w: &AppWindow) {
+fn refresh_logs(w: &MainWindow) {
     let q = w.get_logs_query().to_lowercase();
     let all = crate::logbuf::entries(0, logs_level_filter(w.get_logs_level()), crate::logbuf::CAPACITY);
     let rows: Vec<LogRow> = all

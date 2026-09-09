@@ -66,11 +66,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        Native.logBoth(android.util.Log.INFO, "perm", "CAMERA ${if (granted) "concedido" else "denegado"}")
         if (granted) launchScanner() else bridge.emit("toast", "Sin permiso de cámara no se puede escanear")
     }
 
     /** Only on Android ≤ 9: writing the public Descargas/uni-share needs WRITE_EXTERNAL_STORAGE. */
     private val storagePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        Native.logBoth(android.util.Log.INFO, "perm", "WRITE_EXTERNAL_STORAGE ${if (granted) "concedido" else "denegado"}")
         if (granted) bridge.retryPendingExport()
         else bridge.emit("toast", "Sin permiso de almacenamiento los archivos se quedan en la carpeta privada de la app (elige otra carpeta en Ajustes)")
     }
@@ -249,6 +251,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun onQr(text: String) {
         val t = text.trim()
+        Native.logBoth(android.util.Log.INFO, "qr", "código leído (${t.length} caracteres, ${t.substringBefore(':').take(12)}…)")
         val js = "window.openScanned ? openScanned(${jsStr(t)}) : openNew('download', {url: ${jsStr(t)}})"
         if (loaded) web.evaluateJavascript(js, null) else pendingJs = js
     }

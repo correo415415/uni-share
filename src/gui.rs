@@ -75,6 +75,8 @@ pub fn router(engine: Arc<Engine>) -> Router {
         .route("/api/events", get(api_events))
         .route("/api/devices", get(api_devices))
         .route("/api/history", get(api_history).delete(api_history_clear))
+        .route("/api/logs", get(api_logs).delete(api_logs_clear))
+        .route("/api/logs/text", get(api_logs_text))
         .route("/api/offers/{id}/accept", post(api_accept))
         .route("/api/offers/{id}/reject", post(api_reject))
         .route("/api/jobs/{id}/cancel", post(api_job_cancel))
@@ -162,6 +164,8 @@ pub fn demo_router(cfg: Config, cfg_path: PathBuf) -> Router {
         .route("/api/events", get(events))
         .route("/api/devices", get(|State(d): State<Demo>| async move { Json(d.snap.devices.clone()).into_response() }))
         .route("/api/history", get(|| async { Json(Vec::<crate::history::Record>::new()).into_response() }).delete(ok))
+        .route("/api/logs", get(api_logs).delete(api_logs_clear))
+        .route("/api/logs/text", get(api_logs_text))
         .route(
             "/api/config",
             get(|State(d): State<Demo>| async move { Json(serde_json::json!({ "path": d.cfg_path, "config": d.cfg })).into_response() })
@@ -238,6 +242,44 @@ async fn api_history(State(e): St) -> Response {
 }
 async fn api_history_clear(State(e): St) -> Response {
     res_json(e.history.clear().map(|n| serde_json::json!({ "deleted": n })))
+}
+
+#[derive(Deserialize, Default)]
+struct LogsQuery {
+    /// Only entries with `seq > after` (poll for new lines).
+    #[serde(default)]
+    after: u64,
+    /// Minimum level: `error` | `warn` | `info` | `debug` | `trace`.
+    #[serde(default)]
+    level: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// `GET /api/logs?after=<seq>&level=warn&limit=500` → `{ entries, last_seq, total, file }`.
+/// Independent of the engine state so it also works in `gui --demo`.
+async fn api_logs(Query(q): Query<LogsQuery>) -> Response {
+    let entries = crate::logbuf::entries(q.after, q.level.as_deref(), q.limit.unwrap_or(500).clamp(1, crate::logbuf::CAPACITY));
+    Json(serde_json::json!({
+        "entries": entries,
+        "last_seq": crate::logbuf::last_seq(),
+        "total": crate::logbuf::total(),
+        "capacity": crate::logbuf::CAPACITY,
+        "file": crate::logbuf::file_path(),
+    }))
+    .into_response()
+}
+
+/// `GET /api/logs/text?level=` → plain text dump (download / share).
+async fn api_logs_text(Query(q): Query<LogsQuery>) -> Response {
+    let body = crate::logbuf::dump(q.level.as_deref());
+    ([(header::CONTENT_TYPE, "text/plain; charset=utf-8"), (header::CONTENT_DISPOSITION, "attachment; filename=\"uni-share.log\"")], body).into_response()
+}
+
+async fn api_logs_clear() -> Response {
+    let n = crate::logbuf::clear();
+    tracing::info!("registro en memoria vaciado ({n} líneas)");
+    Json(serde_json::json!({ "deleted": n })).into_response()
 }
 
 #[derive(Deserialize, Default)]

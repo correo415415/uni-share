@@ -6,6 +6,7 @@ pub mod config;
 pub mod fsutil;
 pub mod hash;
 pub mod history;
+pub mod logbuf;
 pub mod logging;
 pub mod ui;
 

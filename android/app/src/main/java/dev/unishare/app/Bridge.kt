@@ -110,6 +110,7 @@ class Bridge(private val activity: MainActivity, private val web: WebView) {
         } catch (_: Exception) {
         }
         prefs.edit().putString(KEY_TREE, uri.toString()).apply()
+        Native.logBoth(android.util.Log.INFO, "saf", "carpeta de descargas: ${downloadTreeName() ?: uri}")
         emit("folder", downloadTreeName() ?: JSONObject.NULL)
     }
 
@@ -151,10 +152,11 @@ class Bridge(private val activity: MainActivity, private val web: WebView) {
                         bytes += f.length()
                     }
                 } catch (e: Exception) {
-                    android.util.Log.w("uni-share", "export ${f.name}: $e")
+                    Native.logBoth(android.util.Log.WARN, "export", "${f.name}: $e")
                 }
             }
             if (n > 0) {
+                Native.logBoth(android.util.Log.INFO, "export", "«$jobName»: $n archivo(s), $bytes bytes → ${downloadTargetName()}")
                 prefs.edit().putBoolean("exported.$jobId", true).apply()
                 emit("exported", JSONObject().put("id", jobId).put("files", n).put("bytes", bytes).put("name", jobName).put("folder", downloadTargetName()))
             } else if (paths.length() > 0) {

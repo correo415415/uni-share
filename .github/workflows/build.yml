@@ -2,7 +2,11 @@
 #
 # - Sin actions/cache: el runner conserva ~/.cargo y ./target entre ejecuciones,
 #   así que la caché es el propio disco del runner.
-# - Cada push a `main` / `genspark_ai_developer` (o ejecución manual) compila:
+# - Se lanza SOLO a mano (workflow_dispatch: pestaña Actions → build → «Run workflow»,
+#   eligiendo la rama) o con un tag `v*`. Los pushes normales NO compilan: así los
+#   mini-commits frecuentes no encolan compilaciones seguidas en el runner. Para los
+#   cambios que solo tocan documentación existe `docs.yml` (sin toolchain, segundos).
+# - Compila:
 #     * uni-share            (features por defecto: CLI + GUI web)
 #     * uni-share-app        (--features slint: CLI + GUI web + app nativa)
 #   y publica los binarios en una *release* rodante `nightly-<rama>` (prerelease),
@@ -13,14 +17,15 @@ name: build
 
 on:
   push:
-    branches: [main, genspark_ai_developer]
     tags: ["v*"]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       slint:
         description: "Compilar también la app nativa (--features slint)"
+        type: boolean
+        default: true
+      android:
+        description: "Compilar también el APK Android"
         type: boolean
         default: true
 
@@ -175,6 +180,7 @@ jobs:
           shot details-log     --select 1:3
           shot new      --dialog new
           shot share    --dialog share
+          shot pair     --dialog pair
           shot settings --dialog settings
           shot fs       --dialog fs
           shot confirm  --dialog confirm --select 1:0
@@ -235,7 +241,7 @@ jobs:
       # Android: solo si el runner tiene SDK + NDK (ANDROID_HOME / ANDROID_NDK_HOME o
       # ~/Android/Sdk). No falla el build si faltan: se avisa y se sigue.
       - name: Android (cargo-ndk + APK debug, si hay SDK/NDK)
-        if: runner.os == 'Linux' && github.event_name != 'pull_request'
+        if: runner.os == 'Linux' && (github.event_name != 'workflow_dispatch' || inputs.android)
         shell: bash
         run: |
           set -euo pipefail

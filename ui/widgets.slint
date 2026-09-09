@@ -100,12 +100,16 @@ export component Input inherits Rectangle {
     callback accepted(string);
     callback edited(string);
     height: Theme.control-h;
+    // Never let a long value (URLs, tickets) widen the parent layout: the text is
+    // clipped inside the field and scrolls with the caret instead.
+    min-width: 0px; horizontal-stretch: 1; clip: true;
     border-radius: Theme.radius; background: Theme.bg2;
     border-width: 1px; border-color: te.has-focus ? Theme.accent : Theme.line;
     animate border-color { duration: 120ms; }
     HorizontalLayout {
         padding-left: 10px; padding-right: 10px;
         te := TextInput {
+            min-width: 0px; horizontal-stretch: 1;
             color: Theme.fg; font-size: mono ? 12px : Theme.fs; font-family: mono ? Theme.mono : "";
             vertical-alignment: center; single-line: true; input-type: password ? InputType.password : InputType.text;
             read-only: root.read-only;

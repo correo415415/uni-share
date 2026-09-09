@@ -22,6 +22,8 @@ cargo build --release          # un solo comando; sin pasos extra
 
 `cargo test` ejecuta 43 tests (unitarios + integración LAN real sobre loopback con TLS).
 
+**Binarios precompilados / CI.** El runner propio compila con el workflow `build` (`.github/workflows/build.yml`), que se lanza **a mano** (Actions → build → *Run workflow*, eligiendo rama y si se incluyen la app Slint y la APK) o automáticamente con un tag `v*`; deja los binarios, la APK y las capturas en la release rodante `nightly-<rama>`. Los pushes que solo tocan documentación pasan por `docs` (`.github/workflows/docs.yml`), una comprobación de Markdown de segundos que no compila nada.
+
 ### GUI nativa (Slint)
 
 ```bash
@@ -31,7 +33,7 @@ cargo build --release --features slint     # necesita clang + ninja (renderer Sk
 
 La GUI nativa incrusta sus propias fuentes (`ui/fonts/`: Inter para la interfaz y JetBrains Mono para hashes, puertos y velocidades; licencia OFL) y usa el renderer **Skia** con FemtoVG como alternativa, de modo que el texto se ve igual de nítido en cualquier equipo aunque no tenga esas fuentes instaladas.
 
-Extras de escritorio: **arrastrar y soltar** sobre la ventana (un archivo o carpeta abre «Enviar LAN» con la ruta; varios del mismo directorio, la carpeta; un ticket `.unishare` abre «Descargar» o el emparejamiento), **bandeja del sistema** con menú rápido (Mostrar/Ocultar · Enviar por LAN · Compartir link · Descargar · Abrir ticket · Salir) y el ajuste «minimizar a la bandeja al cerrar» para seguir recibiendo con la ventana oculta (en Linux hace falta un host StatusNotifierItem: KDE, o la extensión AppIndicator en GNOME). Para revisar el diseño sin red: `uni-share app --demo [--empty] [--size 1024x600] [--light] [--dialog new|share|settings|fs|confirm] [--drag-over] [--screenshot out.png]`.
+Extras de escritorio: **arrastrar y soltar** sobre la ventana (un archivo o carpeta abre «Enviar LAN» con la ruta; varios del mismo directorio, la carpeta; un ticket `.unishare` abre «Descargar» o el emparejamiento), **bandeja del sistema** con menú rápido (Mostrar/Ocultar · Enviar por LAN · Compartir link · Descargar · Abrir ticket · Salir) y el ajuste «minimizar a la bandeja al cerrar» para seguir recibiendo con la ventana oculta (en Linux hace falta un host StatusNotifierItem: KDE, o la extensión AppIndicator en GNOME). Para revisar el diseño sin red: `uni-share app --demo [--empty] [--size 1024x600] [--light] [--dialog new|share|pair|settings|fs|confirm] [--drag-over] [--screenshot out.png]`.
 
 ### Android
 
@@ -105,7 +107,7 @@ uni-share history [-n 20] [--json] [--clear]
 uni-share daemon start|stop|status
 uni-share gui [--port 47900] [--no-open] [--demo]  # GUI web local (+ GUI móvil en /m); --demo: estado de ejemplo sin motor
 uni-share app [fotos.unishare]               # app nativa Slint (cargo build --features slint)
-uni-share app --demo --screenshot app.png [--dialog new|share|settings|fs|confirm] [--select ID[:TAB]] [--light]
+uni-share app --demo --screenshot app.png [--dialog new|share|pair|settings|fs|confirm] [--select ID[:TAB]] [--light]
 uni-share associate [--remove] [--status]    # doble clic en .unishare / links unishare: abren la app
 uni-share scan <ruta…> [--json] [--no-clamav] [--quarantine|--delete] [-v]   # análisis de seguridad local (exit 0/1/2)
 uni-share config [--path]

@@ -112,7 +112,7 @@ pub struct AppOptions {
     pub demo: bool,
     /// Render the window once, save it as PNG and quit (design review / CI).
     pub screenshot: Option<PathBuf>,
-    /// Dialog to open before the screenshot ("new", "share", "settings", "fs", "confirm").
+    /// Dialog to open before the screenshot ("new", "share", "pair", "settings", "fs", "confirm").
     pub dialog: Option<String>,
     /// Pre-select a job id and details tab (0 general, 1 files, 2 share, 3 log, 4 history).
     pub select: Option<(u64, i32)>,
@@ -248,7 +248,23 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
             win.set_qr_caption(data.into());
             win.set_qr_image(qr_image(data));
         }
-        win.set_dialog(d.as_str().into());
+        if d == "pair" {
+            // Same dialog as "share" with a realistic (long) pairing ticket, so the
+            // screenshot exercises the text-overflow path reported by users.
+            let data = crate::ticket::Ticket::lan_pairing(
+                "Estudio-PC",
+                "192.168.1.42",
+                7411,
+                "3f9c1a7e5b2d8c4f6a0e9d1b7c3a5f8e2d4b6c8a0f1e3d5c7b9a2f4e6d8c0b1a",
+                Some("482913"),
+            )
+            .to_uri()
+            .unwrap_or_default();
+            win.set_share_what("pair".into());
+            win.set_qr_caption(data.clone().into());
+            win.set_qr_image(qr_image(&data));
+        }
+        win.set_dialog(if d == "pair" { "share" } else { d.as_str() }.into());
     }
     // Kept alive until the event loop returns.
     let shot = slint::Timer::default();

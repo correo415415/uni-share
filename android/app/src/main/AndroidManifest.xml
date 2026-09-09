@@ -11,6 +11,10 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- QR scanner (tickets / pairing); optional hardware -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Public Descargas/uni-share: MediaStore needs no permission on API 29+; older devices need this. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 

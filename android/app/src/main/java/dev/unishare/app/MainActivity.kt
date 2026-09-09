@@ -69,6 +69,12 @@ class MainActivity : AppCompatActivity() {
         if (granted) launchScanner() else bridge.emit("toast", "Sin permiso de cámara no se puede escanear")
     }
 
+    /** Only on Android ≤ 9: writing the public Descargas/uni-share needs WRITE_EXTERNAL_STORAGE. */
+    private val storagePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) bridge.retryPendingExport()
+        else bridge.emit("toast", "Sin permiso de almacenamiento los archivos se quedan en la carpeta privada de la app (elige otra carpeta en Ajustes)")
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -190,12 +196,22 @@ class MainActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------ SAF + QR --
 
-    fun pickTree() {
+    /** SAF tree picker, opened on [initial] (the public Download folder) when the provider supports it. */
+    fun pickTree(initial: Uri? = null) {
         try {
-            pickTreeLauncher.launch(null)
+            pickTreeLauncher.launch(initial)
         } catch (_: Exception) {
-            bridge.emit("toast", "No hay selector de carpetas disponible")
+            try {
+                pickTreeLauncher.launch(null)
+            } catch (_: Exception) {
+                bridge.emit("toast", "No hay selector de carpetas disponible")
+            }
         }
+    }
+
+    fun requestStorageForDownloads() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) return bridge.retryPendingExport()
+        storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
     }
 
     fun pickFiles() {

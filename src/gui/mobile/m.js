@@ -45,7 +45,7 @@ async function openScanned(text) {
 }
 function androidEvent(kind, payload) {
   if (kind === 'toast') return toast(String(payload), 'info');
-  if (kind === 'folder') { toast(payload ? `Carpeta de descargas: ${payload}` : 'Se usará la carpeta privada de la app', 'ok'); if (S.tab === 'settings') render(); return; }
+  if (kind === 'folder') { toast(payload ? `Carpeta de descargas: ${payload}` : 'Se usará Descargas/uni-share', 'ok'); if (S.tab === 'settings') render(); return; }
   if (kind === 'picked') { const f = pickWaiter; pickWaiter = null; if (f) f(String(payload)); else openNew('lan', { path: String(payload) }); return; }
   if (kind === 'exported') return toast(`«${payload.name}»: ${payload.files} archivo(s) copiados a ${payload.folder}`, 'ok', 6000);
 }
@@ -420,7 +420,7 @@ function viewSettings() {
   const nav = (id, icon, ttl, sub) => h('button', { class: 'sw', 'data-push': id }, h('span', { class: 'ic', html: ico(icon) }), h('span', { class: 'body' }, h('div', { class: 'ttl' }, ttl), sub ? h('div', { class: 'sub' }, sub) : null), h('span', { class: 'chev', html: ico('chev') }));
   root.append(h('div', { class: 'sec' }, 'Dispositivo'), h('div', { class: 'list' },
     val('device_name', 'devices', 'Nombre visible', c.device_name),
-    mobile ? h('button', { class: 'sw', id: 's-saf' }, h('span', { class: 'ic', html: ico('folder') }), h('span', { class: 'body' }, h('div', { class: 'ttl' }, 'Carpeta de descargas'), h('div', { class: 'sub' }, 'Los archivos recibidos se copian ahí al terminar')), h('span', { class: 'val' }, (ai && ai.downloadTree) || 'privada de la app'), h('span', { class: 'chev', html: ico('chev') }))
+    mobile ? h('button', { class: 'sw', id: 's-saf' }, h('span', { class: 'ic', html: ico('folder') }), h('span', { class: 'body' }, h('div', { class: 'ttl' }, 'Carpeta de descargas'), h('div', { class: 'sub' }, 'Los archivos recibidos se copian ahí al terminar')), h('span', { class: 'val' }, (ai && (ai.downloadTarget || ai.downloadTree)) || 'Descargas/uni-share'), h('span', { class: 'chev', html: ico('chev') }))
       : val('download_dir', 'folder', 'Carpeta de descargas', String(c.download_dir)),
     val('rate_limit_mbps', 'up', 'Límite de velocidad', c.rate_limit_mbps ? c.rate_limit_mbps + ' Mbps' : 'sin límite'),
     h('button', { class: 'sw', id: 's-theme' }, h('span', { class: 'ic', html: ico(document.documentElement.dataset.theme === 'light' ? 'sun' : 'moon') }), h('span', { class: 'body' }, h('div', { class: 'ttl' }, 'Tema'), h('div', { class: 'sub' }, 'Solo afecta a esta pantalla')), h('span', { class: 'val' }, document.documentElement.dataset.theme === 'light' ? 'claro' : 'oscuro'), h('span', { class: 'chev', html: ico('chev') }))));
@@ -456,7 +456,7 @@ async function editSetting(id) {
 function wireSettings(root) {
   $$('[data-sw]', root).forEach(b => b.onclick = () => toggleSetting(b.dataset.sw));
   $$('[data-edit]', root).forEach(b => b.onclick = () => editSetting(b.dataset.edit));
-  const saf = $('#s-saf', root); if (saf) saf.onclick = () => menuSheet('Carpeta de descargas', [{ icon: 'folder', label: 'Elegir carpeta…', sub: 'Selector del sistema (SAF)', fn: () => Android.pickDownloadFolder() }, { icon: 'x', label: 'Usar la carpeta privada de la app', fn: () => { Android.clearDownloadFolder(); render(); } }]);
+  const saf = $('#s-saf', root); if (saf) saf.onclick = () => menuSheet('Carpeta de descargas', [{ icon: 'folder', label: 'Otra carpeta…', sub: 'Selector del sistema. Android no permite elegir la raíz de Descargas: elige o crea una subcarpeta', fn: () => Android.pickDownloadFolder() }, { icon: 'dl', label: 'Usar Descargas/uni-share (por defecto)', sub: 'Carpeta pública del dispositivo, visible en Archivos', fn: () => { Android.clearDownloadFolder(); render(); } }]);
   $('#s-theme', root).onclick = toggleTheme;
 }
 

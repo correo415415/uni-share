@@ -1,8 +1,16 @@
 package dev.unishare.app
 
+import android.Manifest
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.media.MediaScannerConnection
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.DocumentsContract
+import android.provider.MediaStore
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.documentfile.provider.DocumentFile
@@ -12,8 +20,10 @@ import java.io.File
 
 /**
  * `window.Android` inside the web GUI. Everything the browser sandbox cannot do on a phone:
- *  - the user's download folder through the Storage Access Framework (a `content://` tree;
- *    the Rust engine keeps writing to the app-private dir and finished jobs are exported),
+ *  - the user's download folder: by default the public `Descargas/uni-share` (MediaStore on
+ *    API 29+, plain file + WRITE_EXTERNAL_STORAGE on ≤ 28) or any other folder chosen through
+ *    the Storage Access Framework (a `content://` tree). The Rust engine keeps writing to the
+ *    app-private dir and finished jobs are exported/copied from there.
  *  - the QR scanner (zxing) for `.unishare` tickets / pairing tickets,
  *  - the system share sheet for links and tickets.
  *
@@ -33,6 +43,8 @@ class Bridge(private val activity: MainActivity, private val web: WebView) {
         .put("version", appVersion())
         .put("sdk", android.os.Build.VERSION.SDK_INT)
         .put("downloadTree", downloadTreeName() ?: JSONObject.NULL)
+        .put("downloadTarget", downloadTargetName())
+        .put("downloadDefault", DEFAULT_TARGET)
         .put("appDownloadDir", (activity.application as App).downloadDir.absolutePath)
         .toString()
 
@@ -44,19 +56,42 @@ class Bridge(private val activity: MainActivity, private val web: WebView) {
 
     // -------------------------------------------------------------- SAF folder --
 
-    /** Opens `ACTION_OPEN_DOCUMENT_TREE`; the result arrives via `androidEvent('folder', name)`. */
+    /**
+     * Opens `ACTION_OPEN_DOCUMENT_TREE` positioned on the public Download folder; the result
+     * arrives via `androidEvent('folder', name)`. Android 11+ refuses the *root* of Download
+     * (and the whole storage): the user has to pick or create a sub-folder, which the page
+     * explains. Without a picked tree the default `Descargas/uni-share` is used (no picker needed).
+     */
     @JavascriptInterface
-    fun pickDownloadFolder() = activity.runOnUiThread { activity.pickTree() }
+    fun pickDownloadFolder() = activity.runOnUiThread { activity.pickTree(downloadsInitialUri()) }
 
+    private fun downloadsInitialUri(): Uri? = try {
+        DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:" + Environment.DIRECTORY_DOWNLOADS)
+    } catch (_: Exception) {
+        null
+    }
+
+    /** Back to the default public `Descargas/uni-share`. */
     @JavascriptInterface
     fun clearDownloadFolder() {
         prefs.edit().remove(KEY_TREE).apply()
         emit("folder", JSONObject.NULL)
     }
 
-    /** Human-readable name of the chosen tree (e.g. `Descargas/uni-share`), or null. */
+    /** Human-readable name of the chosen SAF tree, or null when the default is in use. */
     @JavascriptInterface
     fun downloadFolderName(): String? = downloadTreeName()
+
+    /** Where finished receptions end up, as shown in Settings. */
+    @JavascriptInterface
+    fun downloadTargetName(): String = downloadTreeName() ?: DEFAULT_TARGET
+
+    /**
+     * ≤ API 28 needs WRITE_EXTERNAL_STORAGE to create `Descargas/uni-share`; 29+ writes through
+     * MediaStore without any permission. Returns true when a copy can proceed right now.
+     */
+    fun hasDefaultTargetAccess(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ||
+        activity.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
 
     private fun treeUri(): Uri? = prefs.getString(KEY_TREE, null)?.let(Uri::parse)?.takeIf { uri ->
         // The grant survives reboots only if we hold a persisted permission.
@@ -79,17 +114,28 @@ class Bridge(private val activity: MainActivity, private val web: WebView) {
     }
 
     /**
-     * Copies the files a finished job wrote (engine → app-private dir) into the SAF tree,
-     * mirroring the sub-folders relative to the engine download dir. Called by the page when a
-     * reception/download reaches `completed` (`saved` paths from the snapshot). Idempotent per job.
+     * Copies the files a finished job wrote (engine → app-private dir) into the user-visible
+     * download location, mirroring the sub-folders relative to the engine download dir:
+     *  - the SAF tree if one was picked,
+     *  - otherwise the public `Descargas/uni-share` (MediaStore.Downloads on API 29+; a plain
+     *    directory + media scan on ≤ 28, asking for WRITE_EXTERNAL_STORAGE the first time).
+     * Called by the page when a reception/download reaches `completed` (`saved` paths from the
+     * snapshot). Idempotent per job.
      */
     @JavascriptInterface
     fun exportJob(jobId: Long, savedJson: String, jobName: String) {
-        val tree = treeUri() ?: return
         if (prefs.getBoolean("exported.$jobId", false)) return
+        val tree = treeUri()
+        if (tree == null && !hasDefaultTargetAccess()) {
+            // Remember the request; MainActivity re-runs it once the permission is granted.
+            pendingExport = Triple(jobId, savedJson, jobName)
+            activity.runOnUiThread { activity.requestStorageForDownloads() }
+            return
+        }
         val paths = JSONArray(savedJson)
-        val root = DocumentFile.fromTreeUri(activity, tree) ?: return
         val base = (activity.application as App).downloadDir
+        val root = tree?.let { DocumentFile.fromTreeUri(activity, it) }
+        if (tree != null && root == null) return
         activity.io.execute {
             var n = 0
             var bytes = 0L
@@ -98,23 +144,74 @@ class Bridge(private val activity: MainActivity, private val web: WebView) {
                 if (!f.isFile) continue
                 try {
                     val rel = f.relativeToOrNull(base)?.path ?: f.name
-                    val dir = ensureDirs(root, rel.substringBeforeLast('/', ""))
-                    val mime = guessMime(f.name)
-                    dir.findFile(f.name)?.delete()
-                    val target = dir.createFile(mime, f.name) ?: continue
-                    activity.contentResolver.openOutputStream(target.uri, "w")?.use { out ->
-                        f.inputStream().use { it.copyTo(out) }
+                    val sub = rel.substringBeforeLast('/', "")
+                    val ok = if (root != null) copyToTree(root, sub, f) else copyToPublicDownloads(sub, f)
+                    if (ok) {
+                        n++
+                        bytes += f.length()
                     }
-                    n++
-                    bytes += f.length()
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    android.util.Log.w("uni-share", "export ${f.name}: $e")
                 }
             }
             if (n > 0) {
                 prefs.edit().putBoolean("exported.$jobId", true).apply()
-                emit("exported", JSONObject().put("id", jobId).put("files", n).put("bytes", bytes).put("name", jobName).put("folder", downloadTreeName() ?: ""))
+                emit("exported", JSONObject().put("id", jobId).put("files", n).put("bytes", bytes).put("name", jobName).put("folder", downloadTargetName()))
+            } else if (paths.length() > 0) {
+                emit("toast", "No se pudo copiar «$jobName» a ${downloadTargetName()}")
             }
         }
+    }
+
+    /** Export postponed until WRITE_EXTERNAL_STORAGE (≤ API 28) is granted. */
+    private var pendingExport: Triple<Long, String, String>? = null
+
+    fun retryPendingExport() {
+        val (id, saved, name) = pendingExport ?: return
+        pendingExport = null
+        exportJob(id, saved, name)
+    }
+
+    private fun copyToTree(root: DocumentFile, sub: String, f: File): Boolean {
+        val dir = ensureDirs(root, sub)
+        dir.findFile(f.name)?.delete()
+        val target = dir.createFile(guessMime(f.name), f.name) ?: return false
+        activity.contentResolver.openOutputStream(target.uri, "w")?.use { out ->
+            f.inputStream().use { it.copyTo(out) }
+        } ?: return false
+        return true
+    }
+
+    /** `Descargas/uni-share[/sub]/name`, visible in the Files/Downloads apps right away. */
+    private fun copyToPublicDownloads(sub: String, f: File): Boolean {
+        val relDir = DEFAULT_SUBDIR + (if (sub.isNotBlank()) "/$sub" else "")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val resolver = activity.contentResolver
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, f.name)
+                put(MediaStore.Downloads.MIME_TYPE, guessMime(f.name))
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/" + relDir)
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return false
+            try {
+                resolver.openOutputStream(uri, "w")?.use { out -> f.inputStream().use { it.copyTo(out) } } ?: throw IllegalStateException("no stream")
+                values.clear()
+                values.put(MediaStore.Downloads.IS_PENDING, 0)
+                resolver.update(uri, values, null, null)
+                return true
+            } catch (e: Exception) {
+                resolver.delete(uri, null, null)
+                throw e
+            }
+        }
+        @Suppress("DEPRECATION")
+        val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), relDir)
+        if (!dir.isDirectory && !dir.mkdirs()) return false
+        val target = File(dir, f.name)
+        f.inputStream().use { input -> target.outputStream().use { input.copyTo(it) } }
+        MediaScannerConnection.scanFile(activity, arrayOf(target.absolutePath), arrayOf(guessMime(f.name)), null)
+        return true
     }
 
     private fun ensureDirs(root: DocumentFile, rel: String): DocumentFile {
@@ -188,5 +285,9 @@ class Bridge(private val activity: MainActivity, private val web: WebView) {
 
     companion object {
         const val KEY_TREE = "download_tree"
+        /** Sub-folder inside the public Downloads folder used when no SAF tree is picked. */
+        const val DEFAULT_SUBDIR = "uni-share"
+        /** Shown in Settings; the system folder is called «Descargas» in Spanish devices. */
+        const val DEFAULT_TARGET = "Descargas/uni-share"
     }
 }

@@ -683,6 +683,14 @@ function init() {
   history.replaceState({ depth: 0 }, '');
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && !es) poll(); });
   render(); loadCfg();
-  if (S.shot) poll(); else connect(); // shot=1: one /api/state fetch, no SSE (headless screenshots)
+  if (S.shot) {
+    // Headless captures: one /api/state fetch, no SSE; optional #job=<id> / #view=history|security|about / #sheet=new|receive|share.
+    poll().then(() => {
+      if (!S.data) return;
+      const jid = Number(hp.get('job')); const j = jid && job(jid); if (j) push({ kind: 'job', id: j.id, title: KIND[j.kind] });
+      const v = hp.get('view'); if (v && ['history', 'security', 'about'].includes(v)) push({ kind: v, title: { history: 'Historial', security: 'Seguridad', about: 'Acerca de' }[v] });
+      const sh = hp.get('sheet'); if (sh === 'new') openNew(hp.get('mode') || 'lan'); else if (sh === 'receive') receiveSheet(); else if (sh === 'share') { const l = S.data.jobs.find(x => x.link || x.ticket_uri); if (l) openShareSheet(l); }
+    });
+  } else connect();
 }
 init();

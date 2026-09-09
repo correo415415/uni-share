@@ -164,13 +164,13 @@ svg{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-l
 /* switch row */
 .sw{display:flex;align-items:center;gap:12px;min-height:56px;padding:10px 14px;border-top:1px solid var(--line);width:100%;text-align:left;color:var(--fg)}
 .sw:first-child{border-top:0}
-.sw .body{flex:1;min-width:0}.sw .ttl{font-weight:500}.sw .sub{color:var(--fg-3);font-size:var(--fs-sm);margin-top:1px}
+.sw .body{flex:1;min-width:0}.sw .ttl{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sw .sub{color:var(--fg-3);font-size:var(--fs-sm);margin-top:1px}
 .sw .ic{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;flex:none;background:var(--bg-3);color:var(--fg-2)}
 .sw .ic svg{width:18px;height:18px;stroke-width:2}
 .tg{width:44px;height:26px;border-radius:13px;background:var(--bg-4);border:1px solid var(--line-2);position:relative;flex:none;transition:background var(--t)}
 .tg::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:var(--fg-2);transition:transform var(--t),background var(--t)}
 .tg.on{background:var(--accent);border-color:transparent}.tg.on::after{transform:translateX(18px);background:#fff}
-.sw .val{color:var(--fg-3);font-size:var(--fs-sm);font-family:var(--mono);max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sw .val{color:var(--fg-3);font-size:var(--fs-sm);font-family:var(--mono);max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sw .chev{width:18px;height:18px;color:var(--fg-3);flex:none}
 
 /* segmented */

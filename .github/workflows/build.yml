@@ -223,6 +223,12 @@ jobs:
           web m-share    "$M#share&shot=1"    390,844
           web m-settings "$M#settings&shot=1" 390,844
           web m-light    "$M#home&theme=light&shot=1" 390,844
+          web m-job      "$M#jobs&job=1&shot=1"     390,844
+          web m-new      "$M#home&sheet=new&shot=1" 390,844
+          web m-download "$M#home&sheet=new&mode=download&shot=1" 390,844
+          web m-receive  "$M#home&sheet=receive&shot=1" 390,844
+          web m-share-link "$M#share&sheet=share&shot=1" 390,844
+          web m-security "$M#settings&view=security&shot=1" 390,844
           web web-main   "http://127.0.0.1:47911/#shot=1" 1400,900
           ls -la shots || true
 

@@ -1426,7 +1426,15 @@ impl Engine {
                     Ok((format!("{} archivo(s) desde {} — BLAKE3 verificado: {}", r.saved.len(), r.source, r.verified), r.saved))
                 } else if crate::download::swisstransfer::is_swisstransfer_url(&src) {
                     let mut c = crate::download::swisstransfer::SwissTransferClient::new()?;
-                    let t = c.get_transfer(&src, pw.as_deref()).await?;
+                    let t = c.get_transfer(&src, pw.as_deref()).await.map_err(|e| {
+                        if e.downcast_ref::<crate::download::swisstransfer::PasswordRequired>().is_some() {
+                            anyhow::anyhow!("el link de SwissTransfer requiere contraseña: indícala en «Contraseña» y reintenta")
+                        } else if let Some(w) = e.downcast_ref::<crate::download::swisstransfer::WrongPassword>() {
+                            anyhow::anyhow!("SwissTransfer rechazó la contraseña ({})", w.0)
+                        } else {
+                            e
+                        }
+                    })?;
                     let jf = t.files.iter().map(|f| JobFile { path: f.path.clone(), size: f.size }).collect();
                     let title = t.title.clone().unwrap_or_else(|| t.link_id.clone());
                     set_meta(title.clone(), t.total_size, jf, "SwissTransfer".into()).await;

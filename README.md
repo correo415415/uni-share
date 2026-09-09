@@ -104,6 +104,7 @@ uni-share qr https://storage.to/XXXX [--svg qr.svg]
 uni-share download https://storage.to/XXXX [-o DIR] [--password xxxx] [--force] [--list]
 uni-share download https://storage.to/c/XXXX --password xxxx
 uni-share download https://www.swisstransfer.com/dl/<uuid>
+uni-share download https://www.swisstransfer.com/dl/<uuid> --password secreta   # link protegido (sin --password se pregunta)
 uni-share download fotos.unishare            # o "unishare:…" — verifica BLAKE3 al terminar
 
 # Historial, daemon, GUIs, config
@@ -245,7 +246,7 @@ El receptor escribe en `archivo.part`, hashea mientras escribe y renombra solo s
 | **Visitor token storage.to** | 32 bytes aleatorios hex, persistido en `config.toml` (`global.storage_to_visitor_token`); *owner tokens* guardados en el historial (`meta`) | Mismo esquema que el CLI oficial de storage.to; el owner token permite borrar / proteger / cambiar expiración después aunque cambie la IP. |
 | **Carpetas en global** | **Collection** con rutas relativas en `filename` (por defecto); `--compress` → un solo `.tar.zst` | Probado: storage.to acepta `sub/dir/a.txt` como nombre y la descarga recrea la jerarquía. Comprimir es opcional (útil para miles de archivos pequeños). |
 | **Descarga storage.to** | Parser del *turbo-stream* de React Router de la página (`mint_proof`) + `GET /{id}/download` / `POST /c/{id}/urls`; **fallback a `curl`** si Cloudflare desafía al cliente rustls | storage.to no publica API de descarga; los endpoints del sitio están tras Cloudflare Bot Management que discrimina por huella TLS. `curl` (presente en Linux, macOS y Windows 10+) pasa el filtro; el CDN final acepta `Range` y se descarga con reqwest. |
-| **SwissTransfer** | Descarga nativa en Rust (Inertia page → API `links/{uuid}/files/{id}` → S3 presignado con `Range`) | Cumple la restricción de no automatizar subidas a SwissTransfer. Sin Python: el binario es autosuficiente. |
+| **SwissTransfer** | Descarga nativa en Rust (Inertia page → `POST /dl/{uuid}` con contraseña si el link la tiene → API `links/{uuid}/files/{id}` con la sesión → S3 presignado con `Range`) | Cumple la restricción de no automatizar subidas a SwissTransfer. Sin Python: el binario es autosuficiente. |
 | **Errores / async** | `anyhow` + `thiserror`, `tokio` en todo el I/O, sin `unwrap` en rutas de producción | `tokio` es el runtime con más ecosistema (axum, reqwest, hyper). Los `unwrap` quedan solo en tests. |
 | **Daemon** | Proceso desacoplado (`setsid` / `DETACHED_PROCESS`) con pidfile y log | Portátil sin integrar con systemd/launchd/servicios de Windows; `daemon status` comprueba liveness real. |
 

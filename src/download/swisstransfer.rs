@@ -2,10 +2,17 @@
 //!
 //! 1. `GET /dl/{uuid}` → Inertia page; `<script data-page="app" type="application/json">`
 //!    (or `<div id="app" data-page="…">`) holds `{component, props:{transfer:{files[]}}}`.
-//! 2. Password: `POST /dl/{uuid}` `{password}` with `X-Inertia`, `X-XSRF-TOKEN`
-//!    (from cookie `SWISSTRANSFER-API-XSRF-TOKEN`).
+//! 2. Password: `POST /dl/{uuid}` `{password}` with `X-Inertia`, `X-Inertia-Version`,
+//!    `X-XSRF-TOKEN` (from cookie `SWISSTRANSFER-API-XSRF-TOKEN`). A correct password
+//!    answers `200 application/json` with `component: "link/show"`; a wrong one answers
+//!    `302 → GET /dl/{uuid}` whose page is `link/password` with
+//!    `props.errors.password = "Contraseña incorrecta"`. The unlocked state lives in the
+//!    `ST_SESSION` cookie, so the same client must be used for step 3.
 //! 3. `GET /api/1/links/{uuid}/files/{fileId}` (Accept: application/json) →
-//!    `{data:{url}}` presigned S3 URL, valid 1 h; supports `Range`.
+//!    `{result:"success", data:{url}}` presigned S3 URL, valid 1 h; supports `Range`.
+//!    Without the session cookie it answers `403 access_denied`.
+//!
+//! Verified against the live site on 2026-09-09 (password-protected link).
 
 use super::http::{ProgressFn, browser_client, download_resumable};
 use crate::fsutil::destination_path;
@@ -33,6 +40,16 @@ pub struct StTransfer {
     pub expires_at: Option<i64>,
     pub files: Vec<StFile>,
 }
+
+/// The link is protected and no password was supplied.
+#[derive(Debug, thiserror::Error)]
+#[error("this transfer is password protected")]
+pub struct PasswordRequired;
+
+/// The supplied password was rejected by SwissTransfer.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct WrongPassword(pub String);
 
 pub fn extract_link_id(s: &str) -> Option<String> {
     let re = Regex::new(r"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").ok()?;
@@ -129,7 +146,7 @@ impl SwissTransferClient {
             r = req2.send().await?;
         }
         match r.status().as_u16() {
-            401 | 403 | 422 => bail!("incorrect password"),
+            401 | 403 | 422 => return Err(WrongPassword("Contraseña incorrecta".into()).into()),
             s if s >= 400 => bail!("HTTP {s} submitting password"),
             _ => {}
         }
@@ -146,14 +163,19 @@ impl SwissTransferClient {
         let mut page = self.fetch_page(&link_id).await?;
         let mut component = page.get("component").and_then(|c| c.as_str()).unwrap_or("").to_string();
         if component.ends_with("password") {
-            let pw = password.ok_or_else(|| anyhow!("this transfer is password protected (use --password)"))?;
+            let pw = password.filter(|p| !p.is_empty()).ok_or(PasswordRequired)?;
             page = self.submit_password(&link_id, pw).await?;
             component = page.get("component").and_then(|c| c.as_str()).unwrap_or("").to_string();
             if component.ends_with("password") {
-                let msg = page.pointer("/props/errors/password").and_then(|v| v.as_str()).unwrap_or("incorrect password");
-                bail!("{msg}");
+                let msg = page.pointer("/props/errors/password").and_then(|v| v.as_str()).unwrap_or("Contraseña incorrecta");
+                return Err(WrongPassword(msg.to_string()).into());
             }
         }
+        Self::transfer_from_page(link_id, &component, &page)
+    }
+
+    /// Build the transfer description from an unlocked Inertia page.
+    fn transfer_from_page(link_id: String, component: &str, page: &serde_json::Value) -> Result<StTransfer> {
         if component.ends_with("not-found") {
             bail!("link not found or expired");
         }
@@ -167,6 +189,7 @@ impl SwissTransferClient {
             bail!("the transfer is still pending antivirus scan; try later");
         }
         let transfer = page.pointer("/props/transfer").ok_or_else(|| anyhow!("unexpected SwissTransfer response (component '{component}')"))?;
+        anyhow::ensure!(transfer.is_object(), "unexpected SwissTransfer response (component '{component}')");
         let files: Vec<StFile> = transfer
             .get("files")
             .and_then(|f| f.as_array())
@@ -268,5 +291,68 @@ mod tests {
         let legacy = r#"<div id="app" data-page="{&quot;component&quot;:&quot;link/password&quot;,&quot;props&quot;:{}}"></div>"#;
         let p = SwissTransferClient::parse_inertia_page(legacy).unwrap();
         assert_eq!(p["component"], "link/password");
+    }
+
+    /// Shape of the JSON answered by `POST /dl/{id}` with the right password
+    /// (captured live on 2026-09-09; promotions trimmed).
+    const UNLOCKED: &str = r#"{"component":"link/show","props":{"errors":{},"user":null,"lang":"es_ES",
+      "link":{"id":"01a086f1-7dcf-71e9-b8b5-6c1dc79c8e6e"},
+      "transfer":{"id":"01a086f1-7dcd-7356-bad2-f7b6467c2d44","title":null,"message":null,"total_size":5,
+        "expires_at":1789059600,"files":[{"id":"01a086f1-7dd2-7336-92d9-f7ca05d69083","path":"test.txt","size":5,"mime_type":"text/plain"}],"type":"link"}},
+      "url":"/dl/01a086f1-7dcf-71e9-b8b5-6c1dc79c8e6e","version":"5344225efc0e48d7f53f62005fd4733e"}"#;
+
+    #[test]
+    fn unlocked_page_to_transfer() {
+        let page: serde_json::Value = serde_json::from_str(UNLOCKED).unwrap();
+        let t = SwissTransferClient::transfer_from_page("01a086f1-7dcf-71e9-b8b5-6c1dc79c8e6e".into(), "link/show", &page).unwrap();
+        assert_eq!(t.files.len(), 1);
+        assert_eq!(t.files[0].path, "test.txt");
+        assert_eq!(t.files[0].id, "01a086f1-7dd2-7336-92d9-f7ca05d69083");
+        assert_eq!(t.total_size, 5);
+        assert_eq!(t.expires_at, Some(1789059600));
+        assert!(t.title.is_none());
+    }
+
+    #[test]
+    fn password_component_states() {
+        let page: serde_json::Value = serde_json::from_str(r#"{"component":"link/password","props":{"errors":{"password":"Contraseña incorrecta"}}}"#).unwrap();
+        assert_eq!(page.pointer("/props/errors/password").and_then(|v| v.as_str()), Some("Contraseña incorrecta"));
+        let page: serde_json::Value = serde_json::from_str(r#"{"component":"link/not-found","props":{}}"#).unwrap();
+        let err = SwissTransferClient::transfer_from_page("x".into(), "link/not-found", &page).unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    /// Live check against a real password-protected link. Opt-in: needs network and
+    /// the link to still exist. `UNI_SHARE_ST_LINK` / `UNI_SHARE_ST_PASSWORD` override the
+    /// defaults. Run with `cargo test --lib swisstransfer -- --ignored`.
+    #[tokio::test]
+    #[ignore = "network: live SwissTransfer link"]
+    async fn live_password_protected_download() {
+        let link = std::env::var("UNI_SHARE_ST_LINK").unwrap_or_else(|_| "https://www.swisstransfer.com/dl/01a086f1-7dcf-71e9-b8b5-6c1dc79c8e6e".into());
+        let pw = std::env::var("UNI_SHARE_ST_PASSWORD").unwrap_or_else(|_| "test1234".into());
+        let mut c = SwissTransferClient::new().unwrap();
+        // Without password → typed error.
+        match c.get_transfer(&link, None).await {
+            Err(e) if e.downcast_ref::<PasswordRequired>().is_some() => {}
+            Err(e) if e.to_string().contains("not found") || e.to_string().contains("no longer available") => {
+                eprintln!("live link gone ({e}); skipping");
+                return;
+            }
+            other => panic!("expected PasswordRequired, got {other:?}"),
+        }
+        // Wrong password → typed error.
+        let mut c = SwissTransferClient::new().unwrap();
+        let err = c.get_transfer(&link, Some("definitely-wrong")).await.unwrap_err();
+        assert!(err.downcast_ref::<WrongPassword>().is_some(), "expected WrongPassword, got {err:#}");
+        // Right password → transfer + presigned URL + bytes.
+        let mut c = SwissTransferClient::new().unwrap();
+        let t = c.get_transfer(&link, Some(&pw)).await.unwrap();
+        assert!(!t.files.is_empty());
+        let dir = tempfile::tempdir().unwrap();
+        let saved = c.download_all(&t, dir.path(), true, std::sync::Arc::new(|_| {}), |_| {}).await.unwrap();
+        assert_eq!(saved.len(), t.files.len());
+        for (f, p) in t.files.iter().zip(&saved) {
+            assert_eq!(std::fs::metadata(p).unwrap().len(), f.size, "size of {}", f.path);
+        }
     }
 }

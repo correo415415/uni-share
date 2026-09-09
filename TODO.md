@@ -145,6 +145,7 @@ Peticiones de la sesión 09-2026 (segunda tanda tras probar la app).
 - [ ] **Android: la lista no se actualiza al crear una transferencia** hasta recargar. Ver diagnóstico y arreglo en `m.js` (refresco inmediato tras `POST` + SSE).
 - [ ] **YARA** (`yara-x`, opcional por *feature*).
 - [ ] **Android: carpeta por defecto `Downloads/unishare`** autocreada.
+- [x] **Envío por storage.to más fácil + tiempo online configurable.** API investigada (`storage.to/docs/api`, FAQ) y **probada en vivo** (09-09-2026, subidas de prueba borradas después): retención anónima **1-7 días** (`expiry_days` en `POST /upload/confirm` y `POST /collection`; `POST /{file|collection}/{id}/expiry {days}`; `8` → «must not be greater than 7»; `null` = permanente solo premium; sin indicar → 3 días). Código: constantes `MIN/MAX/DEFAULT_EXPIRY_DAYS` + `clamp_expiry_days` en `global/storage_to.rs`, `expiry_days` también en la creación de la colección y re-afirmado vía `/expiry` tras subir; CLI: alias `share`/`up`, `-e/--days` validado 1-7; config valida 1-7; GUI web/móvil: selector «Tiempo online» 1-7 días (nueva transferencia y ajustes); Slint: `Segmented` 1-7; móvil: acceso rápido «Subir link» en Inicio y, al compartir un archivo *hacia* la app desde Android, hoja «¿Cómo quieres compartirlo?» (red local / link).
 
 ## Pendiente / mejoras conocidas
 - [ ] Cloudflare puede exigir captcha (Turnstile) en descargas de storage.to según reputación de IP: entonces se muestra un mensaje pidiendo abrir el link en el navegador

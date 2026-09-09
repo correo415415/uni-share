@@ -85,8 +85,11 @@ uni-share send-lan ~/Videos/proyecto/ [--to PC-Sala] [--pin 1234] [--compress]
 uni-share send-lan ~/Videos/proyecto/ --to "unishare:…"   # sin mDNS: huella fijada y PIN incluidos
 
 # Subir a storage.to y obtener link + QR + portapapeles (+ ticket .unishare opcional)
-uni-share send-global ~/Videos/proyecto/ [--password xxxx] [--expiry-days 7] [--max-downloads 5] \
+uni-share share ~/Videos/proyecto/            # alias de send-global (también `up`)
+uni-share send-global ~/Videos/proyecto/ [--password xxxx] [-e 7 | --days 7] [--max-downloads 5] \
                       [--compress] [--ticket [fotos.unishare]] [--ticket-qr] [--json]
+# Tiempo online del link: 1-7 días (`-e`/`--days`/`--expiry-days`). storage.to conserva las subidas
+# anónimas como máximo 7 días (3 si no se indica nada; «permanente» solo con cuenta premium).
 
 # Tickets .unishare (fichero propio con las fuentes, contraseña, lista de archivos y hashes)
 uni-share ticket create https://storage.to/c/XXXX --password xxxx --name fotos \
@@ -181,7 +184,7 @@ backend = "storage_to"
 storage_to_api = "https://storage.to/api"
 # storage_to_token = "…"     # cuenta storage.to (opcional)
 # storage_to_visitor_token = "…"  # se genera y guarda automáticamente
-expiry_days = 7
+expiry_days = 7              # tiempo online por defecto de los links: 1-7 días (máximo del servicio)
 parallel_parts = 4
 ```
 

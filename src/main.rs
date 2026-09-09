@@ -42,6 +42,7 @@ pub enum Command {
     /// Send a file or folder to a device on the local network
     SendLan(SendLanArgs),
     /// Upload a file or folder to storage.to and get a share link
+    #[command(visible_alias = "share", visible_alias = "up")]
     SendGlobal(SendGlobalArgs),
     /// Listen for incoming LAN transfers
     Receive(ReceiveArgs),
@@ -123,8 +124,8 @@ pub struct SendGlobalArgs {
     /// Protect the share with a password (4-100 chars)
     #[arg(long)]
     pub password: Option<String>,
-    /// Expiry in days (1-7 anonymous)
-    #[arg(long)]
+    /// How long the link stays up, in days (storage.to accepts 1-7; default from config, 3 on the service)
+    #[arg(long, short = 'e', visible_alias = "days", value_parser = clap::value_parser!(u32).range(1..=7))]
     pub expiry_days: Option<u32>,
     /// Maximum downloads before auto-delete (1-1000)
     #[arg(long)]

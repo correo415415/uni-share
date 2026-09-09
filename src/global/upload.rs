@@ -64,7 +64,7 @@ pub async fn upload_file(
             content_type: &ct,
             r2_key: &init.r2_key,
             collection_id,
-            expiry_days: opts.expiry_days,
+            expiry_days: opts.expiry_days.map(super::storage_to::clamp_expiry_days),
         })
         .await
         .context("upload confirm")?;
@@ -266,7 +266,7 @@ pub async fn upload_entries(
         });
     }
 
-    let coll = client.create_collection(files.len() as u32).await?;
+    let coll = client.create_collection(files.len() as u32, opts.expiry_days).await?;
     let info = coll.collection.ok_or_else(|| anyhow!("no collection info"))?;
     let owner = coll.owner_token.clone();
     for f in files {
@@ -295,10 +295,18 @@ pub async fn upload_entries(
 }
 
 async fn apply_settings(client: &Client, kind: ResourceKind, id: &str, owner: Option<&str>, opts: &UploadOptions) -> Result<()> {
-    if opts.password.is_none() && opts.max_downloads.is_none() {
+    if opts.password.is_none() && opts.max_downloads.is_none() && opts.expiry_days.is_none() {
         return Ok(());
     }
-    let owner = owner.ok_or_else(|| anyhow!("server did not return an owner token; cannot apply password/max-downloads"))?;
+    let owner = owner.ok_or_else(|| anyhow!("server did not return an owner token; cannot apply password/expiry/max-downloads"))?;
+    // Retention: already requested at create/confirm time; re-assert through `/expiry` so the
+    // final `expires_at` is exactly N days from *now* (collections are created before the
+    // upload starts). Non-fatal: the resource already exists with a sane expiry.
+    if let Some(d) = opts.expiry_days {
+        if let Err(e) = client.set_expiry(kind, id, owner, super::storage_to::clamp_expiry_days(d)).await {
+            tracing::debug!("set expiry: {e:#}");
+        }
+    }
     if let Some(p) = &opts.password {
         client.set_password(kind, id, owner, p).await.context("setting password")?;
     }

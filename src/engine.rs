@@ -1087,7 +1087,7 @@ impl Engine {
             cfg.scan.on_danger = v;
         }
         if let Some(v) = p.expiry_days {
-            cfg.global.expiry_days = v.clamp(1, 7);
+            cfg.global.expiry_days = crate::global::storage_to::clamp_expiry_days(v);
         }
         if let Some(v) = p.parallel_parts {
             cfg.global.parallel_parts = v.clamp(1, 16);
@@ -1303,7 +1303,7 @@ impl Engine {
                 };
                 let password = req.password.clone().filter(|p| !p.is_empty());
                 let opts = crate::global::upload::UploadOptions {
-                    expiry_days: Some(req.expiry_days.unwrap_or(expiry).clamp(1, 7)),
+                    expiry_days: Some(crate::global::storage_to::clamp_expiry_days(req.expiry_days.unwrap_or(expiry))),
                     parallel_parts: parallel,
                     password: password.clone(),
                     max_downloads: req.max_downloads.filter(|m| *m > 0),

@@ -58,7 +58,7 @@ pub struct GlobalConfig {
     pub storage_to_token: Option<String>,
     /// Anonymous visitor token (auto generated and persisted here).
     pub storage_to_visitor_token: Option<String>,
-    /// Default expiry in days for uploads (1-7 for anonymous storage.to).
+    /// Default retention in days for storage.to links (1-7; the service allows at most 7).
     pub expiry_days: u32,
     /// Number of parallel multipart parts.
     pub parallel_parts: usize,
@@ -178,8 +178,8 @@ impl Config {
             "global.backend must be 'storage_to'"
         );
         anyhow::ensure!(
-            (1..=7).contains(&self.global.expiry_days) || self.global.storage_to_token.is_some(),
-            "global.expiry_days must be 1-7 for anonymous uploads"
+            (crate::global::storage_to::MIN_EXPIRY_DAYS..=crate::global::storage_to::MAX_EXPIRY_DAYS).contains(&self.global.expiry_days),
+            "global.expiry_days must be 1-7 (storage.to keeps anonymous uploads at most 7 days)"
         );
         anyhow::ensure!(self.global.parallel_parts >= 1, "parallel_parts must be >= 1");
         Ok(())

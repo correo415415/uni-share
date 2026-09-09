@@ -182,6 +182,7 @@ jobs:
           shot share    --dialog share
           shot pair     --dialog pair
           shot settings --dialog settings
+          shot logs     --dialog logs
           shot fs       --dialog fs
           shot confirm  --dialog confirm --select 1:0
           shot light-main     --light --select 1:0

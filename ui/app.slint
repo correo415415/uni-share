@@ -47,6 +47,7 @@ export struct DeviceRow { name: string, addr: string, fingerprint: string, pin: 
 export struct OfferRow { id: string, sender: string, name: string, size-text: string, files-count: int, peer: string, fingerprint: string, compressed: bool }
 export struct FilterRow { id: string, label: string, icon: string, count: int }
 export struct HistoryRow { when: string, kind: string, name: string, size-text: string, status: string, peer: string }
+export struct LogRow { ts: string, level: string, target: string, message: string }
 export struct ToastRow { id: int, text: string, kind: string }
 export struct FsEntry { name: string, path: string, dir: bool, size-text: string }
 
@@ -81,6 +82,11 @@ export component MainWindow inherits Window {
     in property <[FileRow]> sel-files;
     in property <string> sel-log;
     in property <[HistoryRow]> history;
+    // "Registro" dialog: filled by Rust from the shared log buffer while the dialog is open.
+    in property <[LogRow]> logs;
+    in property <string> logs-info;
+    in-out property <int> logs-level: 2;  // 0 errores · 1 avisos · 2 info · 3 depuración · 4 todo
+    in-out property <string> logs-query;
     in property <[ToastRow]> toasts;
     in property <image> qr-image;
     in property <string> qr-caption;
@@ -99,7 +105,7 @@ export component MainWindow inherits Window {
     in-out property <bool> sort-desc: true;
     in-out property <bool> details-collapsed: false;
     in-out property <length> details-h: 260px;
-    in-out property <string> dialog: "";    // "" | new | share | settings | fs | confirm
+    in-out property <string> dialog: "";    // "" | new | share | settings | logs | fs | confirm
     in-out property <bool> drag-over: false; // a file is being dragged over the window (native DnD)
     in-out property <int> new-mode: 0;      // 0 lan 1 global 2 download 3 ticket
     in-out property <string> share-what: "link";
@@ -174,6 +180,11 @@ export component MainWindow inherits Window {
     callback dismiss-toast(int);
     callback confirm-yes();
     callback load-history();
+    callback open-logs();
+    callback logs-changed();      // level/query edited → Rust refreshes the model
+    callback copy-logs();
+    callback clear-logs();
+    callback open-logs-file();
     callback shortcut(string);
 
     function fmt-tab(i: int) -> string { i == 0 ? "General" : i == 1 ? "Archivos" : i == 2 ? "Compartir" : i == 3 ? "Registro" : "Historial"; }
@@ -189,6 +200,7 @@ export component MainWindow inherits Window {
             if ev.text == "d" { root.new-mode = 2; root.dialog = "new"; return accept; }
             if ev.text == "t" { root.new-mode = 3; root.dialog = "new"; return accept; }
             if ev.text == "," { root.open-settings(); return accept; }
+            if ev.text == "g" { root.open-logs(); return accept; }
             if ev.text == Key.Delete && root.sel-active() { root.cancel-job(root.sel().id); return accept; }
             if ev.text == Key.DownArrow { root.select-job(min(root.selected + 1, root.jobs.length - 1)); return accept; }
             if ev.text == Key.UpArrow { root.select-job(max(root.selected - 1, 0)); return accept; }
@@ -230,6 +242,7 @@ export component MainWindow inherits Window {
                         if root.query == "": Text { x: 31px; text: "Filtrar transferencias…"; color: Theme.fg3; height: parent.height; vertical-alignment: center; }
                     }
                     Button { y: 8px; icon: Theme.dark ? "sun" : "moon"; ghost: true; tooltip: "Tema"; clicked => { root.toggle-theme(); } }
+                    Button { y: 8px; icon: "list"; ghost: true; tooltip: "Registro (G)"; clicked => { root.open-logs(); } }
                     Button { y: 8px; icon: "gear"; ghost: true; tooltip: "Ajustes (,)"; clicked => { root.open-settings(); } }
                 }
             }
@@ -560,6 +573,37 @@ export component MainWindow inherits Window {
                         Button { text: "Guardar QR (SVG)…"; icon: "qr"; clicked => { root.save-qr(root.qr-caption); } }
                     }
                 }
+            }
+        }
+    }
+
+    if root.dialog == "logs": Dialog { title: "Registro"; dialog-width: 900px; close => { root.dialog = ""; }
+        VerticalLayout { padding: 18px; spacing: 10px; min-width: 0px;
+            HorizontalLayout { spacing: 10px; min-width: 0px;
+                Segmented { items: ["Errores", "Avisos", "Info", "Depuración", "Todo"]; current: root.logs-level; changed(i) => { root.logs-level = i; root.logs-changed(); } }
+                Input { placeholder: "Filtrar mensajes…"; text <=> root.logs-query; horizontal-stretch: 1; min-width: 0px; edited(t) => { root.logs-changed(); } }
+            }
+            Rectangle { height: 420px; border-radius: Theme.radius; background: Theme.bg3; border-width: 1px; border-color: Theme.line; clip: true;
+                if root.logs.length == 0: Hint { x: 12px; y: 10px; text: root.logs-query == "" ? "Con este nivel no hay mensajes todavía." : "Ningún mensaje coincide con el filtro."; }
+                Flickable { x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px; viewport-height: col.preferred-height;
+                    col := VerticalLayout { padding: 8px; spacing: 0px; alignment: start;
+                        for l in root.logs: Rectangle { height: max(20px, msg.preferred-height + 4px);
+                            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+                            HorizontalLayout { spacing: 10px; padding-top: 2px; padding-bottom: 2px;
+                                Text { text: l.ts; color: Theme.fg3; font-family: Theme.mono; font-size: 12px; width: 92px; vertical-alignment: top; }
+                                Text { text: l.level; color: l.level == "ERROR" ? Theme.err : l.level == "WARN" ? Theme.warn : Theme.fg3; font-family: Theme.mono; font-size: 12px; font-weight: 700; width: 44px; vertical-alignment: top; }
+                                Text { text: l.target; color: Theme.fg3; font-family: Theme.mono; font-size: 12px; width: 150px; overflow: elide; vertical-alignment: top; }
+                                msg := Text { text: l.message; color: l.level == "ERROR" ? Theme.err : Theme.fg; font-family: Theme.mono; font-size: 12px; wrap: word-wrap; min-width: 0px; horizontal-stretch: 1; vertical-alignment: top; }
+                            }
+                        }
+                    }
+                }
+            }
+            HorizontalLayout { spacing: 8px; min-width: 0px;
+                Hint { text: root.logs-info; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; overflow: elide; }
+                Button { text: "Copiar"; icon: "copy"; clicked => { root.copy-logs(); } }
+                Button { text: "Abrir carpeta"; icon: "folder"; clicked => { root.open-logs-file(); } }
+                Button { text: "Vaciar"; icon: "trash"; clicked => { root.clear-logs(); } }
             }
         }
     }

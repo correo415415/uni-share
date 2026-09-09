@@ -112,7 +112,7 @@ pub struct AppOptions {
     pub demo: bool,
     /// Render the window once, save it as PNG and quit (design review / CI).
     pub screenshot: Option<PathBuf>,
-    /// Dialog to open before the screenshot ("new", "share", "pair", "settings", "fs", "confirm").
+    /// Dialog to open before the screenshot ("new", "share", "pair", "settings", "logs", "fs", "confirm").
     pub dialog: Option<String>,
     /// Pre-select a job id and details tab (0 general, 1 files, 2 share, 3 log, 4 history).
     pub select: Option<(u64, i32)>,
@@ -238,6 +238,15 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
         win.set_tab(tab);
     }
     if let Some(d) = &opts.dialog {
+        if d == "logs" {
+            // Demo shots: seed a few representative lines so the dialog is not empty.
+            tracing::info!("motor iniciado · LAN 0.0.0.0:47820 · huella 9A1C-77E0-B2D4-5F08");
+            tracing::info!(target: "uni_share::lan::discovery", "mDNS: 3 dispositivos (PC-Sala, Pixel-de-Ana, TV-Salon)");
+            tracing::warn!(target: "uni_share::lan::client", "PC-Sala: reintentando render.mp4 desde 1.3 GiB (conexión reiniciada)");
+            tracing::info!(target: "uni_share::scan", "Análisis de seguridad: 0 peligroso(s), 1 con avisos de 3 archivo(s) (heuristics, clamav)");
+            tracing::error!(target: "uni_share::download", "swisstransfer-8f2a: 404 al pedir el manifiesto; se reintenta en 30 s");
+            refresh_logs(&win);
+        }
         if d == "fs" {
             win.set_fs_dirs_only(false);
             fs_load(&win, &cfg.download_dir.display().to_string(), false);
@@ -288,9 +297,23 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
     // ── event pump: engine → UI ──
     let ctx2 = ctx.clone();
     let pump = slint::Timer::default();
+    let mut ticks: u32 = 0;
+    let mut last_log_seq = 0u64;
     pump.start(slint::TimerMode::Repeated, Duration::from_millis(100), move || {
         while let Ok(evt) = erx.try_recv() {
             handle_evt(&ctx2, evt);
+        }
+        // Live tail for the "Registro" dialog: re-read the buffer once a second when it changed.
+        ticks = ticks.wrapping_add(1);
+        if ticks % 10 == 0
+            && let Some(w) = ctx2.win.upgrade()
+            && w.get_dialog() == "logs"
+        {
+            let seq = crate::logbuf::last_seq();
+            if seq != last_log_seq {
+                last_log_seq = seq;
+                refresh_logs(&w);
+            }
         }
     });
 
@@ -468,6 +491,45 @@ fn scan_detail_text(r: &crate::engine::ScanSummary) -> String {
         }
     }
     out.trim_end().to_string()
+}
+
+/// Segmented index → minimum level for [`crate::logbuf::entries`] (`None` = everything).
+fn logs_level_filter(i: i32) -> Option<&'static str> {
+    match i {
+        0 => Some("error"),
+        1 => Some("warn"),
+        2 => Some("info"),
+        3 => Some("debug"),
+        _ => None,
+    }
+}
+
+/// Fill the "Registro" dialog model from the shared buffer, honouring level + text filter.
+fn refresh_logs(w: &AppWindow) {
+    let q = w.get_logs_query().to_lowercase();
+    let all = crate::logbuf::entries(0, logs_level_filter(w.get_logs_level()), crate::logbuf::CAPACITY);
+    let rows: Vec<LogRow> = all
+        .iter()
+        .filter(|e| q.is_empty() || e.message.to_lowercase().contains(&q) || e.target.to_lowercase().contains(&q))
+        .rev()
+        .take(800)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|e| LogRow {
+            ts: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(e.ts)
+                .map(|d| d.with_timezone(&chrono::Local).format("%H:%M:%S%.3f").to_string())
+                .unwrap_or_default()
+                .into(),
+            level: e.level.to_uppercase().into(),
+            target: e.target.trim_start_matches("uni_share::").replace("android::", "app·").into(),
+            message: e.message.clone().into(),
+        })
+        .collect();
+    let n = rows.len();
+    w.set_logs(ModelRc::new(VecModel::from(rows)));
+    let file = crate::logbuf::file_path().map(|p| format!(" · fichero: {}", p.display())).unwrap_or_default();
+    w.set_logs_info(format!("{n} línea(s) · {} desde el arranque{file}", crate::logbuf::total()).into());
 }
 
 fn fmt_eta(s: Option<u64>) -> String {
@@ -981,6 +1043,42 @@ fn wire_callbacks(win: &MainWindow, ctx: &UiCtx) {
     win.on_dismiss_toast(move |id| {
         c.st.borrow_mut().toasts.retain(|t| t.0 != id);
         c.render_toasts();
+    });
+    let c = ctx.clone();
+    win.on_open_logs(move || {
+        if let Some(w) = c.win.upgrade() {
+            w.set_dialog("logs".into());
+            refresh_logs(&w);
+        }
+    });
+    let c = ctx.clone();
+    win.on_logs_changed(move || {
+        if let Some(w) = c.win.upgrade() {
+            refresh_logs(&w);
+        }
+    });
+    let c = ctx.clone();
+    win.on_copy_logs(move || {
+        let Some(w) = c.win.upgrade() else { return };
+        let text = crate::logbuf::dump(logs_level_filter(w.get_logs_level()));
+        if crate::ui::copy_to_clipboard(&text) {
+            c.toast("Registro copiado al portapapeles", "ok");
+        } else {
+            c.toast("Portapapeles no disponible", "err");
+        }
+    });
+    let c = ctx.clone();
+    win.on_clear_logs(move || {
+        let n = crate::logbuf::clear();
+        tracing::info!("registro en memoria vaciado ({n} líneas)");
+        if let Some(w) = c.win.upgrade() {
+            refresh_logs(&w);
+        }
+    });
+    let c = ctx.clone();
+    win.on_open_logs_file(move || match crate::logbuf::file_path().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        Some(dir) => crate::engine::open_in_system(&dir.display().to_string()),
+        None => c.toast("Sin fichero de registro (solo memoria)", "warn"),
     });
     let c = ctx.clone();
     win.on_open_settings(move || {

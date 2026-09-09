@@ -20,7 +20,7 @@ import java.io.File
 
 /**
  * `window.Android` inside the web GUI. Everything the browser sandbox cannot do on a phone:
- *  - the user's download folder: by default the public `Descargas/uni-share` (MediaStore on
+ *  - the user's download folder: by default the public `Downloads/unishare` (MediaStore on
  *    API 29+, plain file + WRITE_EXTERNAL_STORAGE on ≤ 28) or any other folder chosen through
  *    the Storage Access Framework (a `content://` tree). The Rust engine keeps writing to the
  *    app-private dir and finished jobs are exported/copied from there.
@@ -60,7 +60,7 @@ class Bridge(private val activity: MainActivity, private val web: WebView) {
      * Opens `ACTION_OPEN_DOCUMENT_TREE` positioned on the public Download folder; the result
      * arrives via `androidEvent('folder', name)`. Android 11+ refuses the *root* of Download
      * (and the whole storage): the user has to pick or create a sub-folder, which the page
-     * explains. Without a picked tree the default `Descargas/uni-share` is used (no picker needed).
+     * explains. Without a picked tree the default `Downloads/unishare` is used (no picker needed).
      */
     @JavascriptInterface
     fun pickDownloadFolder() = activity.runOnUiThread { activity.pickTree(downloadsInitialUri()) }
@@ -71,11 +71,53 @@ class Bridge(private val activity: MainActivity, private val web: WebView) {
         null
     }
 
-    /** Back to the default public `Descargas/uni-share`. */
+    /** Back to the default public `Downloads/unishare`. */
     @JavascriptInterface
     fun clearDownloadFolder() {
         prefs.edit().remove(KEY_TREE).apply()
+        ensureDefaultFolder()
         emit("folder", JSONObject.NULL)
+    }
+
+    /**
+     * Creates the default `Downloads/unishare` folder up front so it shows in the Files app
+     * before anything is received. ≤ API 28: plain `mkdirs()` (needs WRITE_EXTERNAL_STORAGE,
+     * so only when already granted); API 29+: MediaStore cannot create an empty directory, so a
+     * tiny hidden `.unishare` marker is inserted with `RELATIVE_PATH = Download/unishare` — the
+     * insert creates the directory. Idempotent (a preference remembers it per app install; the
+     * marker is re-created if the user deleted the folder).
+     */
+    fun ensureDefaultFolder() {
+        if (treeUri() != null || !hasDefaultTargetAccess()) return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val resolver = activity.contentResolver
+                val rel = Environment.DIRECTORY_DOWNLOADS + "/" + DEFAULT_SUBDIR + "/"
+                // Already there? (query our own marker; other apps' files in the folder are not visible to us)
+                val exists = resolver.query(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, arrayOf(MediaStore.Downloads._ID),
+                    "${MediaStore.Downloads.RELATIVE_PATH}=? AND ${MediaStore.Downloads.DISPLAY_NAME}=?", arrayOf(rel, KEEP_FILE), null
+                )?.use { it.count > 0 } ?: false
+                if (exists) return
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, KEEP_FILE)
+                    put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                    put(MediaStore.Downloads.RELATIVE_PATH, rel)
+                }
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return
+                resolver.openOutputStream(uri, "w")?.use { it.write("uni-share download folder\n".toByteArray()) }
+            } else {
+                @Suppress("DEPRECATION")
+                val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), DEFAULT_SUBDIR)
+                if (!dir.isDirectory) dir.mkdirs()
+            }
+            if (!prefs.getBoolean("default_folder_created", false)) {
+                prefs.edit().putBoolean("default_folder_created", true).apply()
+                Native.logBoth(android.util.Log.INFO, "saf", "carpeta por defecto creada: $DEFAULT_TARGET")
+            }
+        } catch (e: Exception) {
+            Native.logBoth(android.util.Log.WARN, "saf", "no se pudo crear $DEFAULT_TARGET: $e")
+        }
     }
 
     /** Human-readable name of the chosen SAF tree, or null when the default is in use. */
@@ -87,7 +129,7 @@ class Bridge(private val activity: MainActivity, private val web: WebView) {
     fun downloadTargetName(): String = downloadTreeName() ?: DEFAULT_TARGET
 
     /**
-     * ≤ API 28 needs WRITE_EXTERNAL_STORAGE to create `Descargas/uni-share`; 29+ writes through
+     * ≤ API 28 needs WRITE_EXTERNAL_STORAGE to create `Downloads/unishare`; 29+ writes through
      * MediaStore without any permission. Returns true when a copy can proceed right now.
      */
     fun hasDefaultTargetAccess(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ||
@@ -118,7 +160,7 @@ class Bridge(private val activity: MainActivity, private val web: WebView) {
      * Copies the files a finished job wrote (engine → app-private dir) into the user-visible
      * download location, mirroring the sub-folders relative to the engine download dir:
      *  - the SAF tree if one was picked,
-     *  - otherwise the public `Descargas/uni-share` (MediaStore.Downloads on API 29+; a plain
+     *  - otherwise the public `Downloads/unishare` (MediaStore.Downloads on API 29+; a plain
      *    directory + media scan on ≤ 28, asking for WRITE_EXTERNAL_STORAGE the first time).
      * Called by the page when a reception/download reaches `completed` (`saved` paths from the
      * snapshot). Idempotent per job.
@@ -184,7 +226,7 @@ class Bridge(private val activity: MainActivity, private val web: WebView) {
         return true
     }
 
-    /** `Descargas/uni-share[/sub]/name`, visible in the Files/Downloads apps right away. */
+    /** `Downloads/unishare[/sub]/name`, visible in the Files/Downloads apps right away. */
     private fun copyToPublicDownloads(sub: String, f: File): Boolean {
         val relDir = DEFAULT_SUBDIR + (if (sub.isNotBlank()) "/$sub" else "")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -288,8 +330,10 @@ class Bridge(private val activity: MainActivity, private val web: WebView) {
     companion object {
         const val KEY_TREE = "download_tree"
         /** Sub-folder inside the public Downloads folder used when no SAF tree is picked. */
-        const val DEFAULT_SUBDIR = "uni-share"
-        /** Shown in Settings; the system folder is called «Descargas» in Spanish devices. */
-        const val DEFAULT_TARGET = "Descargas/uni-share"
+        const val DEFAULT_SUBDIR = "unishare"
+        /** Shown in Settings (the Files app shows «Descargas» on Spanish devices, the path is `Download/unishare`). */
+        const val DEFAULT_TARGET = "Downloads/unishare"
+        /** Placeholder written once so the folder exists (and is visible) before the first transfer. */
+        const val KEEP_FILE = ".unishare"
     }
 }

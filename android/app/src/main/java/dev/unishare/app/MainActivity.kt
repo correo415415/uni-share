@@ -70,10 +70,10 @@ class MainActivity : AppCompatActivity() {
         if (granted) launchScanner() else bridge.emit("toast", "Sin permiso de cámara no se puede escanear")
     }
 
-    /** Only on Android ≤ 9: writing the public Descargas/uni-share needs WRITE_EXTERNAL_STORAGE. */
+    /** Only on Android ≤ 9: writing the public Downloads/unishare needs WRITE_EXTERNAL_STORAGE. */
     private val storagePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         Native.logBoth(android.util.Log.INFO, "perm", "WRITE_EXTERNAL_STORAGE ${if (granted) "concedido" else "denegado"}")
-        if (granted) bridge.retryPendingExport()
+        if (granted) { bridge.ensureDefaultFolder(); bridge.retryPendingExport() }
         else bridge.emit("toast", "Sin permiso de almacenamiento los archivos se quedan en la carpeta privada de la app (elige otra carpeta en Ajustes)")
     }
 
@@ -115,6 +115,9 @@ class MainActivity : AppCompatActivity() {
         }
         bridge = Bridge(this, web)
         web.addJavascriptInterface(bridge, "Android")
+        // Default download folder `Downloads/unishare` exists from the first launch (API 29+ needs
+        // no permission; ≤ 28 waits until WRITE_EXTERNAL_STORAGE is granted on the first export).
+        Thread { bridge.ensureDefaultFolder() }.start()
         splash = buildSplash()
         error = buildError().apply { visibility = View.GONE }
         root.addView(web, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))

@@ -327,10 +327,15 @@ jobs:
 
       # Las releases nightly reutilizan el tag: lo movemos al commit actual para
       # que el release apunte siempre al último build.
+      # GITHUB_TOKEN carece del permiso `workflows`: cuando el commit toca .github/workflows/*
+      # GitHub rechaza mover el tag. No es grave (la release ya lleva los assets nuevos), así que
+      # se avisa y se sigue en vez de marcar el build en rojo.
       - name: Mover tag nightly al HEAD
         if: github.event_name != 'pull_request' && steps.meta.outputs.prerelease == 'true'
         shell: bash
+        continue-on-error: true
         run: |
           set -euo pipefail
           git tag -f "${{ steps.meta.outputs.tag }}" "$GITHUB_SHA"
-          git push -f origin "refs/tags/${{ steps.meta.outputs.tag }}"
+          git push -f origin "refs/tags/${{ steps.meta.outputs.tag }}" \
+            || echo "::warning::no se pudo mover el tag ${{ steps.meta.outputs.tag }} (el commit toca .github/workflows y el token no tiene permiso 'workflows'); los assets de la release sí están actualizados."

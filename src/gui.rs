@@ -128,7 +128,6 @@ pub fn demo_router(cfg: Config, cfg_path: PathBuf) -> Router {
     cfg.device_name = snap.device_name.clone();
     cfg.download_dir = snap.download_dir.clone();
     cfg.pin = None;
-    cfg.global.smash_api_key = None;
     cfg.global.storage_to_token = None;
     cfg.global.storage_to_visitor_token = None;
     let _ = cfg_path;
@@ -375,7 +374,6 @@ async fn api_qr(Query(q): Query<QrQuery>) -> Response {
 
 async fn api_config_get(State(e): St) -> Response {
     let mut cfg = e.config().await;
-    cfg.global.smash_api_key = cfg.global.smash_api_key.map(|_| "••••••".into());
     cfg.global.storage_to_token = cfg.global.storage_to_token.map(|_| "••••••".into());
     Json(serde_json::json!({ "path": e.cfg_path, "config": cfg })).into_response()
 }

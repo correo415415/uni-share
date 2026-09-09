@@ -25,9 +25,6 @@ pub async fn download(ctx: Ctx, a: DownloadArgs) -> Result<()> {
     if parse_share_url(&a.url).is_some() {
         return download_storage_to(ctx, a, dest).await;
     }
-    if uni_share::global::smash::parse_share_url(&a.url).is_some() {
-        bail!("Smash links must be downloaded from the browser (the Smash download API requires the recipient token); open {}", a.url);
-    }
     bail!("unsupported URL: {} (expected storage.to, swisstransfer.com, a unishare: URI or a .unishare file)", a.url)
 }
 

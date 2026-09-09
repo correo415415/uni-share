@@ -4,7 +4,7 @@ Leyenda: `[x]` hecho · `[~]` en progreso · `[ ]` pendiente
 
 ## Fase 0 — Investigación y decisiones
 - [x] API de **storage.to** (docs + CLI Go oficial + pruebas en vivo): `POST /api/upload/init` → `PUT` a R2 (single <50 MB, multipart 32 MiB/parte) → `POST /api/upload/confirm`; collections (`/api/collection`) preservan rutas relativas en `filename`; descarga vía `GET /{id}/download` con cabecera `x-mint-proof` (extraída de la página) y `POST /c/{id}/urls` para colecciones; el CDN soporta `Range`.
-- [x] **Smash** (`@smash-sdk/transfer`): requiere API key (Bearer) en `https://transfer.<region>.fromsmash.co` → backend opcional.
+- [x] ~~Smash~~ (retirado en Fase 13: requería API key, sin subida anónima).
 - [x] `swisstransfer-dl` (Python): flujo Inertia (`data-page`), `POST /dl/{id}` con password, `/api/1/links/{link}/files/{file}` → URL S3 pre-firmada.
 - [x] Decisiones técnicas documentadas en `README.md`.
 
@@ -34,7 +34,7 @@ Leyenda: `[x]` hecho · `[~]` en progreso · `[ ]` pendiente
 - [x] Upload single y multipart (paralelo, reintentos, abort)
 - [x] Carpetas → collection (o `--compress`)
 - [x] Link + QR + portapapeles + `--password` + `--expiry-days` + `--max-downloads`
-- [x] Backend Smash (`--backend smash`)
+- [x] ~~Backend Smash~~ (retirado en Fase 13)
 
 ## Fase 4 — Descargas
 - [x] `download` storage.to (archivo y colección) con reanudación `Range`
@@ -92,8 +92,8 @@ Decisión: Slint (Rust puro, renderizado propio con `winit`+`femtovg`/`skia`, si
 - [x] Empaqueta `uni-share-<target>`, `uni-share-app-<target>` (con Slint), `uni-share-<ver>-<target>.tar.gz` (binarios + docs) y `SHA256SUMS`.
 - [ ] Matriz Windows/macOS cuando haya runners de esas plataformas (el workflow ya detecta `runner.os`/`runner.arch`).
 
-## Fase 8 — Smash (aparcado)
-- [ ] Smash queda como backend **experimental**: oculto de la ayuda por defecto, sin más desarrollo hasta nueva orden. La API key nunca se versiona.
+## Fase 8 — Smash (retirado)
+- [x] Smash eliminado del código (`global/smash.rs`, `--backend smash`, `smash_api_key`/`smash_region` en config, `crc32fast`). Solo queda storage.to como backend global.
 
 ## Fase 9 — Android
 
@@ -139,7 +139,6 @@ Reportadas tras probar la app en el teléfono y el escritorio (09-2026). Cada pu
 
 ## Pendiente / mejoras conocidas
 - [ ] Cloudflare puede exigir captcha (Turnstile) en descargas de storage.to según reputación de IP: entonces se muestra un mensaje pidiendo abrir el link en el navegador
-- [ ] Descarga de links Smash (requiere token de destinatario del flujo web) — se indica abrir en navegador
 - [x] Reanudación LAN entre ejecuciones distintas del receptor: registros JSON por transferencia en `<data_dir>/transfers/<clave>.json` (clave = BLAKE3 de huella del emisor + manifiesto); al re-ofrecer se reutilizan destino, `.part` y hashes ya verificados; se purgan a los 30 días. Aviso en CLI/GUI. Test E2E.
 
 ## Backlog

@@ -16,7 +16,7 @@ mod commands_ticket;
 #[command(
     name = "uni-share",
     version,
-    about = "Hybrid file sharing: LAN (mDNS + TLS 1.3) and global links (storage.to / Smash)",
+    about = "Hybrid file sharing: LAN (mDNS + TLS 1.3) and global links (storage.to)",
     long_about = None,
     propagate_version = true
 )]
@@ -41,7 +41,7 @@ pub struct Cli {
 pub enum Command {
     /// Send a file or folder to a device on the local network
     SendLan(SendLanArgs),
-    /// Upload a file or folder to storage.to (or Smash) and get a share link
+    /// Upload a file or folder to storage.to and get a share link
     SendGlobal(SendGlobalArgs),
     /// Listen for incoming LAN transfers
     Receive(ReceiveArgs),
@@ -117,7 +117,7 @@ pub struct SendLanArgs {
 pub struct SendGlobalArgs {
     /// File or folder to upload
     pub path: PathBuf,
-    /// Backend: storage_to | smash (default from config)
+    /// Backend: storage_to (default from config)
     #[arg(long)]
     pub backend: Option<String>,
     /// Protect the share with a password (4-100 chars)

@@ -3,7 +3,7 @@
 Herramienta híbrida de compartición de archivos escrita en **Rust (edition 2024, tokio)** con CLI, GUI web local y aplicación de escritorio nativa (Slint):
 
 - **Modo LAN** — descubrimiento automático por mDNS, transferencia directa cifrada con **TLS 1.3** (certificados auto-firmados generados al vuelo y *pinning* de huella), aceptación explícita del receptor con previsualización, verificación **BLAKE3** por archivo con reintento del archivo fallido, reanudación por offset, límite de velocidad, PIN opcional.
-- **Modo Global** — subida a **storage.to** (anónimo, hasta 25 GB, multipart paralelo, carpetas como *collection* preservando la jerarquía); genera link, **QR** y **ticket `.unishare`**, y copia el link al portapapeles. El emisor puede apagarse. (Backend **Smash** presente pero experimental/aparcado.)
+- **Modo Global** — subida a **storage.to** (anónimo, hasta 25 GB, multipart paralelo, carpetas como *collection* preservando la jerarquía); genera link, **QR** y **ticket `.unishare`**, y copia el link al portapapeles. El emisor puede apagarse.
 - **Tickets `.unishare`** — formato propio de fichero que empaqueta todo lo necesario para descargar (fuentes con contraseña embebida, lista de archivos con tamaño y BLAKE3, caducidad, mensaje). Se comparte como fichero, como URI `unishare:…` o como **QR**; `uni-share download fotos.unishare` verifica cada archivo tras la descarga.
 - **Descargas** — desde storage.to (archivos y colecciones, contraseña, reanudación `Range`), **SwissTransfer** (cliente nativo en Rust, sin dependencias externas) y tickets.
 - **Daemon** en segundo plano, **historial SQLite**, **notificaciones** nativas, **GUI web** (`uni-share gui`) y **app nativa** (`uni-share app`, Slint, feature `slint`).
@@ -176,12 +176,10 @@ on_danger = "quarantine"     # quarantine | report | delete
 max_file_mib = 0             # no pasar a ClamAV archivos mayores (0 = sin límite)
 
 [global]
-backend = "storage_to"       # o "smash"
+backend = "storage_to"
 storage_to_api = "https://storage.to/api"
 # storage_to_token = "…"     # cuenta storage.to (opcional)
 # storage_to_visitor_token = "…"  # se genera y guarda automáticamente
-# smash_api_key = "eyJ…"     # necesario para --backend smash
-smash_region = "eu-west-3"
 expiry_days = 7
 parallel_parts = 4
 ```
@@ -205,8 +203,7 @@ src/
 │   └── client.rs            emisor (offer/poll, streaming, reintento por archivo)
 ├── global/
 │   ├── storage_to.rs        REST client (init/parts/complete/confirm/collection/password…)
-│   ├── smash.rs             API Smash (transfer/file/parts/lock)
-│   └── upload.rs            orquestación single/multipart/collection + Smash
+│   └── upload.rs            orquestación single/multipart/collection
 ├── download/
 │   ├── http.rs              descarga reanudable (.part + Range) con reintentos
 │   ├── storage_to.rs        parser de la página (turbo-stream) + endpoints de descarga
@@ -247,7 +244,6 @@ El receptor escribe en `archivo.part`, hashea mientras escribe y renombra solo s
 | **Historial** | **SQLite** (`rusqlite` *bundled*, WAL) | Escrituras atómicas y lectores concurrentes (daemon + CLI + GUI a la vez), consultas indexadas, sin dependencias del sistema. Un JSON se corrompe con escrituras concurrentes y no escala. |
 | **Visitor token storage.to** | 32 bytes aleatorios hex, persistido en `config.toml` (`global.storage_to_visitor_token`); *owner tokens* guardados en el historial (`meta`) | Mismo esquema que el CLI oficial de storage.to; el owner token permite borrar / proteger / cambiar expiración después aunque cambie la IP. |
 | **Carpetas en global** | **Collection** con rutas relativas en `filename` (por defecto); `--compress` → un solo `.tar.zst` | Probado: storage.to acepta `sub/dir/a.txt` como nombre y la descarga recrea la jerarquía. Comprimir es opcional (útil para miles de archivos pequeños). |
-| **Backend Smash** | **Aparcado** (experimental): opcional, con API key (`Bearer`) en host regional `transfer.<region>.fromsmash.co` | Smash no tiene subida anónima por API; el flujo create transfer → file → PUT parts S3 → lock está implementado pero no se prioriza (storage.to cubre el caso anónimo). |
 | **Descarga storage.to** | Parser del *turbo-stream* de React Router de la página (`mint_proof`) + `GET /{id}/download` / `POST /c/{id}/urls`; **fallback a `curl`** si Cloudflare desafía al cliente rustls | storage.to no publica API de descarga; los endpoints del sitio están tras Cloudflare Bot Management que discrimina por huella TLS. `curl` (presente en Linux, macOS y Windows 10+) pasa el filtro; el CDN final acepta `Range` y se descarga con reqwest. |
 | **SwissTransfer** | Descarga nativa en Rust (Inertia page → API `links/{uuid}/files/{id}` → S3 presignado con `Range`) | Cumple la restricción de no automatizar subidas a SwissTransfer. Sin Python: el binario es autosuficiente. |
 | **Errores / async** | `anyhow` + `thiserror`, `tokio` en todo el I/O, sin `unwrap` en rutas de producción | `tokio` es el runtime con más ecosistema (axum, reqwest, hyper). Los `unwrap` quedan solo en tests. |

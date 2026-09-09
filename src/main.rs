@@ -337,6 +337,9 @@ pub struct GuiArgs {
     /// Do not open the browser automatically
     #[arg(long)]
     pub no_open: bool,
+    /// Serve a realistic fake state without starting the engine (design reviews, screenshots)
+    #[arg(long)]
+    pub demo: bool,
 }
 
 #[derive(Args, Debug)]

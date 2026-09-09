@@ -286,9 +286,14 @@ pub struct Snapshot {
     pub sign_tickets: bool,
     pub scan_enabled: bool,
     pub scan_clamav: bool,
+    pub scan_yara: bool,
     pub scan_on_danger: crate::scan::DangerAction,
     /// `Some(label)` when a ClamAV binary was found on this machine.
     pub clamav: Option<String>,
+    /// YARA status: `yara-x (3 regla(s), 1 archivo(s))`, `yara: sin reglas en …`, `yara: no compilado …`.
+    pub yara: String,
+    /// Where the user drops `*.yar` / `*.yara` files.
+    pub yara_rules_dir: PathBuf,
     pub notices: Vec<Notice>,
     pub download_dir: PathBuf,
     pub pin_required: bool,
@@ -381,8 +386,11 @@ impl Snapshot {
             sign_tickets: true,
             scan_enabled: true,
             scan_clamav: true,
+            scan_yara: true,
             scan_on_danger: crate::scan::DangerAction::Quarantine,
             clamav: None,
+            yara: "yara-x (12 regla(s), 2 archivo(s))".into(),
+            yara_rules_dir: PathBuf::from("/home/user/.config/uni-share/rules"),
             notices: vec![],
             download_dir: PathBuf::from("/home/user/Descargas"),
             pin_required: false,
@@ -490,6 +498,7 @@ pub struct ConfigPatch {
     pub device_name: Option<String>,
     pub scan_enabled: Option<bool>,
     pub scan_clamav: Option<bool>,
+    pub scan_yara: Option<bool>,
     pub scan_on_danger: Option<crate::scan::DangerAction>,
     pub download_dir: Option<String>,
     pub rate_limit_mbps: Option<u32>,
@@ -1083,6 +1092,9 @@ impl Engine {
         if let Some(v) = p.scan_clamav {
             cfg.scan.clamav = v;
         }
+        if let Some(v) = p.scan_yara {
+            cfg.scan.yara = v;
+        }
         if let Some(v) = p.scan_on_danger {
             cfg.scan.on_danger = v;
         }
@@ -1134,8 +1146,11 @@ impl Engine {
             sign_tickets: cfg.sign_tickets,
             scan_enabled: cfg.scan.enabled,
             scan_clamav: cfg.scan.clamav,
+            scan_yara: cfg.scan.yara,
             scan_on_danger: cfg.scan.on_danger,
             clamav: self.clamav_label.clone(),
+            yara: crate::scan::yara::status(&cfg.scan.yara_rules_dir()),
+            yara_rules_dir: cfg.scan.yara_rules_dir(),
             notices: self.notices.lock().await.clone(),
             download_dir: cfg.download_dir.clone(),
             pin_required: cfg.pin.is_some(),

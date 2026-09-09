@@ -141,8 +141,10 @@ export component MainWindow inherits Window {
     in-out property <bool> s-sign;
     in-out property <bool> s-scan;
     in-out property <bool> s-clamav;
+    in-out property <bool> s-yara;
     in-out property <int> s-danger;            // 0 quarantine, 1 report, 2 delete
     in property <string> clamav-label;          // "" when not installed
+    in property <string> yara-label;            // "yara-x (3 regla(s), 1 archivo(s))" | "yara: sin reglas en …" | "yara: no compilado …"
     in property <string> signer-fingerprint;
     in property <string> signer-fingerprint-short;
     in-out property <string> fs-target-field;   // which field the fs dialog fills
@@ -635,6 +637,7 @@ export component MainWindow inherits Window {
             Text { text: "Seguridad"; color: Theme.fg; font-size: Theme.fs; font-weight: 600; }
             Check { text: "Analizar los archivos recibidos y descargados (100 % local: tipo real, ejecutables disfrazados, bombas ZIP/tar, macros, PDF con JavaScript…)"; checked <=> root.s-scan; }
             Check { text: root.clamav-label == "" ? "Usar ClamAV si está instalado (no detectado en este equipo)" : "Usar ClamAV si está instalado (detectado: " + root.clamav-label + ")"; checked <=> root.s-clamav; }
+            Check { text: "Usar reglas YARA propias (*.yar / *.yara en la carpeta rules) — " + root.yara-label; checked <=> root.s-yara; }
             VerticalLayout { spacing: 5px;
                 FieldLabel { text: "Si se detecta un archivo peligroso"; }
                 Segmented { items: ["Cuarentena (*.unishare-quarantine)", "Solo avisar", "Eliminar"]; current <=> root.s-danger; }

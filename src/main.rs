@@ -81,6 +81,9 @@ pub struct ScanArgs {
     /// Do not use ClamAV even if it is installed
     #[arg(long)]
     pub no_clamav: bool,
+    /// Do not run YARA rules (feature `yara`; rules in <data_dir>/rules)
+    #[arg(long)]
+    pub no_yara: bool,
     /// Only report: never rename or delete dangerous files (default for this command)
     #[arg(long, conflicts_with_all = ["quarantine", "delete"])]
     pub report: bool,

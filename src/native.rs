@@ -620,6 +620,7 @@ fn render(ctx: &UiCtx) {
     win.set_pairing_uri(snap.pairing_uri.clone().into());
     win.set_signer_fingerprint(snap.signer_fingerprint.clone().into());
     win.set_clamav_label(snap.clamav.clone().unwrap_or_default().into());
+    win.set_yara_label(snap.yara.clone().into());
     // First 4 groups (64 bits) fit the sidebar card; the full value lives in Settings.
     win.set_signer_fingerprint_short(snap.signer_fingerprint.split(':').take(4).collect::<Vec<_>>().join(":").into());
     win.set_download_dir(snap.download_dir.display().to_string().into());
@@ -802,6 +803,7 @@ fn handle_evt(ctx: &UiCtx, evt: Evt) {
                 w.set_s_sign(c.sign_tickets);
                 w.set_s_scan(c.scan.enabled);
                 w.set_s_clamav(c.scan.clamav);
+                w.set_s_yara(c.scan.yara);
                 w.set_s_danger(match c.scan.on_danger {
                     DangerAction::Quarantine => 0,
                     DangerAction::Report => 1,
@@ -1213,6 +1215,7 @@ fn wire_callbacks(win: &MainWindow, ctx: &UiCtx) {
             sign_tickets: Some(w.get_s_sign()),
             scan_enabled: Some(w.get_s_scan()),
             scan_clamav: Some(w.get_s_clamav()),
+            scan_yara: Some(w.get_s_yara()),
             scan_on_danger: Some(match w.get_s_danger() {
                 1 => DangerAction::Report,
                 2 => DangerAction::Delete,

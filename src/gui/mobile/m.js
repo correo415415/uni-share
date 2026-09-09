@@ -489,7 +489,8 @@ function viewSettings() {
   return root;
 }
 async function patch(body) { try { const r = await api('/api/config', { method: 'PUT', body }); S.cfg = r.config || (await api('/api/config')).config; render(); toast('Guardado', 'ok', 1500); } catch (e) { toast(e.message, 'err'); } }
-function toggleSetting(id) { patch({ [id]: !S.cfg[id] }); }
+// scan_* switches live in the state snapshot (S.data), the rest in the config document (S.cfg).
+function toggleSetting(id) { const cur = (S.cfg && id in S.cfg) ? S.cfg[id] : (S.data || {})[id]; patch({ [id]: !cur }); }
 async function editSetting(id) {
   const c = S.cfg;
   if (id === 'device_name') { const v = await promptSheet('Nombre visible', { label: 'Así te verán los demás dispositivos', value: c.device_name }); if (v != null && v.trim()) patch({ device_name: v.trim() }); }
@@ -510,11 +511,12 @@ function wireSettings(root) {
 // ── security ──
 function viewSecurity() {
   const d = S.data; const c = S.cfg || {}; const root = h('div');
-  root.append(h('div', { class: 'alert', html: ico('shield') + '<span>Todo lo recibido se analiza antes de darlo por bueno: tipo real del archivo, extensiones dobles, ejecutables, scripts, archivos con macros y, si está instalado, ClamAV.</span>' }));
+  root.append(h('div', { class: 'alert', html: ico('shield') + '<span>Todo lo recibido se analiza antes de darlo por bueno: tipo real del archivo, extensiones dobles, ejecutables, scripts, archivos con macros y, si están disponibles, ClamAV y tus reglas YARA.</span>' }));
   const sw = (id, ttl, sub, on) => h('button', { class: 'sw', 'data-sw': id, role: 'switch', 'aria-checked': on ? 'true' : 'false' }, h('span', { class: 'body' }, h('div', { class: 'ttl' }, ttl), sub ? h('div', { class: 'sub' }, sub) : null), h('span', { class: `tg${on ? ' on' : ''}` }));
   root.append(h('div', { class: 'sec' }, 'Análisis'), h('div', { class: 'list' },
     sw('scan_enabled', 'Analizar lo recibido', 'Recepciones LAN y descargas', d.scan_enabled),
     sw('scan_clamav', 'Usar ClamAV', d.clamav ? `Detectado: ${d.clamav}` : 'No se ha encontrado clamscan/clamdscan', d.scan_clamav),
+    sw('scan_yara', 'Usar reglas YARA', `${d.yara || 'yara'} · *.yar en ${d.yara_rules_dir || 'rules/'}`, d.scan_yara),
     h('div', { class: 'sw' }, h('span', { class: 'body' }, h('div', { class: 'ttl' }, 'Si hay peligro'), h('div', { class: 'sub' }, 'Qué hacer con un archivo marcado como peligroso')),
       h('select', { id: 's-danger', style: 'height:36px;border-radius:6px;background:var(--bg-3);color:var(--fg);border:1px solid var(--line);padding:0 8px' }, ...[['report', 'Solo avisar'], ['quarantine', 'Cuarentena'], ['delete', 'Eliminar']].map(([v, l]) => h('option', { value: v, selected: d.scan_on_danger === v }, l))))));
   root.append(h('div', { class: 'sec' }, 'Identidad'), h('div', { class: 'card' }, h('dl', { class: 'kv' },

@@ -178,6 +178,32 @@ impl History {
         Ok(())
     }
 
+    /// Merge `patch` (a JSON object) into the `meta` of the most recent record with this
+    /// kind and name — used to attach the safety-scan verdict, which is only known after
+    /// `finish()` has run. Best effort: no record, no error.
+    pub fn merge_meta_latest(&self, kind: Kind, name: &str, patch: &serde_json::Value) -> Result<()> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("history mutex poisoned"))?;
+        let row: Option<(i64, Option<String>)> = conn
+            .query_row(
+                "SELECT id, meta FROM transfers WHERE kind = ?1 AND name = ?2 ORDER BY ts DESC, id DESC LIMIT 1",
+                params![kind.as_str(), name],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((id, meta)) = row else { return Ok(()) };
+        let mut obj = meta.as_deref().and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok()).unwrap_or(serde_json::json!({}));
+        if !obj.is_object() {
+            obj = serde_json::json!({ "value": obj });
+        }
+        if let (Some(dst), Some(src)) = (obj.as_object_mut(), patch.as_object()) {
+            for (k, v) in src {
+                dst.insert(k.clone(), v.clone());
+            }
+        }
+        conn.execute("UPDATE transfers SET meta = ?1 WHERE id = ?2", params![obj.to_string(), id])?;
+        Ok(())
+    }
+
     pub fn list(&self, limit: usize) -> Result<Vec<Record>> {
         let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("history mutex poisoned"))?;
         let mut stmt = conn.prepare(

@@ -27,10 +27,13 @@ pub struct Device {
 
 impl Device {
     /// Preferred address: first IPv4, else first address.
+    /// Prefer IPv4; then a routable IPv6; link-local IPv6 (`fe80::/10`) last, since
+    /// connecting to it without a scope id fails with EINVAL on Linux/Android.
     pub fn best_addr(&self) -> Option<IpAddr> {
         self.addresses
             .iter()
             .find(|a| a.is_ipv4())
+            .or_else(|| self.addresses.iter().find(|a| !is_link_local_v6(a)))
             .or_else(|| self.addresses.first())
             .copied()
     }
@@ -81,10 +84,15 @@ fn sanitize_instance(name: &str) -> String {
     if s.trim().is_empty() { "uni-share".into() } else { s }
 }
 
+pub fn is_link_local_v6(a: &IpAddr) -> bool {
+    matches!(a, IpAddr::V6(v6) if (v6.segments()[0] & 0xffc0) == 0xfe80)
+}
+
 fn device_from_info(info: &ResolvedService) -> Device {
     let prop = |k: &str| info.txt_properties.get_property_val_str(k).unwrap_or("").to_string();
     let mut addrs: Vec<IpAddr> = info.get_addresses().iter().map(|a| a.to_ip_addr()).collect();
-    addrs.sort();
+    // Usable first: IPv4, routable IPv6, link-local IPv6 (needs a scope id we do not have).
+    addrs.sort_by_key(|a| (!a.is_ipv4(), is_link_local_v6(a), *a));
     let name = {
         let n = prop("name");
         if n.is_empty() {
@@ -207,6 +215,22 @@ mod tests {
     fn instance_sanitised() {
         assert_eq!(sanitize_instance("my.pc"), "mypc");
         assert_eq!(sanitize_instance(""), "uni-share");
+    }
+
+    #[test]
+    fn best_addr_avoids_link_local_v6() {
+        let d = Device {
+            name: "x".into(),
+            addresses: vec!["fe80::1".parse().unwrap(), "fd00::5".parse().unwrap()],
+            port: 1,
+            fingerprint: String::new(),
+            version: String::new(),
+            requires_pin: false,
+            online: true,
+        };
+        assert_eq!(d.best_addr(), Some("fd00::5".parse().unwrap()));
+        assert!(is_link_local_v6(&"fe80::1".parse().unwrap()));
+        assert!(!is_link_local_v6(&"fe00::1".parse().unwrap()));
     }
 
     #[test]

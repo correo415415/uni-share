@@ -50,7 +50,7 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct GlobalConfig {
-    /// Default backend: "storage_to" or "smash".
+    /// Default backend (only "storage_to" for now).
     pub backend: String,
     /// storage.to API base URL.
     pub storage_to_api: String,
@@ -58,11 +58,7 @@ pub struct GlobalConfig {
     pub storage_to_token: Option<String>,
     /// Anonymous visitor token (auto generated and persisted here).
     pub storage_to_visitor_token: Option<String>,
-    /// Smash API key (Bearer) — required to use the Smash backend.
-    pub smash_api_key: Option<String>,
-    /// Smash region, e.g. "eu-west-3".
-    pub smash_region: String,
-    /// Default expiry in days for uploads (1-7 for anonymous storage.to).
+    /// Default retention in days for storage.to links (1-7; the service allows at most 7).
     pub expiry_days: u32,
     /// Number of parallel multipart parts.
     pub parallel_parts: usize,
@@ -75,8 +71,6 @@ impl Default for GlobalConfig {
             storage_to_api: "https://storage.to/api".into(),
             storage_to_token: None,
             storage_to_visitor_token: None,
-            smash_api_key: None,
-            smash_region: "eu-west-3".into(),
             expiry_days: 7,
             parallel_parts: 4,
         }
@@ -180,12 +174,12 @@ impl Config {
             );
         }
         anyhow::ensure!(
-            matches!(self.global.backend.as_str(), "storage_to" | "smash"),
-            "global.backend must be 'storage_to' or 'smash'"
+            self.global.backend == "storage_to",
+            "global.backend must be 'storage_to'"
         );
         anyhow::ensure!(
-            (1..=7).contains(&self.global.expiry_days) || self.global.storage_to_token.is_some(),
-            "global.expiry_days must be 1-7 for anonymous uploads"
+            (crate::global::storage_to::MIN_EXPIRY_DAYS..=crate::global::storage_to::MAX_EXPIRY_DAYS).contains(&self.global.expiry_days),
+            "global.expiry_days must be 1-7 (storage.to keeps anonymous uploads at most 7 days)"
         );
         anyhow::ensure!(self.global.parallel_parts >= 1, "parallel_parts must be >= 1");
         Ok(())

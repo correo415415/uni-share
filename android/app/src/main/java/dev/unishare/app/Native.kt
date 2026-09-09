@@ -16,4 +16,13 @@ object Native {
     external fun port(): Int
 
     external fun version(): String
+
+    /** Appends a shell-side line to the shared log buffer (shown in Ajustes → Registro). `level` = android.util.Log.* */
+    external fun log(level: Int, tag: String, message: String)
+
+    /** logcat + shared buffer in one call; safe before the library is loaded (falls back to logcat only). */
+    fun logBoth(level: Int, tag: String, message: String) {
+        android.util.Log.println(level, tag, message)
+        try { log(level, tag, message) } catch (_: Throwable) { }
+    }
 }

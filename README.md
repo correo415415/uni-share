@@ -3,7 +3,7 @@
 Herramienta híbrida de compartición de archivos escrita en **Rust (edition 2024, tokio)** con CLI, GUI web local y aplicación de escritorio nativa (Slint):
 
 - **Modo LAN** — descubrimiento automático por mDNS, transferencia directa cifrada con **TLS 1.3** (certificados auto-firmados generados al vuelo y *pinning* de huella), aceptación explícita del receptor con previsualización, verificación **BLAKE3** por archivo con reintento del archivo fallido, reanudación por offset, límite de velocidad, PIN opcional.
-- **Modo Global** — subida a **storage.to** (anónimo, hasta 25 GB, multipart paralelo, carpetas como *collection* preservando la jerarquía); genera link, **QR** y **ticket `.unishare`**, y copia el link al portapapeles. El emisor puede apagarse. (Backend **Smash** presente pero experimental/aparcado.)
+- **Modo Global** — subida a **storage.to** (anónimo, hasta 25 GB, multipart paralelo, carpetas como *collection* preservando la jerarquía); genera link, **QR** y **ticket `.unishare`**, y copia el link al portapapeles. El emisor puede apagarse.
 - **Tickets `.unishare`** — formato propio de fichero que empaqueta todo lo necesario para descargar (fuentes con contraseña embebida, lista de archivos con tamaño y BLAKE3, caducidad, mensaje). Se comparte como fichero, como URI `unishare:…` o como **QR**; `uni-share download fotos.unishare` verifica cada archivo tras la descarga.
 - **Descargas** — desde storage.to (archivos y colecciones, contraseña, reanudación `Range`), **SwissTransfer** (cliente nativo en Rust, sin dependencias externas) y tickets.
 - **Daemon** en segundo plano, **historial SQLite**, **notificaciones** nativas, **GUI web** (`uni-share gui`) y **app nativa** (`uni-share app`, Slint, feature `slint`).
@@ -22,6 +22,8 @@ cargo build --release          # un solo comando; sin pasos extra
 
 `cargo test` ejecuta 43 tests (unitarios + integración LAN real sobre loopback con TLS).
 
+**Binarios precompilados / CI.** El runner propio compila con el workflow `build` (`.github/workflows/build.yml`), que se lanza **a mano** (Actions → build → *Run workflow*, eligiendo rama y si se incluyen la app Slint y la APK) o automáticamente con un tag `v*`; deja los binarios, la APK y las capturas en la release rodante `nightly-<rama>`. Los pushes que solo tocan documentación pasan por `docs` (`.github/workflows/docs.yml`), una comprobación de Markdown de segundos que no compila nada.
+
 ### GUI nativa (Slint)
 
 ```bash
@@ -29,13 +31,26 @@ cargo build --release --features slint     # necesita clang + ninja (renderer Sk
 ./target/release/uni-share app
 ```
 
+### Motor YARA (opcional)
+
+```bash
+cargo build --release --features yara      # añade YARA-X (VirusTotal); compila wasmtime, tarda más la 1.ª vez
+mkdir -p ~/.config/uni-share/rules && cp mis-reglas.yar ~/.config/uni-share/rules/
+```
+
+Con la *feature* `yara` el análisis de seguridad ejecuta además tus propias reglas: cualquier `*.yar`/`*.yara` dentro de `<data_dir>/rules/` (o `scan.yara_rules_dir`), cada archivo en su propio *namespace*. Los que no compilan se registran en el log y se ignoran; el resto sigue funcionando. La severidad de cada coincidencia sale de `meta: severity = "info|low|medium|suspicious|high|critical|malware"` o de una etiqueta con ese nombre (por defecto **peligro**), y `meta: description` se añade al mensaje. Hay una plantilla comentada en [`examples/rules/ejemplo.yar`](examples/rules/ejemplo.yar) (EICAR, macros *AutoOpen*, PowerShell codificado, UPX). Los binarios de las releases ya incluyen el motor (excepto la APK Android). Sin la *feature*, el ajuste sigue visible pero indica «yara: no compilado».
+
 La GUI nativa incrusta sus propias fuentes (`ui/fonts/`: Inter para la interfaz y JetBrains Mono para hashes, puertos y velocidades; licencia OFL) y usa el renderer **Skia** con FemtoVG como alternativa, de modo que el texto se ve igual de nítido en cualquier equipo aunque no tenga esas fuentes instaladas.
 
-Extras de escritorio: **arrastrar y soltar** sobre la ventana (un archivo o carpeta abre «Enviar LAN» con la ruta; varios del mismo directorio, la carpeta; un ticket `.unishare` abre «Descargar» o el emparejamiento), **bandeja del sistema** con menú rápido (Mostrar/Ocultar · Enviar por LAN · Compartir link · Descargar · Abrir ticket · Salir) y el ajuste «minimizar a la bandeja al cerrar» para seguir recibiendo con la ventana oculta (en Linux hace falta un host StatusNotifierItem: KDE, o la extensión AppIndicator en GNOME). Para revisar el diseño sin red: `uni-share app --demo [--empty] [--size 1024x600] [--light] [--dialog new|share|settings|fs|confirm] [--drag-over] [--screenshot out.png]`.
+Extras de escritorio: **arrastrar y soltar** sobre la ventana (un archivo o carpeta abre «Enviar LAN» con la ruta; varios del mismo directorio, la carpeta; un ticket `.unishare` abre «Descargar» o el emparejamiento), **bandeja del sistema** con menú rápido (Mostrar/Ocultar · Enviar por LAN · Compartir link · Descargar · Abrir ticket · Salir) y el ajuste «minimizar a la bandeja al cerrar» para seguir recibiendo con la ventana oculta (en Linux hace falta un host StatusNotifierItem: KDE, o la extensión AppIndicator en GNOME). Para revisar el diseño sin red: `uni-share app --demo [--empty] [--size 1024x600] [--light] [--dialog new|share|pair|settings|logs|fs|confirm] [--drag-over] [--screenshot out.png]`.
+
+**Registro (logs).** Todo lo que emite `tracing` pasa por un búfer en memoria (últimas 2 000 líneas) y por un fichero rotativo `<data_dir>/logs/uni-share.log` (5 × 2 MiB). Se consulta desde la GUI web (botón ☰ o tecla `G`: nivel, filtro, cola en vivo, copiar, descargar `.log`, vaciar), desde la app nativa (mismo botón/tecla), desde la app Android (Ajustes → Registro) o por API (`GET /api/logs?after=<seq>&level=warn`, `GET /api/logs/text`, `DELETE /api/logs`). El nivel que llega al búfer es el del filtro normal (`-v`, `-vv`, `RUST_LOG`).
 
 ### Android
 
 La app Android (`android/`, paquete `dev.unishare.app`) es una cáscara Kotlin que arranca el mismo core Rust como biblioteca (`libuni_share.so`, JNI en `src/android.rs`) y muestra la **GUI móvil** (`/m`, ver abajo) servida en `127.0.0.1`. Requisitos: Android SDK + NDK r26+, `cargo install cargo-ndk`, `rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android`.
+
+Detalles de la cáscara: los archivos recibidos se copian al terminar a la carpeta pública **`Downloads/unishare`** (creada automáticamente al abrir la app; MediaStore en Android 10+, sin permisos; `WRITE_EXTERNAL_STORAGE` solo hasta Android 9), o a la carpeta que se elija con el selector del sistema (Android no permite elegir la raíz de Descargas: hay que elegir o crear una subcarpeta). El **escáner QR** usa una actividad propia en vertical con `TRY_HARDER` y lectura de códigos invertidos; el QR de emparejamiento va sin firma y con corrección de errores L para que tenga pocos módulos. Las líneas de la propia app (permisos, escáner, exportación) se envían al mismo **Registro** que las del motor (`Native.log`), visible en Ajustes → Registro.
 
 ```bash
 android/build-android.sh            # compila las .so y las deja en android/app/src/main/jniLibs/
@@ -51,12 +66,12 @@ La interfaz de teléfono es una capa web propia (`src/gui/mobile/`: `index.html`
 | Pestaña | Contenido |
 |---|---|
 | **Inicio** | Estado del dispositivo (nombre, dirección, huella, velocidades), accesos rápidos Enviar LAN · Recibir (QR de emparejamiento) · Escanear · Descargar, solicitudes entrantes como tarjeta destacada, transferencias en curso y recientes. |
-| **Transferencias** | Buscador, chips de filtro (activas, recibiendo, enviando, links, descargas, completadas, fallidas), progreso, ficha de detalle con acciones (cancelar, compartir, reintentar, analizar, quitar), archivos y registro. |
-| **Dispositivos** | Radar de descubrimiento LAN, buscar de nuevo, enviar / copiar dirección / copiar huella por dispositivo, emparejar por QR. |
+| **Transferencias** | Buscador, chips de filtro (activas, recibiendo, enviando, links, descargas, completadas, fallidas), progreso, deslizar una fila a la izquierda para cancelar/quitar, ficha de detalle con acciones (cancelar, compartir, reintentar, analizar, quitar), tarjeta **Análisis de seguridad** (veredicto, motores, hallazgos por archivo), archivos y registro. |
+| **Dispositivos** | Radar de descubrimiento LAN, buscar de nuevo (o tirar hacia abajo), enviar / copiar dirección / copiar huella por dispositivo, emparejar por QR. |
 | **Compartir** | QR de emparejamiento a pantalla completa, subir y crear link, crear ticket desde links, enviar por LAN, links recientes con QR/copiar/compartir con la hoja del sistema. |
-| **Ajustes** | Nombre, carpeta de descargas (SAF en Android), límite de velocidad, tema, PIN, auto-aceptar, notificaciones, comprimir carpetas, servicio de subida, caducidad, partes en paralelo, firma de tickets; subpantallas **Seguridad y análisis**, **Historial** y **Acerca de**. |
+| **Ajustes** | Nombre, carpeta de descargas (en Android: `Downloads/unishare` por defecto, autocreada u otra carpeta vía SAF), límite de velocidad, tema, PIN, auto-aceptar, notificaciones, comprimir carpetas, servicio de subida, caducidad, partes en paralelo, firma de tickets; subpantallas **Seguridad y análisis**, **Historial**, **Registro** (logs del motor y de la app: nivel, filtro, cola en vivo, copiar/compartir) y **Acerca de**. |
 
-Funciona también en cualquier navegador de móvil (`http://<pc>:47900/m`); dentro de la app Android se añaden el escáner QR, el selector de archivos del sistema, la exportación a la carpeta SAF y la hoja de compartir nativa a través de `window.Android`. Deep links para revisiones: `/m#jobs`, `/m#home&theme=light`. `uni-share gui --demo` sirve ambas interfaces con un estado de ejemplo sin arrancar el motor (capturas en CI con Chromium headless, publicadas en la release nightly: `m-home`, `m-jobs`, `m-devices`, `m-share`, `m-settings`, `m-light`, `m-job`, `m-new`, `m-download`, `m-receive`, `m-share-link`, `m-security`).
+Funciona también en cualquier navegador de móvil (`http://<pc>:47900/m`); dentro de la app Android se añaden el escáner QR, el selector de archivos del sistema, la exportación a la carpeta SAF y la hoja de compartir nativa a través de `window.Android`. Deep links para revisiones: `/m#jobs`, `/m#home&theme=light`. `uni-share gui --demo` sirve ambas interfaces con un estado de ejemplo sin arrancar el motor (capturas en CI con Chromium headless, publicadas en la release nightly: `m-home`, `m-jobs`, `m-devices`, `m-share`, `m-settings`, `m-light`, `m-job`, `m-job-scan`, `m-new`, `m-download`, `m-receive`, `m-share-link`, `m-security`, `m-logs`, y `m-home-412`/`m-jobs-412` a 412×915).
 
 En Windows, `android\build-android.bat` con los mismos argumentos. Funciones: compartir archivos desde cualquier app («Enviar con uni-share»), abrir links `unishare:` y tickets `.unishare`, servicio en primer plano para seguir recibiendo con la pantalla apagada, **escáner QR** (botón «Escanear QR»: tickets `.unishare`, emparejamiento LAN y links), **compartir** links/tickets con la hoja del sistema y **carpeta de descargas propia** elegida con el selector de Android (Ajustes → «Carpeta de descargas (Android)», Storage Access Framework): el motor escribe en `Android/data/dev.unishare.app/files/Download/` y, al terminar cada recepción o descarga, la app copia los archivos a la carpeta elegida respetando las subcarpetas.
 
@@ -79,8 +94,11 @@ uni-share send-lan ~/Videos/proyecto/ [--to PC-Sala] [--pin 1234] [--compress]
 uni-share send-lan ~/Videos/proyecto/ --to "unishare:…"   # sin mDNS: huella fijada y PIN incluidos
 
 # Subir a storage.to y obtener link + QR + portapapeles (+ ticket .unishare opcional)
-uni-share send-global ~/Videos/proyecto/ [--password xxxx] [--expiry-days 7] [--max-downloads 5] \
+uni-share share ~/Videos/proyecto/            # alias de send-global (también `up`)
+uni-share send-global ~/Videos/proyecto/ [--password xxxx] [-e 7 | --days 7] [--max-downloads 5] \
                       [--compress] [--ticket [fotos.unishare]] [--ticket-qr] [--json]
+# Tiempo online del link: 1-7 días (`-e`/`--days`/`--expiry-days`). storage.to conserva las subidas
+# anónimas como máximo 7 días (3 si no se indica nada; «permanente» solo con cuenta premium).
 
 # Tickets .unishare (fichero propio con las fuentes, contraseña, lista de archivos y hashes)
 uni-share ticket create https://storage.to/c/XXXX --password xxxx --name fotos \
@@ -98,6 +116,7 @@ uni-share qr https://storage.to/XXXX [--svg qr.svg]
 uni-share download https://storage.to/XXXX [-o DIR] [--password xxxx] [--force] [--list]
 uni-share download https://storage.to/c/XXXX --password xxxx
 uni-share download https://www.swisstransfer.com/dl/<uuid>
+uni-share download https://www.swisstransfer.com/dl/<uuid> --password secreta   # link protegido (sin --password se pregunta)
 uni-share download fotos.unishare            # o "unishare:…" — verifica BLAKE3 al terminar
 
 # Historial, daemon, GUIs, config
@@ -105,9 +124,9 @@ uni-share history [-n 20] [--json] [--clear]
 uni-share daemon start|stop|status
 uni-share gui [--port 47900] [--no-open] [--demo]  # GUI web local (+ GUI móvil en /m); --demo: estado de ejemplo sin motor
 uni-share app [fotos.unishare]               # app nativa Slint (cargo build --features slint)
-uni-share app --demo --screenshot app.png [--dialog new|share|settings|fs|confirm] [--select ID[:TAB]] [--light]
+uni-share app --demo --screenshot app.png [--dialog new|share|pair|settings|logs|fs|confirm] [--select ID[:TAB]] [--light]
 uni-share associate [--remove] [--status]    # doble clic en .unishare / links unishare: abren la app
-uni-share scan <ruta…> [--json] [--no-clamav] [--quarantine|--delete] [-v]   # análisis de seguridad local (exit 0/1/2)
+uni-share scan <ruta…> [--json] [--no-clamav] [--no-yara] [--quarantine|--delete] [-v]   # análisis de seguridad local (exit 0/1/2)
 uni-share config [--path]
 ```
 
@@ -167,16 +186,16 @@ enabled = true
 clamav = true                # usar clamdscan/clamscan si están instalados
 # clamav_path = "/usr/bin/clamdscan"
 on_danger = "quarantine"     # quarantine | report | delete
-max_file_mib = 0             # no pasar a ClamAV archivos mayores (0 = sin límite)
+max_file_mib = 0             # no pasar a ClamAV/YARA archivos mayores (0 = sin límite)
+yara = true                  # reglas YARA propias (binario con --features yara)
+# yara_rules_dir = "/ruta/a/mis/reglas"   # por defecto <data_dir>/rules (*.yar / *.yara)
 
 [global]
-backend = "storage_to"       # o "smash"
+backend = "storage_to"
 storage_to_api = "https://storage.to/api"
 # storage_to_token = "…"     # cuenta storage.to (opcional)
 # storage_to_visitor_token = "…"  # se genera y guarda automáticamente
-# smash_api_key = "eyJ…"     # necesario para --backend smash
-smash_region = "eu-west-3"
-expiry_days = 7
+expiry_days = 7              # tiempo online por defecto de los links: 1-7 días (máximo del servicio)
 parallel_parts = 4
 ```
 
@@ -199,8 +218,7 @@ src/
 │   └── client.rs            emisor (offer/poll, streaming, reintento por archivo)
 ├── global/
 │   ├── storage_to.rs        REST client (init/parts/complete/confirm/collection/password…)
-│   ├── smash.rs             API Smash (transfer/file/parts/lock)
-│   └── upload.rs            orquestación single/multipart/collection + Smash
+│   └── upload.rs            orquestación single/multipart/collection
 ├── download/
 │   ├── http.rs              descarga reanudable (.part + Range) con reintentos
 │   ├── storage_to.rs        parser de la página (turbo-stream) + endpoints de descarga
@@ -241,9 +259,8 @@ El receptor escribe en `archivo.part`, hashea mientras escribe y renombra solo s
 | **Historial** | **SQLite** (`rusqlite` *bundled*, WAL) | Escrituras atómicas y lectores concurrentes (daemon + CLI + GUI a la vez), consultas indexadas, sin dependencias del sistema. Un JSON se corrompe con escrituras concurrentes y no escala. |
 | **Visitor token storage.to** | 32 bytes aleatorios hex, persistido en `config.toml` (`global.storage_to_visitor_token`); *owner tokens* guardados en el historial (`meta`) | Mismo esquema que el CLI oficial de storage.to; el owner token permite borrar / proteger / cambiar expiración después aunque cambie la IP. |
 | **Carpetas en global** | **Collection** con rutas relativas en `filename` (por defecto); `--compress` → un solo `.tar.zst` | Probado: storage.to acepta `sub/dir/a.txt` como nombre y la descarga recrea la jerarquía. Comprimir es opcional (útil para miles de archivos pequeños). |
-| **Backend Smash** | **Aparcado** (experimental): opcional, con API key (`Bearer`) en host regional `transfer.<region>.fromsmash.co` | Smash no tiene subida anónima por API; el flujo create transfer → file → PUT parts S3 → lock está implementado pero no se prioriza (storage.to cubre el caso anónimo). |
 | **Descarga storage.to** | Parser del *turbo-stream* de React Router de la página (`mint_proof`) + `GET /{id}/download` / `POST /c/{id}/urls`; **fallback a `curl`** si Cloudflare desafía al cliente rustls | storage.to no publica API de descarga; los endpoints del sitio están tras Cloudflare Bot Management que discrimina por huella TLS. `curl` (presente en Linux, macOS y Windows 10+) pasa el filtro; el CDN final acepta `Range` y se descarga con reqwest. |
-| **SwissTransfer** | Descarga nativa en Rust (Inertia page → API `links/{uuid}/files/{id}` → S3 presignado con `Range`) | Cumple la restricción de no automatizar subidas a SwissTransfer. Sin Python: el binario es autosuficiente. |
+| **SwissTransfer** | Descarga nativa en Rust (Inertia page → `POST /dl/{uuid}` con contraseña si el link la tiene → API `links/{uuid}/files/{id}` con la sesión → S3 presignado con `Range`) | Cumple la restricción de no automatizar subidas a SwissTransfer. Sin Python: el binario es autosuficiente. |
 | **Errores / async** | `anyhow` + `thiserror`, `tokio` en todo el I/O, sin `unwrap` en rutas de producción | `tokio` es el runtime con más ecosistema (axum, reqwest, hyper). Los `unwrap` quedan solo en tests. |
 | **Daemon** | Proceso desacoplado (`setsid` / `DETACHED_PROCESS`) con pidfile y log | Portátil sin integrar con systemd/launchd/servicios de Windows; `daemon status` comprueba liveness real. |
 
@@ -255,7 +272,7 @@ El receptor escribe en `archivo.part`, hashea mientras escribe y renombra solo s
 - Claves/tokens solo en `config.toml` (excluido del repo por `.gitignore`); la clave privada TLS y la de firma se guardan con permisos `0600`.
 - **Tickets de emparejamiento LAN** (`receive --qr`): llevan IP, puerto, huella TLS y PIN del receptor; quien lo escanea conecta con la huella fijada desde la primera conexión (sin mDNS). Equivale a compartir el PIN: no publicarlo.
 - **Firma Ed25519 de tickets** (opcional, activa por defecto): el ticket incluye la clave pública del emisor y una firma sobre su contenido. `ticket show`, `download`, `send-lan` y las GUIs muestran «firma válida · huella» o rechazan el ticket si la firma no cuadra (manipulado/falsificado). La huella del firmante (`ticket identity`) se puede comparar una vez por otro canal, como una host key de SSH. La versión compacta para QR va sin firma.
-- **Análisis de seguridad local** (`[scan]`, activo por defecto; también `uni-share scan`): tras cada recepción LAN o descarga se analizan los archivos **sin enviar nada fuera del equipo**. Heurísticas propias: tipo real por *magic bytes* frente a extensión (ejecutable PE/ELF/Mach-O/script disfrazado de `.jpg`/`.pdf`… = peligro), extensiones ejecutables, nombres engañosos (doble extensión `informe.pdf.exe`, RTLO `\u202e`, caracteres invisibles, relleno de espacios, nombres reservados), tamaño distinto al declarado, ZIP/OOXML/JAR/APK por directorio central sin extraer (bombas de descompresión por ratio o >20 GiB, >200k entradas, *path traversal*, anidados, cifrados, `vbaProject.bin`), tar y `.tar.zst` por cabeceras (traversal, setuid/setgid, enlaces que escapan), PDF (`/JavaScript`, `/Launch`, embebidos, acciones), OLE (macros VBA, `Ole10Native`, `DDEAUTO`), SVG/HTML con scripts o iframes, `.desktop`/`.url` que ejecutan comandos, shebangs en «texto». **ClamAV opcional**: si `clamdscan`/`clamscan` están instalados (PATH o rutas típicas) se usan además, con *timeout*; si no, se indica «no instalado» y se sigue con las heurísticas. Política ante peligro: **cuarentena** (renombrar a `*.unishare-quarantine` con `0600`; por defecto), solo avisar o eliminar. Resultado en CLI (verde/amarillo/rojo con detalle), registro del job y toast/etiqueta 🛡 en ambas GUIs; ajustes en «Seguridad».
+- **Análisis de seguridad local** (`[scan]`, activo por defecto; también `uni-share scan`): tras cada recepción LAN o descarga se analizan los archivos **sin enviar nada fuera del equipo**. Heurísticas propias: tipo real por *magic bytes* frente a extensión (ejecutable PE/ELF/Mach-O/script disfrazado de `.jpg`/`.pdf`… = peligro), extensiones ejecutables, nombres engañosos (doble extensión `informe.pdf.exe`, RTLO `\u202e`, caracteres invisibles, relleno de espacios, nombres reservados), tamaño distinto al declarado, ZIP/OOXML/JAR/APK por directorio central sin extraer (bombas de descompresión por ratio o >20 GiB, >200k entradas, *path traversal*, anidados, cifrados, `vbaProject.bin`), tar y `.tar.zst` por cabeceras (traversal, setuid/setgid, enlaces que escapan), PDF (`/JavaScript`, `/Launch`, embebidos, acciones), OLE (macros VBA, `Ole10Native`, `DDEAUTO`), SVG/HTML con scripts o iframes, `.desktop`/`.url` que ejecutan comandos, shebangs en «texto». **ClamAV opcional**: si `clamdscan`/`clamscan` están instalados (PATH o rutas típicas) se usan además, con *timeout*; si no, se indica «no instalado» y se sigue con las heurísticas. **YARA opcional** (`--features yara`, motor YARA-X en Rust): reglas del usuario en `<data_dir>/rules/*.yar|*.yara`, severidad por `meta: severity`/etiqueta, cacheadas y recompiladas solo cuando cambian, con *timeout*; `yara: sin reglas` / `yara: no compilado` cuando no aplica. Política ante peligro: **cuarentena** (renombrar a `*.unishare-quarantine` con `0600`; por defecto), solo avisar o eliminar. Resultado en CLI (verde/amarillo/rojo con detalle), registro del job y toast/etiqueta 🛡 en ambas GUIs; ajustes en «Seguridad».
 - **Reanudación entre ejecuciones**: el receptor guarda registros de transferencias interrumpidas (`transfers/*.json`, 30 días) y, si el mismo emisor vuelve a ofrecer el mismo contenido, reutiliza destino, `.part` y hashes verificados.
 
 ## Licencia

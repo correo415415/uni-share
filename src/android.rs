@@ -8,7 +8,7 @@
 
 use std::ffi::CString;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread::JoinHandle;
 
@@ -78,7 +78,7 @@ fn init_logging() {
         .without_time()
         .with_writer(|| LogcatWriter);
     // Ignore the error if a subscriber is already installed (start() called twice).
-    let _ = tracing_subscriber::registry().with(filter).with(fmt).try_init();
+    let _ = tracing_subscriber::registry().with(filter).with(fmt).with(crate::logbuf::layer()).try_init();
 }
 
 // ---------------------------------------------------------------- engine --
@@ -120,8 +120,18 @@ fn start(data_dir: PathBuf, download_dir: PathBuf, device_name: String) -> Resul
         return Ok(r.port);
     }
     // Every path under the app sandbox: config/history/keys live in `data_dir`.
+    // Android has no `/tmp`: point TMPDIR (std::env::temp_dir, tempfile) into our data dir
+    // so compressing folders / staging tickets does not fail with EINVAL/ENOENT.
+    let tmp = data_dir.join("tmp");
+    let _ = std::fs::create_dir_all(&tmp);
     // SAFETY: called from the UI thread before any other thread of ours exists.
-    unsafe { std::env::set_var("UNI_SHARE_HOME", &data_dir) };
+    unsafe {
+        std::env::set_var("UNI_SHARE_HOME", &data_dir);
+        if std::env::var_os("TMPDIR").is_none_or(|t| !Path::new(&t).is_dir()) {
+            std::env::set_var("TMPDIR", &tmp);
+        }
+    }
+    crate::logbuf::set_file_dir(&data_dir.join("logs"));
 
     let (port_tx, port_rx) = std::sync::mpsc::channel::<Result<u16>>();
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
@@ -216,6 +226,23 @@ pub extern "system" fn Java_dev_unishare_app_Native_stop(_env: JNIEnv, _class: J
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_unishare_app_Native_port(_env: JNIEnv, _class: JClass) -> jint {
     port().map(jint::from).unwrap_or(0)
+}
+
+/// `Native.log(level, tag, message)`: the Kotlin shell appends its own lines (scanner,
+/// SAF export, permissions) to the shared log buffer so the "Registro" screen shows both sides.
+/// `level`: 2 verbose · 3 debug · 4 info · 5 warn · 6 error (android.util.Log constants).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_unishare_app_Native_log(mut env: JNIEnv, _class: JClass, level: jint, tag: JString, msg: JString) {
+    let lvl = match level {
+        6 => tracing::Level::ERROR,
+        5 => tracing::Level::WARN,
+        4 => tracing::Level::INFO,
+        3 => tracing::Level::DEBUG,
+        _ => tracing::Level::TRACE,
+    };
+    let tag = jstr(&mut env, &tag);
+    let msg = jstr(&mut env, &msg);
+    crate::logbuf::push(lvl, &format!("android::{tag}"), &msg);
 }
 
 /// `Native.version(): String`

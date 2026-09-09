@@ -110,7 +110,7 @@ function renderDetails() {
       <dt>Velocidad</dt><dd class="mono">${j.state === 'running' ? fmtRate(j.speed) + ' · ETA ' + fmtEta(j.eta) : '—'}</dd><dt>Archivo actual</dt><dd class="mono">${h(j.current_file) || '—'}</dd></dl>
       <dl class="kv"><dt>${j.kind === 'lan_send' || j.kind === 'global_upload' ? 'Destino' : 'Origen'}</dt><dd>${h(j.peer)}</dd><dt>Carpeta</dt><dd>${j.dest ? `<a href="#" id="open-dest">${h(j.dest)}</a>` : '—'}</dd>
       <dt>Archivos</dt><dd>${j.files.length || '—'}</dd><dt>Inicio</dt><dd class="mono">${fmtTime(j.started)}</dd><dt>Fin</dt><dd class="mono">${fmtTime(j.finished)}</dd>
-      <dt>Link</dt><dd>${j.link ? `<a href="${h(j.link)}" target="_blank" rel="noopener">${h(j.link)}</a>` : '—'}</dd></dl></div>`;
+      <dt>Link</dt><dd>${j.link ? `<a href="${h(j.link)}" target="_blank" rel="noopener">${h(j.link)}</a>` : '—'}</dd></dl></div>${scanSection(j)}`;
     const rs = $('#rescan'); if (rs) rs.onclick = (e) => { e.preventDefault(); rescanJob(j); };
     const rt = $('#retry'); if (rt) rt.onclick = (e) => { e.preventDefault(); retryJob(j); };
     const od = $('#open-dest'); if (od) od.onclick = (e) => { e.preventDefault(); api('/api/open', { method: 'POST', body: { path: j.dest } }).catch(er => toast(er.message, 'err')); };
@@ -159,7 +159,7 @@ async function openScanned(text) {
 /** Events pushed by the shell: folder picked, files exported to the SAF folder, toasts. */
 function androidEvent(kind, payload) {
   if (kind === 'toast') return toast(String(payload), 'info');
-  if (kind === 'folder') { toast(payload ? `Carpeta de descargas: ${payload}` : 'Se usará la carpeta privada de la app', 'ok'); const f = $('#s-folder'); if (f) f.textContent = payload || 'carpeta privada de la app'; return; }
+  if (kind === 'folder') { toast(payload ? `Carpeta de descargas: ${payload}` : 'Se usará Downloads/unishare', 'ok'); const f = $('#s-folder'); if (f) f.textContent = payload || 'Downloads/unishare'; return; }
   if (kind === 'exported') return toast(`«${payload.name}»: ${payload.files} archivo(s) copiados a ${payload.folder}`, 'ok', 6000);
 }
 /** Finished receptions/downloads are mirrored into the user's SAF folder (engine writes to the app dir). */
@@ -239,7 +239,7 @@ function openNew(mode = 'lan', preset = {}) {
   const draw = () => {
     $$('#nt-seg button', m).forEach(b => b.classList.toggle('active', b.dataset.m === cur));
     if (cur === 'lan') body.innerHTML = srcField() + `<div class="field"><label>Dispositivo destino</label><div class="devpick" id="f-devs"></div></div><div class="grid2"><div class="field"><label>o dirección manual <span class="hint">ip[:puerto] o ticket de emparejamiento</span></label><input type="text" id="f-target" placeholder="192.168.1.20:47820 · unishare:…" value="${h(preset.target || '')}"></div><div class="field"><label>PIN (si lo exige el receptor)</label><input type="text" id="f-pin" inputmode="numeric"></div></div><label class="check"><input type="checkbox" id="f-compress"> Comprimir carpeta en .tar.zst antes de enviar</label>`;
-    else if (cur === 'global') body.innerHTML = srcField() + `<div class="grid2"><div class="field"><label>Contraseña (opcional, 4-100)</label><input type="password" id="f-pw" autocomplete="new-password"></div><div class="field"><label>Caducidad (días, 1-7)</label><input type="number" id="f-exp" min="1" max="7" value="${S.cfg?.global?.expiry_days || 7}"></div><div class="field"><label>Máx. descargas (opcional)</label><input type="number" id="f-max" min="1" max="1000" placeholder="∞"></div><div class="field"><label>Mensaje para el ticket</label><input type="text" id="f-msg"></div></div>
+    else if (cur === 'global') body.innerHTML = srcField() + `<div class="grid2"><div class="field"><label>Contraseña (opcional, 4-100)</label><input type="password" id="f-pw" autocomplete="new-password"></div><div class="field"><label>Tiempo online (storage.to guarda hasta 7 días)</label><select id="f-exp">${[1,2,3,4,5,6,7].map(n => `<option value="${n}"${n === (S.cfg?.global?.expiry_days || 7) ? ' selected' : ''}>${n} día${n > 1 ? 's' : ''}</option>`).join('')}</select></div><div class="field"><label>Máx. descargas (opcional)</label><input type="number" id="f-max" min="1" max="1000" placeholder="∞"></div><div class="field"><label>Mensaje para el ticket</label><input type="text" id="f-msg"></div></div>
       <label class="check"><input type="checkbox" id="f-ticket" checked> Generar ticket <b>.unishare</b> (link + contraseña + digests BLAKE3, compartible por QR)</label><label class="check"><input type="checkbox" id="f-compress"> Comprimir carpeta en un único .tar.zst (en vez de colección)</label>
       <div class="alert">Se sube a <b>storage.to</b> (≤ 25 GB, anónimo). El link y el QR aparecerán en <b>Compartir</b> al terminar.</div>`;
     else if (cur === 'download') body.innerHTML = `<div class="field"><label>Link, URI <code>unishare:</code> o ruta a un fichero .unishare</label><textarea id="f-url" placeholder="https://storage.to/…   ·   https://www.swisstransfer.com/d/…   ·   unishare:…">${h(preset.url || '')}</textarea><div class="preview" id="f-prev" hidden></div></div>
@@ -289,27 +289,60 @@ function openShare(j, what = j.ticket_uri ? 'ticket' : 'link') {
   $$('#sh-seg button', m).forEach(b => b.onclick = () => { cur = b.dataset.w; draw(); }); draw();
 }
 
+/** "Registro": engine (and Android shell) log lines from /api/logs with level filter, search, live tail. */
+const LOGLV = [['error', 'Errores'], ['warn', 'Avisos'], ['info', 'Info'], ['debug', 'Depuración'], ['trace', 'Todo']];
+async function openLogs() {
+  let level = localStorage.loglevel || 'info', q = '', entries = [], seq = 0, file = null, total = 0, timer = 0;
+  const m = modal(`<div class="m-head"><h2>Registro</h2><button class="btn icon ghost" data-close>✕</button></div>
+    <div class="m-body logs"><div class="log-tools"><div class="seg" id="lg-lv">${LOGLV.map(([k, l]) => `<button class="${k === level ? 'active' : ''}" data-lv="${k}">${l}</button>`).join('')}</div>
+      <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input id="lg-q" type="search" placeholder="Filtrar mensajes…"></div></div>
+      <div class="loglist" id="lg-list"><div class="muted">Cargando…</div></div><div class="hint" id="lg-info"></div></div>
+    <div class="m-foot"><button class="btn" id="lg-copy">Copiar</button><a class="btn" id="lg-dl" href="/api/logs/text" download="uni-share.log">Descargar .log</a><button class="btn danger" id="lg-clear">Vaciar</button><span style="flex:1"></span><button class="btn" data-close>Cerrar</button></div>`, 'wide');
+  const fmtTs = ms => { const d = new Date(ms); return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + '.' + String(d.getMilliseconds()).padStart(3, '0'); };
+  const short = t => (t || '').replace(/^uni_share::/, '').replace(/^android::/, 'app·');
+  const draw = () => {
+    const list = $('#lg-list', m); const atEnd = list.scrollTop + list.clientHeight >= list.scrollHeight - 8;
+    const qq = q.trim().toLowerCase(); const rows = entries.filter(e => !qq || e.message.toLowerCase().includes(qq) || e.target.toLowerCase().includes(qq)).slice(-1500);
+    list.innerHTML = rows.length ? rows.map(e => `<div class="ll ${e.level}"><span class="ts">${fmtTs(e.ts)}</span><span class="lv">${e.level.toUpperCase().slice(0, 5)}</span><span class="tg" title="${h(e.target)}">${h(short(e.target))}</span><span class="msg">${h(e.message)}</span></div>`).join('') : `<div class="muted">${qq ? 'Ningún mensaje coincide con el filtro.' : 'Con este nivel no hay mensajes todavía.'}</div>`;
+    $('#lg-info', m).textContent = `${rows.length} línea(s)${total ? ` · ${total} desde el arranque` : ''}${file ? ` · fichero: ${file}` : ''}`;
+    if (atEnd || !qq) list.scrollTop = list.scrollHeight;
+  };
+  const load = async (inc) => {
+    try { const r = await api(`/api/logs?after=${inc ? seq : 0}&level=${level === 'trace' ? '' : level}&limit=${inc ? 500 : 1500}`);
+      if (!inc) entries = r.entries; else if (r.entries.length) entries = entries.concat(r.entries).slice(-2000);
+      seq = r.last_seq || seq; file = r.file; total = r.total; if (!inc || r.entries.length) draw();
+    } catch (e) { if (!inc) toast(e.message, 'err'); }
+  };
+  $$('#lg-lv button', m).forEach(b => b.onclick = () => { level = b.dataset.lv; localStorage.loglevel = level; $$('#lg-lv button', m).forEach(x => x.classList.toggle('active', x === b)); load(false); });
+  $('#lg-q', m).oninput = e => { q = e.target.value; draw(); };
+  $('#lg-copy', m).onclick = () => copy(entries.map(e => `${new Date(e.ts).toISOString()} ${e.level.toUpperCase().padStart(5)} ${e.target}  ${e.message}`).join('\n'));
+  $('#lg-dl', m).onclick = () => { $('#lg-dl', m).href = `/api/logs/text?level=${level === 'trace' ? '' : level}`; };
+  $('#lg-clear', m).onclick = () => confirmDlg('¿Vaciar el registro en memoria? El fichero en disco no se toca.').then(ok => ok && api('/api/logs', { method: 'DELETE' }).then(() => { seq = 0; load(false); }));
+  await load(false);
+  timer = setInterval(() => load(true), 2000); m.addEventListener('closed', () => clearInterval(timer));
+}
 async function openSettings() {
   let d; try { d = await api('/api/config'); } catch (e) { return toast(e.message, 'err'); }
   const c = d.config; S.cfg = c;
   const m = modal(`<div class="m-head"><h2>Ajustes</h2><span class="hint mono">${h(d.path)}</span><button class="btn icon ghost" data-close>✕</button></div><div class="m-body settings"><h3>Dispositivo</h3>
     <div class="grid2"><div class="field"><label>Nombre visible en la LAN</label><input type="text" id="s-name" value="${h(c.device_name)}"></div><div class="field"><label>PIN de emparejamiento (vacío = sin PIN)</label><input type="text" id="s-pin" value="${h(c.pin || '')}" placeholder="4-6 dígitos"></div></div>
-    ${mobile ? `<div class="field"><label>Carpeta de descargas (Android)</label><div class="with-btn"><span class="hint" id="s-folder" style="flex:1;align-self:center">${h((androidInfo() || {}).downloadTree || 'carpeta privada de la app')}</span><button class="btn" id="s-saf">Elegir carpeta…</button><button class="btn" id="s-saf-clear" title="Volver a la carpeta privada">✕</button></div><p class="hint">Los archivos recibidos se guardan en la app y, al terminar, se copian a la carpeta elegida (Storage Access Framework).</p></div>`
+    ${mobile ? `<div class="field"><label>Carpeta de descargas (Android)</label><div class="with-btn"><span class="hint" id="s-folder" style="flex:1;align-self:center">${h((androidInfo() || {}).downloadTarget || 'Downloads/unishare')}</span><button class="btn" id="s-saf">Otra carpeta…</button><button class="btn" id="s-saf-clear" title="Volver a Downloads/unishare">✕</button></div><p class="hint">Los archivos recibidos se guardan en la app y, al terminar, se copian a Downloads/unishare (o a la carpeta elegida; Android no permite elegir la raíz de Descargas, elige o crea una subcarpeta).</p></div>`
       : `<div class="field"><label>Carpeta de descargas</label><div class="with-btn"><input type="text" id="s-dir" value="${h(c.download_dir)}"><button class="btn" id="s-browse">…</button></div></div>`}
     <div class="grid2"><div class="field"><label>Límite de velocidad (Mbit/s, 0 = sin límite)</label><input type="number" id="s-rate" min="0" value="${c.rate_limit_mbps}"></div><div class="field"><label>Partes paralelas (multipart)</label><input type="number" id="s-par" min="1" max="16" value="${c.global.parallel_parts}"></div></div>
     <label class="check"><input type="checkbox" id="s-auto" ${c.auto_accept ? 'checked' : ''}> Aceptar automáticamente las transferencias LAN entrantes</label><label class="check"><input type="checkbox" id="s-notif" ${c.notifications ? 'checked' : ''}> Notificaciones de escritorio</label><label class="check"><input type="checkbox" id="s-comp" ${c.compress_folders ? 'checked' : ''}> Comprimir carpetas (.tar.zst) por defecto</label><label class="check"><input type="checkbox" id="s-sign" ${c.sign_tickets ? 'checked' : ''}> Firmar los tickets con la clave Ed25519 de este dispositivo <span class="hint">(huella ${h(S.data.signer_fingerprint || '')})</span></label>
     <h3>Seguridad</h3>
     <label class="check"><input type="checkbox" id="s-scan" ${c.scan.enabled ? 'checked' : ''}> Analizar los archivos recibidos y descargados (100 % local: tipo real vs. extensión, ejecutables disfrazados, bombas ZIP/tar, macros, PDF con JavaScript, nombres engañosos…)</label>
     <label class="check"><input type="checkbox" id="s-clam" ${c.scan.clamav ? 'checked' : ''}> Usar ClamAV si está instalado <span class="hint">(${S.data.clamav ? 'detectado: ' + h(S.data.clamav) : 'no detectado en este equipo'})</span></label>
+    <label class="check"><input type="checkbox" id="s-yara" ${c.scan.yara ? 'checked' : ''}> Usar reglas YARA propias <span class="hint">(${h(S.data.yara || '')} · carpeta <code class="mono">${h(S.data.yara_rules_dir || '')}</code>: archivos *.yar / *.yara)</span></label>
     <div class="field"><label>Si se detecta un archivo peligroso</label><select id="s-danger"><option value="quarantine" ${c.scan.on_danger === 'quarantine' ? 'selected' : ''}>Poner en cuarentena (renombrar a *.unishare-quarantine)</option><option value="report" ${c.scan.on_danger === 'report' ? 'selected' : ''}>Solo avisar</option><option value="delete" ${c.scan.on_danger === 'delete' ? 'selected' : ''}>Eliminar</option></select></div>
-    <h3>Links (storage.to)</h3><div class="grid2"><div class="field"><label>Caducidad por defecto (días, 1-7)</label><input type="number" id="s-exp" min="1" max="7" value="${c.global.expiry_days}"></div><div class="field"><label>Puerto LAN (requiere reiniciar)</label><input type="text" readonly value="${c.lan_port}"></div></div>
+    <h3>Links (storage.to)</h3><div class="grid2"><div class="field"><label>Tiempo online por defecto (máx. 7 días en storage.to)</label><select id="s-exp">${[1,2,3,4,5,6,7].map(n => `<option value="${n}"${n === c.global.expiry_days ? ' selected' : ''}>${n} día${n > 1 ? 's' : ''}</option>`).join('')}</select></div><div class="field"><label>Puerto LAN (requiere reiniciar)</label><input type="text" readonly value="${c.lan_port}"></div></div>
     <h3>Interfaz</h3><div class="field"><label>Columnas visibles</label><div style="display:flex;flex-wrap:wrap;gap:10px">${Object.keys(COLS).map(k => `<label class="check"><input type="checkbox" data-col="${k}" ${S.cols.includes(k) ? 'checked' : ''}> ${COLS[k][0]}</label>`).join('')}</div></div>
     <div class="alert">Huella TLS de este equipo: <code class="mono">${h(S.data.fingerprint_full || '')}</code></div></div>
     <div class="m-foot"><span id="s-err" style="flex:1;color:var(--err)"></span><button class="btn" data-close>Cancelar</button><button class="btn primary" id="s-save">Guardar</button></div>`);
   const sb = $('#s-browse', m); if (sb) sb.onclick = () => pickPath({ dirsOnly: true, title: 'Carpeta de descargas' }).then(p => p && ($('#s-dir', m).value = p));
   const saf = $('#s-saf', m); if (saf) { saf.onclick = () => Android.pickDownloadFolder(); $('#s-saf-clear', m).onclick = () => Android.clearDownloadFolder(); }
   $('#s-save', m).onclick = async () => { const v = (id) => $(id, m).value.trim(), c2 = (id) => $(id, m).checked;
-    try { const r = await api('/api/config', { method: 'PUT', body: { device_name: v('#s-name'), pin: v('#s-pin'), download_dir: mobile ? undefined : v('#s-dir'), rate_limit_mbps: Number(v('#s-rate')) || 0, parallel_parts: Number(v('#s-par')) || 4, auto_accept: c2('#s-auto'), notifications: c2('#s-notif'), compress_folders: c2('#s-comp'), sign_tickets: c2('#s-sign'), scan_enabled: c2('#s-scan'), scan_clamav: c2('#s-clam'), scan_on_danger: v('#s-danger'), expiry_days: Number(v('#s-exp')) || 7 } });
+    try { const r = await api('/api/config', { method: 'PUT', body: { device_name: v('#s-name'), pin: v('#s-pin'), download_dir: mobile ? undefined : v('#s-dir'), rate_limit_mbps: Number(v('#s-rate')) || 0, parallel_parts: Number(v('#s-par')) || 4, auto_accept: c2('#s-auto'), notifications: c2('#s-notif'), compress_folders: c2('#s-comp'), sign_tickets: c2('#s-sign'), scan_enabled: c2('#s-scan'), scan_clamav: c2('#s-clam'), scan_yara: c2('#s-yara'), scan_on_danger: v('#s-danger'), expiry_days: Number(v('#s-exp')) || 7 } });
       S.cols = Object.keys(COLS).filter(k => $(`[data-col=${k}]`, m).checked); if (!S.cols.length) S.cols = ['name', 'progress', 'state']; localStorage.cols = JSON.stringify(S.cols);
       toast(r.restart_needed ? 'Guardado. Nombre/PIN/puerto se aplican al reiniciar la GUI.' : 'Ajustes guardados', 'ok', 5000); m.close(); render(); } catch (e) { $('#s-err', m).textContent = e.message; } };
 }
@@ -325,6 +358,15 @@ function contextMenu(x, y, j) {
     if (a === 'open') api('/api/open', { method: 'POST', body: { path: j.dest } }).catch(er => toast(er.message, 'err')); if (a === 'cancel') cancelSel(); if (a === 'scan') rescanJob(j); if (a === 'retry') retryJob(j);
     if (a === 'remove') api(`/api/jobs/${j.id}`, { method: 'DELETE' }).then(() => { S.sel = null; }).catch(er => toast(er.message, 'err')); };
 }
+/** Structured result of the safety scan (engine `scan_report`), shown under the general details. */
+function scanSection(j) {
+  const r = j.scan_report; if (!r) return '';
+  const sv = SCAN[r.severity] || SCAN.info;
+  const head = `<div class="scan-head"><span class="badge scan ${sv[0]}">🛡 ${sv[1]}</span> <span>${r.files} archivo${r.files === 1 ? '' : 's'}${r.dangers ? ` · <b>${r.dangers} peligroso${r.dangers === 1 ? '' : 's'}</b>` : ''}${r.warnings ? ` · ${r.warnings} con avisos` : ''}</span> <span class="muted">· ${h((r.engines || []).join(', '))} · ${(r.duration_ms / 1000).toFixed(1)} s · ${fmtTime(r.at)}</span></div>`;
+  const rows = (r.findings || []).slice(0, 100).map(f => { const fs = SCAN[f.severity] || SCAN.warning; return `<tr><td><span class="badge scan ${fs[0]}">${fs[1]}</span></td><td class="mono" title="${h(f.path)}">${h(f.path)}<span class="muted"> · ${h(f.kind)}</span>${f.quarantined ? `<div class="muted">En cuarentena: <span class="mono">${h(f.quarantined)}</span></div>` : ''}</td><td>${f.findings.map(x => `<div>${h(x.message)} <span class="muted mono">${h(x.code)}</span></div>`).join('')}</td></tr>`; }).join('');
+  const body = rows ? `<table class="filelist scan-table"><thead><tr><th>Nivel</th><th>Archivo</th><th>Hallazgos</th></tr></thead><tbody>${rows}</tbody></table>${r.findings.length > 100 ? `<div class="muted">… y ${r.findings.length - 100} más</div>` : ''}` : `<div class="muted">Sin hallazgos: el contenido coincide con la extensión, sin ejecutables disfrazados, macros, PDF con JavaScript ni archivos comprimidos anómalos.</div>`;
+  return `<section class="scan-sec"><h3>Análisis de seguridad</h3>${head}${body}</section>`;
+}
 const canRescan = (j) => j && (j.kind === 'lan_receive' || j.kind === 'download') && j.state === 'completed';
 function rescanJob(j) {
   if (!canRescan(j)) return;
@@ -332,7 +374,7 @@ function rescanJob(j) {
   api(`/api/jobs/${j.id}/scan`, { method: 'POST' }).then(r => {
     const sev = r.severity || 'info';
     toast(r.summary || 'Análisis terminado', sev === 'danger' ? 'err' : sev === 'warning' ? 'warn' : 'ok', sev === 'info' ? 4500 : 9000);
-    if (sev !== 'info') S.tab = 'log'; poll();
+    S.tab = 'general'; poll();
   }).catch(er => toast(er.message, 'err'));
 }
 function retryJob(j) {
@@ -353,9 +395,9 @@ function init() {
   document.documentElement.dataset.theme = localStorage.theme || 'dark';
   $('#b-theme').onclick = () => { const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = t; localStorage.theme = t; };
   $('#b-new').onclick = () => openNew('lan'); $('#b-sendlan').onclick = () => openNew('lan'); $('#b-upload').onclick = () => openNew('global'); $('#b-download').onclick = () => openNew('download'); $('#b-ticket').onclick = () => openNew('ticket');
-  $('#b-settings').onclick = openSettings; $('#b-cancel').onclick = cancelSel;
+  $('#b-settings').onclick = openSettings; $('#b-logs').onclick = openLogs; $('#b-cancel').onclick = cancelSel;
   if (mobile) { document.documentElement.classList.add('mobile'); const q = $('#b-qr'); q.hidden = false; q.onclick = () => Android.scanQr(); }
-  $('#b-clear').onclick = () => api('/api/jobs/clear-finished', { method: 'POST' }).then(r => toast(`${r.removed} eliminada(s)`, 'info', 2000));
+  $('#b-clear').onclick = () => api('/api/jobs/clear-finished', { method: 'POST' }).then(r => { if (S.data) { S.data.jobs = S.data.jobs.filter(j => j.state === 'queued' || j.state === 'running'); render(); } toast(`${r.removed} eliminada(s)`, 'info', 2000); }).catch(e => toast(e.message, 'err'));
   $('#b-scan').onclick = async () => { $('#b-scan').disabled = true; try { S.data.devices = await api('/api/devices'); render(); } finally { $('#b-scan').disabled = false; } };
   $('#q').oninput = (e) => { S.q = e.target.value; renderTable(); };
   $$('#tabs .tab').forEach(t => t.onclick = () => { S.tab = t.dataset.tab; if (S.tab === 'history') loadHistory(); renderDetails(); });
@@ -367,7 +409,7 @@ function init() {
   addEventListener('keydown', (e) => {
     if ($('.overlay') || e.target.matches('input,textarea,select')) { if (e.key === 'Escape' && e.target.id === 'q') { e.target.value = ''; S.q = ''; renderTable(); e.target.blur(); } return; }
     const k = e.key.toLowerCase();
-    if (k === 'n' || k === 'l') openNew('lan'); else if (k === 'u') openNew('global'); else if (k === 'd') openNew('download'); else if (k === 't') openNew('ticket'); else if (k === ',') openSettings();
+    if (k === 'n' || k === 'l') openNew('lan'); else if (k === 'u') openNew('global'); else if (k === 'd') openNew('download'); else if (k === 't') openNew('ticket'); else if (k === ',') openSettings(); else if (k === 'g') openLogs();
     else if (k === '/') { e.preventDefault(); $('#q').focus(); } else if (k === 'delete') cancelSel();
     else if (k === 'enter') { if (job(S.sel)) { main.classList.remove('details-collapsed'); S.tab = 'general'; renderDetails(); } }
     else if (k === 'arrowdown' || k === 'arrowup') { const l = visibleJobs(); if (!l.length) return; const i = l.findIndex(j => j.id === S.sel); S.sel = l[k === 'arrowdown' ? Math.min(l.length - 1, i + 1) : Math.max(0, i - 1)].id; render(); e.preventDefault(); }

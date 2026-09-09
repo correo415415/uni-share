@@ -5,7 +5,7 @@ use anyhow::{Result, bail};
 use console::style;
 use std::sync::Arc;
 use uni_share::download::storage_to::StorageDownloader;
-use uni_share::download::swisstransfer::{SwissTransferClient, is_swisstransfer_url};
+use uni_share::download::swisstransfer::{PasswordRequired, SwissTransferClient, WrongPassword, is_swisstransfer_url};
 use uni_share::fsutil::human_bytes;
 use uni_share::global::storage_to::parse_share_url;
 use uni_share::history::{Kind, Status};
@@ -24,9 +24,6 @@ pub async fn download(ctx: Ctx, a: DownloadArgs) -> Result<()> {
     }
     if parse_share_url(&a.url).is_some() {
         return download_storage_to(ctx, a, dest).await;
-    }
-    if uni_share::global::smash::parse_share_url(&a.url).is_some() {
-        bail!("Smash links must be downloaded from the browser (the Smash download API requires the recipient token); open {}", a.url);
     }
     bail!("unsupported URL: {} (expected storage.to, swisstransfer.com, a unishare: URI or a .unishare file)", a.url)
 }
@@ -71,8 +68,25 @@ async fn download_storage_to(ctx: Ctx, a: DownloadArgs, dest: std::path::PathBuf
 async fn download_swisstransfer(ctx: Ctx, a: DownloadArgs, dest: std::path::PathBuf) -> Result<()> {
     let mut st = SwissTransferClient::new()?;
     let sp = ui::spinner(S, "Consultando SwissTransfer…");
-    let t = st.get_transfer(&a.url, a.password.as_deref()).await?;
+    let mut t = st.get_transfer(&a.url, a.password.as_deref()).await;
     sp.finish_and_clear();
+    // Protected link and no --password: ask interactively (up to 3 tries), like storage.to.
+    let mut tries = 0;
+    while let Err(e) = &t {
+        let ask = e.downcast_ref::<PasswordRequired>().is_some() || (a.password.is_none() && e.downcast_ref::<WrongPassword>().is_some());
+        if !ask || tries >= 3 || ctx.quiet {
+            break;
+        }
+        if tries > 0 {
+            ui::warn(S, "Contraseña incorrecta");
+        }
+        tries += 1;
+        let pw = tokio::task::spawn_blocking(|| dialoguer::Password::new().with_prompt("Contraseña del link").interact()).await??;
+        let sp = ui::spinner(S, "Comprobando contraseña…");
+        t = st.get_transfer(&a.url, Some(&pw)).await;
+        sp.finish_and_clear();
+    }
+    let t = t?;
     ui::info(
         S,
         format!("Transferencia {} — {} archivo(s), {}", style(t.title.clone().unwrap_or_else(|| t.link_id.clone())).bold(), t.files.len(), human_bytes(t.total_size)),

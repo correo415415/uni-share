@@ -1,0 +1,77 @@
+# Comprobación ligera para cambios que SOLO tocan documentación (README, TODO,
+# docs/, licencias, .md en general). No instala toolchains ni compila nada:
+# valida que los Markdown se lean (enlaces relativos a ficheros existentes,
+# bloques de código cerrados, checkboxes del TODO bien formados) y termina en
+# segundos. La compilación completa se lanza a mano con `build.yml`.
+
+name: docs
+
+on:
+  push:
+    branches: [main, genspark_ai_developer]
+    paths:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE*"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    name: Markdown (sin compilar)
+    runs-on: [self-hosted]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Comprobar Markdown
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, re, sys, glob
+          files = [f for f in glob.glob("**/*.md", recursive=True)
+                   if not f.startswith(("target/", "node_modules/", "android/app/build/"))]
+          errors = []
+          link_re = re.compile(r"(?<!!)\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+          for f in files:
+              text = open(f, encoding="utf-8").read()
+              # Bloques de código sin cerrar
+              if text.count("\n```") % 2 == 1 and not text.startswith("```"):
+                  errors.append(f"{f}: bloque ``` sin cerrar")
+              # Enlaces relativos a ficheros/anclas que no existen
+              for m in link_re.finditer(text):
+                  target = m.group(1)
+                  if re.match(r"^[a-z][a-z0-9+.-]*:", target) or target.startswith("#"):
+                      continue
+                  path = target.split("#", 1)[0]
+                  if not path:
+                      continue
+                  full = os.path.normpath(os.path.join(os.path.dirname(f), path))
+                  if not os.path.exists(full):
+                      errors.append(f"{f}: enlace roto → {target}")
+              # Checkboxes mal formados en el TODO
+              if os.path.basename(f) == "TODO.md":
+                  for n, line in enumerate(text.splitlines(), 1):
+                      if re.match(r"^\s*- \[[^ xX]\]", line):
+                          errors.append(f"{f}:{n}: checkbox inválido: {line.strip()[:60]}")
+          done = sum(open(f, encoding="utf-8").read().count("- [x]") for f in files if f.endswith("TODO.md"))
+          todo = sum(open(f, encoding="utf-8").read().count("- [ ]") for f in files if f.endswith("TODO.md"))
+          print(f"{len(files)} ficheros Markdown; TODO: {done} hechos / {todo} pendientes")
+          for e in errors:
+              print("::error::" + e)
+          sys.exit(1 if errors else 0)
+          PY

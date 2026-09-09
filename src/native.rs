@@ -112,7 +112,7 @@ pub struct AppOptions {
     pub demo: bool,
     /// Render the window once, save it as PNG and quit (design review / CI).
     pub screenshot: Option<PathBuf>,
-    /// Dialog to open before the screenshot ("new", "share", "settings", "fs", "confirm").
+    /// Dialog to open before the screenshot ("new", "share", "pair", "settings", "logs", "fs", "confirm").
     pub dialog: Option<String>,
     /// Pre-select a job id and details tab (0 general, 1 files, 2 share, 3 log, 4 history).
     pub select: Option<(u64, i32)>,
@@ -201,7 +201,7 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
     win.set_version(format!("v{}", crate::APP_VERSION).into());
     win.set_download_dir(cfg.download_dir.display().to_string().into());
     win.set_f_dest(cfg.download_dir.display().to_string().into());
-    win.set_f_expiry(cfg.global.expiry_days.to_string().into());
+    win.set_f_expiry(cfg.global.expiry_days as i32);
     let st = Rc::new(std::cell::RefCell::new(UiState {
         filter: "all".into(),
         query: String::new(),
@@ -238,6 +238,15 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
         win.set_tab(tab);
     }
     if let Some(d) = &opts.dialog {
+        if d == "logs" {
+            // Demo shots: seed a few representative lines so the dialog is not empty.
+            tracing::info!("motor iniciado · LAN 0.0.0.0:47820 · huella 9A1C-77E0-B2D4-5F08");
+            tracing::info!(target: "uni_share::lan::discovery", "mDNS: 3 dispositivos (PC-Sala, Pixel-de-Ana, TV-Salon)");
+            tracing::warn!(target: "uni_share::lan::client", "PC-Sala: reintentando render.mp4 desde 1.3 GiB (conexión reiniciada)");
+            tracing::info!(target: "uni_share::scan", "Análisis de seguridad: 0 peligroso(s), 1 con avisos de 3 archivo(s) (heuristics, clamav)");
+            tracing::error!(target: "uni_share::download", "swisstransfer-8f2a: 404 al pedir el manifiesto; se reintenta en 30 s");
+            refresh_logs(&win);
+        }
         if d == "fs" {
             win.set_fs_dirs_only(false);
             fs_load(&win, &cfg.download_dir.display().to_string(), false);
@@ -248,7 +257,23 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
             win.set_qr_caption(data.into());
             win.set_qr_image(qr_image(data));
         }
-        win.set_dialog(d.as_str().into());
+        if d == "pair" {
+            // Same dialog as "share" with a realistic (long) pairing ticket, so the
+            // screenshot exercises the text-overflow path reported by users.
+            let data = crate::ticket::Ticket::lan_pairing(
+                "Estudio-PC",
+                "192.168.1.42",
+                7411,
+                "3f9c1a7e5b2d8c4f6a0e9d1b7c3a5f8e2d4b6c8a0f1e3d5c7b9a2f4e6d8c0b1a",
+                Some("482913"),
+            )
+            .to_uri()
+            .unwrap_or_default();
+            win.set_share_what("pair".into());
+            win.set_qr_caption(data.clone().into());
+            win.set_qr_image(qr_image(&data));
+        }
+        win.set_dialog(if d == "pair" { "share" } else { d.as_str() }.into());
     }
     // Kept alive until the event loop returns.
     let shot = slint::Timer::default();
@@ -272,9 +297,23 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
     // ── event pump: engine → UI ──
     let ctx2 = ctx.clone();
     let pump = slint::Timer::default();
+    let mut ticks: u32 = 0;
+    let mut last_log_seq = 0u64;
     pump.start(slint::TimerMode::Repeated, Duration::from_millis(100), move || {
         while let Ok(evt) = erx.try_recv() {
             handle_evt(&ctx2, evt);
+        }
+        // Live tail for the "Registro" dialog: re-read the buffer once a second when it changed.
+        ticks = ticks.wrapping_add(1);
+        if ticks % 10 == 0
+            && let Some(w) = ctx2.win.upgrade()
+            && w.get_dialog() == "logs"
+        {
+            let seq = crate::logbuf::last_seq();
+            if seq != last_log_seq {
+                last_log_seq = seq;
+                refresh_logs(&w);
+            }
         }
     });
 
@@ -422,6 +461,77 @@ async fn handle_cmd(engine: &Arc<Engine>, cmd: Cmd, etx: &std::sync::mpsc::Sende
 fn fmt_time(ms: i64) -> String {
     chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms).map(|d| d.with_timezone(&chrono::Local).format("%H:%M:%S").to_string()).unwrap_or_else(|| "—".into())
 }
+/// "3 archivos · 1 con avisos · heuristics, clamav (clamdscan 1.4.1) · 1.8 s"
+fn scan_summary_line(r: &crate::engine::ScanSummary) -> String {
+    let mut parts = vec![format!("{} archivo{}", r.files, if r.files == 1 { "" } else { "s" })];
+    if r.dangers > 0 {
+        parts.push(format!("{} peligroso{}", r.dangers, if r.dangers == 1 { "" } else { "s" }));
+    }
+    if r.warnings > 0 {
+        parts.push(format!("{} con avisos", r.warnings));
+    }
+    parts.push(r.engines.join(", "));
+    parts.push(format!("{:.1} s", r.duration_ms as f64 / 1000.0));
+    parts.join(" · ")
+}
+
+/// One block per flagged file: `PELIGRO [pe] ruta` followed by its findings.
+fn scan_detail_text(r: &crate::engine::ScanSummary) -> String {
+    let mut out = String::new();
+    for f in &r.findings {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&format!("{} [{}] {}\n", f.severity.label(), f.kind, f.path));
+        for x in &f.findings {
+            out.push_str(&format!("   • {}\n", x.message));
+        }
+        if let Some(q) = &f.quarantined {
+            out.push_str(&format!("   → en cuarentena: {q}\n"));
+        }
+    }
+    out.trim_end().to_string()
+}
+
+/// Segmented index → minimum level for [`crate::logbuf::entries`] (`None` = everything).
+fn logs_level_filter(i: i32) -> Option<&'static str> {
+    match i {
+        0 => Some("error"),
+        1 => Some("warn"),
+        2 => Some("info"),
+        3 => Some("debug"),
+        _ => None,
+    }
+}
+
+/// Fill the "Registro" dialog model from the shared buffer, honouring level + text filter.
+fn refresh_logs(w: &MainWindow) {
+    let q = w.get_logs_query().to_lowercase();
+    let all = crate::logbuf::entries(0, logs_level_filter(w.get_logs_level()), crate::logbuf::CAPACITY);
+    let rows: Vec<LogRow> = all
+        .iter()
+        .filter(|e| q.is_empty() || e.message.to_lowercase().contains(&q) || e.target.to_lowercase().contains(&q))
+        .rev()
+        .take(800)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|e| LogRow {
+            ts: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(e.ts)
+                .map(|d| d.with_timezone(&chrono::Local).format("%H:%M:%S%.3f").to_string())
+                .unwrap_or_default()
+                .into(),
+            level: e.level.to_uppercase().into(),
+            target: e.target.trim_start_matches("uni_share::").replace("android::", "app·").into(),
+            message: e.message.clone().into(),
+        })
+        .collect();
+    let n = rows.len();
+    w.set_logs(ModelRc::new(VecModel::from(rows)));
+    let file = crate::logbuf::file_path().map(|p| format!(" · fichero: {}", p.display())).unwrap_or_default();
+    w.set_logs_info(format!("{n} línea(s) · {} desde el arranque{file}", crate::logbuf::total()).into());
+}
+
 fn fmt_eta(s: Option<u64>) -> String {
     match s {
         None => "—".into(),
@@ -510,6 +620,7 @@ fn render(ctx: &UiCtx) {
     win.set_pairing_uri(snap.pairing_uri.clone().into());
     win.set_signer_fingerprint(snap.signer_fingerprint.clone().into());
     win.set_clamav_label(snap.clamav.clone().unwrap_or_default().into());
+    win.set_yara_label(snap.yara.clone().into());
     // First 4 groups (64 bits) fit the sidebar card; the full value lives in Settings.
     win.set_signer_fingerprint_short(snap.signer_fingerprint.split(':').take(4).collect::<Vec<_>>().join(":").into());
     win.set_download_dir(snap.download_dir.display().to_string().into());
@@ -559,6 +670,8 @@ fn render(ctx: &UiCtx) {
                 indeterminate: j.state == JobState::Running && j.total == 0,
                 scan: j.scan.map(|s| match s { Severity::Info => "info", Severity::Warning => "warning", Severity::Danger => "danger" }).unwrap_or("").into(),
                 scan_label: j.scan.map(|s| match s { Severity::Info => "Análisis OK", Severity::Warning => "Avisos", Severity::Danger => "PELIGRO" }).unwrap_or("").into(),
+                scan_summary: j.scan_report.as_ref().map(scan_summary_line).unwrap_or_default().into(),
+                scan_detail: j.scan_report.as_ref().map(scan_detail_text).unwrap_or_default().into(),
                 retryable: j.retryable,
             }
         })
@@ -682,7 +795,7 @@ fn handle_evt(ctx: &UiCtx, evt: Evt) {
                 w.set_s_dir(c.download_dir.display().to_string().into());
                 w.set_s_rate(c.rate_limit_mbps.to_string().into());
                 w.set_s_parallel(c.global.parallel_parts.to_string().into());
-                w.set_s_expiry(c.global.expiry_days.to_string().into());
+                w.set_s_expiry(c.global.expiry_days as i32);
                 w.set_s_auto(c.auto_accept);
                 w.set_s_notif(c.notifications);
                 w.set_s_tray(c.minimize_to_tray);
@@ -690,6 +803,7 @@ fn handle_evt(ctx: &UiCtx, evt: Evt) {
                 w.set_s_sign(c.sign_tickets);
                 w.set_s_scan(c.scan.enabled);
                 w.set_s_clamav(c.scan.clamav);
+                w.set_s_yara(c.scan.yara);
                 w.set_s_danger(match c.scan.on_danger {
                     DangerAction::Quarantine => 0,
                     DangerAction::Report => 1,
@@ -703,7 +817,7 @@ fn handle_evt(ctx: &UiCtx, evt: Evt) {
 
 /// Render a QR code into a Slint image (1 module = 1 px, scaled by the UI with nearest filtering).
 fn qr_image(data: &str) -> slint::Image {
-    let Ok(code) = qrcode::QrCode::new(data.as_bytes()) else {
+    let Some(code) = crate::ui::qr_code(data) else {
         return slint::Image::default();
     };
     let w = code.width();
@@ -933,6 +1047,42 @@ fn wire_callbacks(win: &MainWindow, ctx: &UiCtx) {
         c.render_toasts();
     });
     let c = ctx.clone();
+    win.on_open_logs(move || {
+        if let Some(w) = c.win.upgrade() {
+            w.set_dialog("logs".into());
+            refresh_logs(&w);
+        }
+    });
+    let c = ctx.clone();
+    win.on_logs_changed(move || {
+        if let Some(w) = c.win.upgrade() {
+            refresh_logs(&w);
+        }
+    });
+    let c = ctx.clone();
+    win.on_copy_logs(move || {
+        let Some(w) = c.win.upgrade() else { return };
+        let text = crate::logbuf::dump(logs_level_filter(w.get_logs_level()));
+        if crate::ui::copy_to_clipboard(&text) {
+            c.toast("Registro copiado al portapapeles", "ok");
+        } else {
+            c.toast("Portapapeles no disponible", "err");
+        }
+    });
+    let c = ctx.clone();
+    win.on_clear_logs(move || {
+        let n = crate::logbuf::clear();
+        tracing::info!("registro en memoria vaciado ({n} líneas)");
+        if let Some(w) = c.win.upgrade() {
+            refresh_logs(&w);
+        }
+    });
+    let c = ctx.clone();
+    win.on_open_logs_file(move || match crate::logbuf::file_path().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        Some(dir) => crate::engine::open_in_system(&dir.display().to_string()),
+        None => c.toast("Sin fichero de registro (solo memoria)", "warn"),
+    });
+    let c = ctx.clone();
     win.on_open_settings(move || {
         if let Some(w) = c.win.upgrade() {
             w.set_dialog_error("".into());
@@ -1065,12 +1215,13 @@ fn wire_callbacks(win: &MainWindow, ctx: &UiCtx) {
             sign_tickets: Some(w.get_s_sign()),
             scan_enabled: Some(w.get_s_scan()),
             scan_clamav: Some(w.get_s_clamav()),
+            scan_yara: Some(w.get_s_yara()),
             scan_on_danger: Some(match w.get_s_danger() {
                 1 => DangerAction::Report,
                 2 => DangerAction::Delete,
                 _ => DangerAction::Quarantine,
             }),
-            expiry_days: w.get_s_expiry().trim().parse().ok(),
+            expiry_days: u32::try_from(w.get_s_expiry()).ok().filter(|d| *d > 0),
             parallel_parts: w.get_s_parallel().trim().parse().ok(),
         };
         w.set_dialog("".into());
@@ -1095,7 +1246,7 @@ fn wire_callbacks(win: &MainWindow, ctx: &UiCtx) {
                 c.send(Cmd::SendGlobal(SendGlobalReq {
                     path,
                     password: nonempty(w.get_f_password()),
-                    expiry_days: w.get_f_expiry().trim().parse().ok(),
+                    expiry_days: u32::try_from(w.get_f_expiry()).ok().filter(|d| *d > 0),
                     max_downloads: w.get_f_max().trim().parse().ok(),
                     compress: w.get_f_compress(),
                     ticket: w.get_f_ticket(),

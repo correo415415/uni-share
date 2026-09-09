@@ -1,13 +1,12 @@
-//! `send-global`: upload to storage.to (default) or Smash.
+//! `send-global`: upload to storage.to.
 
 use crate::*;
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use console::style;
 use std::sync::Arc;
 use uni_share::fsutil::{collect_files, human_bytes, total_size};
-use uni_share::global::smash::SmashClient;
 use uni_share::global::storage_to::Client as StorageClient;
-use uni_share::global::upload::{UploadOptions, UploadOutcome, upload_entries, upload_entries_smash};
+use uni_share::global::upload::{UploadOptions, UploadOutcome, upload_entries};
 use uni_share::history::{Kind, Status};
 use uni_share::lan::client::compress_to_temp;
 
@@ -16,8 +15,8 @@ const S: &str = "GLOBAL";
 pub async fn send_global(mut ctx: Ctx, a: SendGlobalArgs) -> Result<()> {
     anyhow::ensure!(a.path.exists(), "path not found: {}", a.path.display());
     let backend = a.backend.clone().unwrap_or_else(|| ctx.cfg.global.backend.clone());
-    if !matches!(backend.as_str(), "storage_to" | "smash") {
-        bail!("unknown backend '{backend}' (use storage_to or smash)");
+    if backend != "storage_to" {
+        bail!("unknown backend '{backend}' (only storage_to is supported)");
     }
     if let Some(p) = &a.password {
         anyhow::ensure!((4..=100).contains(&p.chars().count()), "password must be 4-100 characters");
@@ -44,7 +43,7 @@ pub async fn send_global(mut ctx: Ctx, a: SendGlobalArgs) -> Result<()> {
         password: a.password.clone(),
         max_downloads: a.max_downloads,
     };
-    let backend_label = if backend == "smash" { "Smash" } else { "storage.to" };
+    let backend_label = "storage.to";
     let want_ticket = a.ticket.is_some() || a.ticket_qr;
     // BLAKE3 digests for the ticket (computed up-front, cheap compared with the upload).
     let hashes = if want_ticket {
@@ -66,13 +65,7 @@ pub async fn send_global(mut ctx: Ctx, a: SendGlobalArgs) -> Result<()> {
     let b3 = bar.clone();
     let on_file = move |f: &str| b3.set_message(f.to_string());
 
-    let outcome: Result<UploadOutcome> = if backend == "smash" {
-        let key = ctx.cfg.global.smash_api_key.clone().filter(|k| !k.is_empty()).context(
-            "Smash backend needs an API key: set global.smash_api_key in config.toml (https://api.fromsmash.com)",
-        )?;
-        let client = SmashClient::new(&key, &ctx.cfg.global.smash_region)?;
-        upload_entries_smash(&client, &files, &name, &opts, progress, on_file).await
-    } else {
+    let outcome: Result<UploadOutcome> = {
         let token = ctx.ensure_visitor_token()?;
         let client = StorageClient::new(&ctx.cfg.global.storage_to_api, &token, ctx.cfg.global.storage_to_token.as_deref())?;
         upload_entries(&client, &files, &opts, progress, on_file).await

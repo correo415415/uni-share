@@ -66,7 +66,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        Native.logBoth(android.util.Log.INFO, "perm", "CAMERA ${if (granted) "concedido" else "denegado"}")
         if (granted) launchScanner() else bridge.emit("toast", "Sin permiso de cámara no se puede escanear")
+    }
+
+    /** Only on Android ≤ 9: writing the public Downloads/unishare needs WRITE_EXTERNAL_STORAGE. */
+    private val storagePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        Native.logBoth(android.util.Log.INFO, "perm", "WRITE_EXTERNAL_STORAGE ${if (granted) "concedido" else "denegado"}")
+        if (granted) { bridge.ensureDefaultFolder(); bridge.retryPendingExport() }
+        else bridge.emit("toast", "Sin permiso de almacenamiento los archivos se quedan en la carpeta privada de la app (elige otra carpeta en Ajustes)")
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -107,6 +115,9 @@ class MainActivity : AppCompatActivity() {
         }
         bridge = Bridge(this, web)
         web.addJavascriptInterface(bridge, "Android")
+        // Default download folder `Downloads/unishare` exists from the first launch (API 29+ needs
+        // no permission; ≤ 28 waits until WRITE_EXTERNAL_STORAGE is granted on the first export).
+        Thread { bridge.ensureDefaultFolder() }.start()
         splash = buildSplash()
         error = buildError().apply { visibility = View.GONE }
         root.addView(web, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -163,7 +174,7 @@ class MainActivity : AppCompatActivity() {
                 val uri = i.getParcelableUri(Intent.EXTRA_STREAM)
                 val text = i.getStringExtra(Intent.EXTRA_TEXT)
                 when {
-                    uri != null -> importToCache(uri)?.let { "openNew('lan', {path: ${jsStr(it)}})" }
+                    uri != null -> importToCache(uri)?.let { "openShared(${jsStr(it)})" }
                     !text.isNullOrBlank() && looksLikeLink(text) -> "openNew('download', {url: ${jsStr(text.trim())}})"
                     else -> null
                 }
@@ -171,7 +182,7 @@ class MainActivity : AppCompatActivity() {
             Intent.ACTION_SEND_MULTIPLE -> {
                 val uris = i.getParcelableUris(Intent.EXTRA_STREAM)
                 val dir = importManyToCache(uris)
-                dir?.let { "openNew('lan', {path: ${jsStr(it)}})" }
+                dir?.let { "openShared(${jsStr(it)})" }
             }
             Intent.ACTION_VIEW -> {
                 val u = i.data
@@ -190,12 +201,22 @@ class MainActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------ SAF + QR --
 
-    fun pickTree() {
+    /** SAF tree picker, opened on [initial] (the public Download folder) when the provider supports it. */
+    fun pickTree(initial: Uri? = null) {
         try {
-            pickTreeLauncher.launch(null)
+            pickTreeLauncher.launch(initial)
         } catch (_: Exception) {
-            bridge.emit("toast", "No hay selector de carpetas disponible")
+            try {
+                pickTreeLauncher.launch(null)
+            } catch (_: Exception) {
+                bridge.emit("toast", "No hay selector de carpetas disponible")
+            }
         }
+    }
+
+    fun requestStorageForDownloads() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) return bridge.retryPendingExport()
+        storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
     }
 
     fun pickFiles() {
@@ -216,8 +237,9 @@ class MainActivity : AppCompatActivity() {
             setDesiredBarcodeFormats(ScanOptions.QR_CODE)
             setPrompt(getString(R.string.scan_prompt))
             setBeepEnabled(false)
-            setOrientationLocked(false)
+            setOrientationLocked(true)
             setBarcodeImageEnabled(false)
+            setCaptureActivity(ScanActivity::class.java)
         }
         try {
             scanLauncher.launch(opts)
@@ -232,6 +254,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun onQr(text: String) {
         val t = text.trim()
+        Native.logBoth(android.util.Log.INFO, "qr", "código leído (${t.length} caracteres, ${t.substringBefore(':').take(12)}…)")
         val js = "window.openScanned ? openScanned(${jsStr(t)}) : openNew('download', {url: ${jsStr(t)}})"
         if (loaded) web.evaluateJavascript(js, null) else pendingJs = js
     }

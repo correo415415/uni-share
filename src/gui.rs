@@ -75,6 +75,8 @@ pub fn router(engine: Arc<Engine>) -> Router {
         .route("/api/events", get(api_events))
         .route("/api/devices", get(api_devices))
         .route("/api/history", get(api_history).delete(api_history_clear))
+        .route("/api/logs", get(api_logs).delete(api_logs_clear))
+        .route("/api/logs/text", get(api_logs_text))
         .route("/api/offers/{id}/accept", post(api_accept))
         .route("/api/offers/{id}/reject", post(api_reject))
         .route("/api/jobs/{id}/cancel", post(api_job_cancel))
@@ -126,7 +128,6 @@ pub fn demo_router(cfg: Config, cfg_path: PathBuf) -> Router {
     cfg.device_name = snap.device_name.clone();
     cfg.download_dir = snap.download_dir.clone();
     cfg.pin = None;
-    cfg.global.smash_api_key = None;
     cfg.global.storage_to_token = None;
     cfg.global.storage_to_visitor_token = None;
     let _ = cfg_path;
@@ -162,6 +163,8 @@ pub fn demo_router(cfg: Config, cfg_path: PathBuf) -> Router {
         .route("/api/events", get(events))
         .route("/api/devices", get(|State(d): State<Demo>| async move { Json(d.snap.devices.clone()).into_response() }))
         .route("/api/history", get(|| async { Json(Vec::<crate::history::Record>::new()).into_response() }).delete(ok))
+        .route("/api/logs", get(api_logs).delete(api_logs_clear))
+        .route("/api/logs/text", get(api_logs_text))
         .route(
             "/api/config",
             get(|State(d): State<Demo>| async move { Json(serde_json::json!({ "path": d.cfg_path, "config": d.cfg })).into_response() })
@@ -241,13 +244,52 @@ async fn api_history_clear(State(e): St) -> Response {
 }
 
 #[derive(Deserialize, Default)]
+struct LogsQuery {
+    /// Only entries with `seq > after` (poll for new lines).
+    #[serde(default)]
+    after: u64,
+    /// Minimum level: `error` | `warn` | `info` | `debug` | `trace`.
+    #[serde(default)]
+    level: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// `GET /api/logs?after=<seq>&level=warn&limit=500` → `{ entries, last_seq, total, file }`.
+/// Independent of the engine state so it also works in `gui --demo`.
+async fn api_logs(Query(q): Query<LogsQuery>) -> Response {
+    let entries = crate::logbuf::entries(q.after, q.level.as_deref(), q.limit.unwrap_or(500).clamp(1, crate::logbuf::CAPACITY));
+    Json(serde_json::json!({
+        "entries": entries,
+        "last_seq": crate::logbuf::last_seq(),
+        "total": crate::logbuf::total(),
+        "capacity": crate::logbuf::CAPACITY,
+        "file": crate::logbuf::file_path(),
+    }))
+    .into_response()
+}
+
+/// `GET /api/logs/text?level=` → plain text dump (download / share).
+async fn api_logs_text(Query(q): Query<LogsQuery>) -> Response {
+    let body = crate::logbuf::dump(q.level.as_deref());
+    ([(header::CONTENT_TYPE, "text/plain; charset=utf-8"), (header::CONTENT_DISPOSITION, "attachment; filename=\"uni-share.log\"")], body).into_response()
+}
+
+async fn api_logs_clear() -> Response {
+    let n = crate::logbuf::clear();
+    tracing::info!("registro en memoria vaciado ({n} líneas)");
+    Json(serde_json::json!({ "deleted": n })).into_response()
+}
+
+#[derive(Deserialize, Default)]
 struct AcceptReq {
     #[serde(default)]
     dest: Option<String>,
 }
 async fn api_accept(State(e): St, AxPath(id): AxPath<String>, body: Option<Json<AcceptReq>>) -> Response {
     let dest = body.and_then(|Json(b)| b.dest).filter(|d| !d.trim().is_empty()).map(PathBuf::from);
-    res_json(e.accept_offer(&id, dest).await.map(|j| serde_json::json!({ "job": j })))
+    let r = e.accept_offer(&id, dest).await;
+    job_created(&e, r).await
 }
 async fn api_reject(State(e): St, AxPath(id): AxPath<String>) -> Response {
     res_json(e.reject_offer(&id).await.map(|_| serde_json::json!({ "ok": true })))
@@ -269,14 +311,29 @@ async fn api_job_remove(State(e): St, AxPath(id): AxPath<u64>) -> Response {
 async fn api_jobs_clear(State(e): St) -> Response {
     Json(serde_json::json!({ "removed": e.clear_finished().await })).into_response()
 }
+/// `{ "job": <Job>, "job_id": n }` — the full job so the clients can show it at once
+/// (the mobile GUI used to read `r.job.id` from a bare number and got `undefined`,
+/// so the new transfer only showed up after a manual reload).
+async fn job_created(e: &Engine, r: Result<u64>) -> Response {
+    match r {
+        Ok(id) => {
+            let job = e.job(id).await;
+            Json(serde_json::json!({ "job": job, "job_id": id })).into_response()
+        }
+        Err(err) => bad(err),
+    }
+}
 async fn api_send_lan(State(e): St, Json(r): Json<SendLanReq>) -> Response {
-    res_json(e.send_lan(r).await.map(|j| serde_json::json!({ "job": j })))
+    let r = e.send_lan(r).await;
+    job_created(&e, r).await
 }
 async fn api_send_global(State(e): St, Json(r): Json<SendGlobalReq>) -> Response {
-    res_json(e.send_global(r).await.map(|j| serde_json::json!({ "job": j })))
+    let r = e.send_global(r).await;
+    job_created(&e, r).await
 }
 async fn api_download(State(e): St, Json(r): Json<DownloadReq>) -> Response {
-    res_json(e.download(r).await.map(|j| serde_json::json!({ "job": j })))
+    let r = e.download(r).await;
+    job_created(&e, r).await
 }
 
 #[derive(Deserialize)]
@@ -333,7 +390,6 @@ async fn api_qr(Query(q): Query<QrQuery>) -> Response {
 
 async fn api_config_get(State(e): St) -> Response {
     let mut cfg = e.config().await;
-    cfg.global.smash_api_key = cfg.global.smash_api_key.map(|_| "••••••".into());
     cfg.global.storage_to_token = cfg.global.storage_to_token.map(|_| "••••••".into());
     Json(serde_json::json!({ "path": e.cfg_path, "config": cfg })).into_response()
 }

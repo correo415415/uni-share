@@ -16,7 +16,7 @@ mod commands_ticket;
 #[command(
     name = "uni-share",
     version,
-    about = "Hybrid file sharing: LAN (mDNS + TLS 1.3) and global links (storage.to / Smash)",
+    about = "Hybrid file sharing: LAN (mDNS + TLS 1.3) and global links (storage.to)",
     long_about = None,
     propagate_version = true
 )]
@@ -41,7 +41,8 @@ pub struct Cli {
 pub enum Command {
     /// Send a file or folder to a device on the local network
     SendLan(SendLanArgs),
-    /// Upload a file or folder to storage.to (or Smash) and get a share link
+    /// Upload a file or folder to storage.to and get a share link
+    #[command(visible_alias = "share", visible_alias = "up")]
     SendGlobal(SendGlobalArgs),
     /// Listen for incoming LAN transfers
     Receive(ReceiveArgs),
@@ -80,6 +81,9 @@ pub struct ScanArgs {
     /// Do not use ClamAV even if it is installed
     #[arg(long)]
     pub no_clamav: bool,
+    /// Do not run YARA rules (feature `yara`; rules in <data_dir>/rules)
+    #[arg(long)]
+    pub no_yara: bool,
     /// Only report: never rename or delete dangerous files (default for this command)
     #[arg(long, conflicts_with_all = ["quarantine", "delete"])]
     pub report: bool,
@@ -117,14 +121,14 @@ pub struct SendLanArgs {
 pub struct SendGlobalArgs {
     /// File or folder to upload
     pub path: PathBuf,
-    /// Backend: storage_to | smash (default from config)
+    /// Backend: storage_to (default from config)
     #[arg(long)]
     pub backend: Option<String>,
     /// Protect the share with a password (4-100 chars)
     #[arg(long)]
     pub password: Option<String>,
-    /// Expiry in days (1-7 anonymous)
-    #[arg(long)]
+    /// How long the link stays up, in days (storage.to accepts 1-7; default from config, 3 on the service)
+    #[arg(long, short = 'e', visible_alias = "days", value_parser = clap::value_parser!(u32).range(1..=7))]
     pub expiry_days: Option<u32>,
     /// Maximum downloads before auto-delete (1-1000)
     #[arg(long)]

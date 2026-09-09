@@ -5,6 +5,8 @@
 'use strict';
 
 // ───────────────────────── helpers ─────────────────────────
+/** Retention accepted by storage.to for anonymous links (verified against the API: 8+ rejected, permanent = premium). */
+const EXPIRY_DAYS = [1, 2, 3, 4, 5, 6, 7];
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -23,10 +25,28 @@ function fmtS(n) { return n ? fmtB(n) + '/s' : '—'; }
 function fmtT(s) { if (s == null) return '—'; s = Math.round(s); if (s < 60) return s + ' s'; if (s < 3600) return Math.floor(s / 60) + ' min ' + (s % 60) + ' s'; return Math.floor(s / 3600) + ' h ' + Math.floor((s % 3600) / 60) + ' min'; }
 function fmtAgo(ms) { if (!ms) return ''; const d = Math.max(0, Date.now() - ms) / 1000; if (d < 45) return 'ahora'; if (d < 3600) return Math.round(d / 60) + ' min'; if (d < 86400) return Math.round(d / 3600) + ' h'; return Math.round(d / 86400) + ' d'; }
 function fmtDate(ms) { if (!ms) return '—'; const d = new Date(ms); return d.toLocaleDateString('es', { day: '2-digit', month: 'short' }) + ' ' + d.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }); }
-const KIND = { lan_send: 'Envío LAN', lan_receive: 'Recepción LAN', global_upload: 'Subida (link)', download: 'Descarga' };
+// ── i18n preparation ──
+// Shared label tables flow through `T`. Only `es` exists today; a second locale is a new
+// object with the same keys (missing keys fall back to `es`). Locale: `#…&lang=xx`, then
+// `localStorage.mlang`, then `navigator.language`.
+const I18N = {
+  es: {
+    kind: { lan_send: 'Envío LAN', lan_receive: 'Recepción LAN', global_upload: 'Subida (link)', download: 'Descarga' },
+    state: { queued: 'En cola', running: 'En curso', completed: 'Completada', failed: 'Fallida', cancelled: 'Cancelada' },
+    scan: { info: 'Limpio', warning: 'Aviso', danger: 'PELIGRO' },
+    titles: { home: '', jobs: 'Transferencias', devices: 'Dispositivos', share: 'Compartir', settings: 'Ajustes' },
+    views: { history: 'Historial', security: 'Seguridad', logs: 'Registro', about: 'Acerca de' },
+    swipe: { cancel: 'Cancelar', remove: 'Quitar' },
+    ptr: { pull: 'Desliza para buscar dispositivos', release: 'Suelta para buscar', busy: 'Buscando…' },
+  },
+};
+const LANG = (() => { const q = new URLSearchParams(location.hash.replace(/^#/, '').replace(/^([a-z]+)(&|$)/, 'tab=$1$2')).get('lang'); const l = (q || localStorage.mlang || navigator.language || 'es').slice(0, 2).toLowerCase(); return I18N[l] ? l : 'es'; })();
+const T = Object.assign({}, I18N.es, I18N[LANG]);
+document.documentElement.lang = LANG;
+const KIND = T.kind;
 const KICON = { lan_send: ['send', 'up'], lan_receive: ['inbox', 'down'], global_upload: ['ul', 'up'], download: ['dl', 'down'] };
-const STATE = { queued: 'En cola', running: 'En curso', completed: 'Completada', failed: 'Fallida', cancelled: 'Cancelada' };
-const SCAN = { info: ['ok', 'Limpio'], warning: ['warn', 'Aviso'], danger: ['danger', 'PELIGRO'] };
+const STATE = T.state;
+const SCAN = { info: ['ok', T.scan.info], warning: ['warn', T.scan.warning], danger: ['danger', T.scan.danger] };
 const isActive = j => j.state === 'queued' || j.state === 'running';
 const pct = j => j.total ? Math.min(100, Math.round(j.done * 100 / j.total)) : (j.state === 'completed' ? 100 : 0);
 
@@ -45,15 +65,15 @@ async function openScanned(text) {
 }
 function androidEvent(kind, payload) {
   if (kind === 'toast') return toast(String(payload), 'info');
-  if (kind === 'folder') { toast(payload ? `Carpeta de descargas: ${payload}` : 'Se usará la carpeta privada de la app', 'ok'); if (S.tab === 'settings') render(); return; }
+  if (kind === 'folder') { toast(payload ? `Carpeta de descargas: ${payload}` : 'Se usará Downloads/unishare', 'ok'); if (S.tab === 'settings') render(); return; }
   if (kind === 'picked') { const f = pickWaiter; pickWaiter = null; if (f) f(String(payload)); else openNew('lan', { path: String(payload) }); return; }
   if (kind === 'exported') return toast(`«${payload.name}»: ${payload.files} archivo(s) copiados a ${payload.folder}`, 'ok', 6000);
 }
 function exportToSaf(j) { if (!mobile || !j.saved || !j.saved.length) return; try { Android.exportJob(j.id, JSON.stringify(j.saved), j.name); } catch { /* bridge unavailable */ } }
-// Classic script: top-level function declarations (openScanned, androidEvent, openNew) are already window globals for the Kotlin shell.
+// Classic script: top-level function declarations (openScanned, androidEvent, openNew, openShared) are already window globals for the Kotlin shell.
 
 // ───────────────────────── state & API ─────────────────────────
-const S = { data: null, cfg: null, online: false, tab: localStorage.mtab || 'home', stack: [], filter: 'all', q: '', history: null, lastStates: new Map(), lastPending: new Set(), lastNotice: 0, scanning: false };
+const S = { data: null, cfg: null, online: false, tab: localStorage.mtab || 'home', stack: [], filter: 'all', q: '', history: null, lastStates: new Map(), lastPending: new Set(), lastNotice: 0, scanning: false, logs: null, logSeq: 0, logLevel: localStorage.mloglevel || 'info', logQ: '', logTimer: 0 };
 async function api(path, { method = 'GET', body } = {}) {
   const r = await fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
   const txt = await r.text(); let j = null; try { j = txt ? JSON.parse(txt) : null; } catch { j = { raw: txt }; }
@@ -77,9 +97,23 @@ function applyState(d) {
   S.lastPending = pend;
   for (const n of d.notices || []) if (n.id > S.lastNotice) { toast(n.text, n.kind === 'danger' ? 'err' : n.kind === 'warning' ? 'warn' : 'info', 8000); S.lastNotice = n.id; }
   if (S.lastNotice) api('/api/notices/ack', { method: 'POST', body: { up_to: S.lastNotice } }).catch(() => {});
-  S.data = d;
+  const prev = S.data; S.data = d;
   const act = d.jobs.filter(isActive).length + d.pending.length; const dot = $('#tab-dot'); dot.hidden = !act; dot.textContent = act > 9 ? '9+' : act;
-  render();
+  if (first) render(); else refreshView(prev, d);
+}
+function refreshView(prev, d) {
+  const top = S.stack[S.stack.length - 1];
+  if (top && top.kind === 'job') { const j = job(top.id); if (j && isActive(j)) return patchJobDetail(j); return render({ quiet: true }); }
+  if (top) return; // history / security / about do not depend on the snapshot
+  refresh(prev, d);
+}
+function patchJobDetail(j) {
+  const p = pct(j); const root = $('#page');
+  const bar = root.querySelector('.bigprog .bar>i'); if (!bar) return render({ quiet: true });
+  bar.style.width = p + '%';
+  const nums = root.querySelectorAll('.bigprog .nums span'); if (nums[0]) nums[0].textContent = `${fmtB(j.done)} / ${fmtB(j.total)}`; if (nums[1]) nums[1].textContent = `${p}% · ${fmtS(j.speed)}${j.eta != null ? ' · ' + fmtT(j.eta) : ''}`;
+  const cf = root.querySelector('.bigprog .trunc'); if (cf) cf.textContent = j.current_file;
+  const log = root.querySelector('pre.log'); if (log && j.log) { const t = j.log.slice(-60).join('\n'); if (log.textContent !== t) { log.textContent = t; log.scrollTop = log.scrollHeight; } }
 }
 let es = null, pollT = null;
 function connect() {
@@ -168,24 +202,48 @@ function go(tab) { S.tab = tab; localStorage.mtab = tab; S.stack = []; render();
 function push(view) { S.stack.push(view); render(); syncBack(); }
 function pop() { if (S.stack.length) { S.stack.pop(); render(); syncBack(); } }
 
-const TITLES = { home: '', jobs: 'Transferencias', devices: 'Dispositivos', share: 'Compartir', settings: 'Ajustes' };
-function render() {
+const TITLES = T.titles;
+let renderKey = '';
+function render(opts = {}) {
   const page = $('#page'); const top = S.stack[S.stack.length - 1];
+  // Enter animation only when the view actually changes (tab/stack), never on data refreshes → no flicker.
+  const key = top ? `${top.kind}:${top.id || ''}` : `tab:${S.tab}`;
+  const navigated = key !== renderKey; renderKey = key;
+  page.classList.toggle('anim', navigated && !opts.quiet);
   const title = top ? top.title : TITLES[S.tab];
   $('#t-title').textContent = title || ''; $('#t-brand').hidden = !!title; $('#t-back').hidden = !top; $('#t-qr').hidden = !mobile || !!top;
   $$('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === S.tab));
   const fabOn = !top && (S.tab === 'home' || S.tab === 'jobs' || S.tab === 'share'); $('#fab').classList.toggle('hide', !fabOn); page.classList.toggle('no-fab', !fabOn);
-  const y = page.scrollTop;
+  const y = page.scrollTop; const focused = document.activeElement && page.contains(document.activeElement) ? document.activeElement.id : null;
   page.innerHTML = '';
   if (!S.data) { page.append(h('div', { class: 'empty' }, h('span', { html: ico('wifi') }), h('b', {}, 'Conectando con el motor…'), h('p', {}, 'Si tarda, comprueba que uni-share está en ejecución.'))); return; }
   page.append(top ? renderStack(top) : SCREENS[S.tab]());
   wire(page, top);
-  if (top && top.keepScroll) page.scrollTop = y;
+  if (!navigated) { page.scrollTop = y; if (focused) { const f = document.getElementById(focused); if (f) f.focus({ preventScroll: true }); } }
+  else if (!(top && top.keepScroll)) page.scrollTop = 0;
+}
+/** Cheap refresh for SSE frames: when the set of jobs/offers is unchanged, patch progress in place. */
+function refresh(prev, d) {
+  const sig = x => (x.jobs.map(j => j.id + j.state).join(',') + '|' + x.pending.map(o => o.transfer_id).join(',') + '|' + x.devices.length);
+  if (!prev || sig(prev) !== sig(d)) return render({ quiet: true });
+  $('#page').classList.remove('anim');
+  let patched = 0;
+  for (const j of d.jobs) {
+    if (!isActive(j)) continue;
+    const row = $(`#page [data-job="${j.id}"]`); if (!row) continue;
+    const p = pct(j); const bar = row.querySelector('.bar>i'); if (bar) bar.style.width = p + '%';
+    const pc = row.querySelector('.pct'); if (pc) pc.textContent = j.state === 'queued' ? 'cola' : p + '%';
+    const sub = row.querySelector('.sub'); if (sub) sub.textContent = `${fmtB(j.done)} / ${fmtB(j.total)}${j.speed ? ' · ' + fmtS(j.speed) : ''}${j.eta != null ? ' · ' + fmtT(j.eta) : ''}`;
+    patched++;
+  }
+  const sp = $('#page .speeds'); if (sp) { const [dn, up] = sp.querySelectorAll('span'); if (dn) dn.innerHTML = ico('down') + fmtS(d.speed_down); if (up) up.innerHTML = ico('up') + fmtS(d.speed_up); }
+  if (!patched && d.jobs.some(isActive) && $$('#page [data-job]').length === 0) render({ quiet: true });
 }
 function renderStack(v) {
   if (v.kind === 'job') return viewJob(v.id);
   if (v.kind === 'history') return viewHistory();
   if (v.kind === 'security') return viewSecurity();
+  if (v.kind === 'logs') return viewLogs();
   if (v.kind === 'about') return viewAbout();
   return h('div');
 }
@@ -215,14 +273,14 @@ function empty(icon, title, text, action) {
   return h('div', { class: 'empty' }, h('span', { html: ico(icon) }), h('b', {}, title), h('p', {}, text), action ? h('button', { class: 'btn primary', style: 'margin-top:10px', 'data-empty-act': action[1], html: ico(action[2] || 'plus') + action[0] }) : null);
 }
 function wireCommon(root) {
-  $$('[data-job]', root).forEach(el => el.onclick = () => { const id = Number(el.dataset.job); const j = job(id); if (j) push({ kind: 'job', id, title: KIND[j.kind] || 'Transferencia' }); });
+  $$('[data-job]', root).forEach(el => el.onclick = () => { const id = Number(el.dataset.job); const j = job(id); if (j) push({ kind: 'job', id, title: KIND[j.kind] || 'Transferencia', keepScroll: true }); });
   $$('[data-offer]', root).forEach(card => {
     const id = card.dataset.offer;
-    $$('[data-act]', card).forEach(b => b.onclick = async e => { e.stopPropagation(); b.disabled = true; try { if (b.dataset.act === 'accept') { const r = await api(`/api/offers/${encodeURIComponent(id)}/accept`, { method: 'POST', body: {} }); toast('Recibiendo…', 'ok'); if (r.job) push({ kind: 'job', id: r.job.id, title: 'Recepción LAN' }); } else { await api(`/api/offers/${encodeURIComponent(id)}/reject`, { method: 'POST' }); toast('Rechazada', 'info'); } } catch (err) { toast(err.message, 'err'); b.disabled = false; } });
+    $$('[data-act]', card).forEach(b => b.onclick = async e => { e.stopPropagation(); b.disabled = true; try { if (b.dataset.act === 'accept') { const r = await api(`/api/offers/${encodeURIComponent(id)}/accept`, { method: 'POST', body: {} }); toast('Recibiendo…', 'ok'); jobCreated(r, 'Recepción LAN'); } else { await api(`/api/offers/${encodeURIComponent(id)}/reject`, { method: 'POST' }); toast('Rechazada', 'info'); } } catch (err) { toast(err.message, 'err'); b.disabled = false; } });
   });
   $$('[data-empty-act]', root).forEach(b => b.onclick = () => { const a = b.dataset.emptyAct; if (a === 'scan') return mobile ? Android.scanQr() : openNew('download'); if (a === 'qr') return go('share'); openNew(a === 'new' ? 'lan' : a); });
   $$('[data-go]', root).forEach(b => b.onclick = () => go(b.dataset.go));
-  $$('[data-push]', root).forEach(b => b.onclick = () => push({ kind: b.dataset.push, title: b.dataset.title || { history: 'Historial', security: 'Seguridad', about: 'Acerca de' }[b.dataset.push] }));
+  $$('[data-push]', root).forEach(b => b.onclick = () => push({ kind: b.dataset.push, title: b.dataset.title || T.views[b.dataset.push] }));
   $$('[data-copy]', root).forEach(b => b.onclick = () => copy(b.dataset.copy, b.dataset.what || 'Copiado'));
 }
 
@@ -237,7 +295,7 @@ function viewHome() {
     h('div', { class: 'body' }, h('b', {}, d.device_name), h('div', { class: 'st' }, h('i', { class: online ? '' : 'off' }), online ? `Visible en la red · ${d.lan_addr}` : 'Sin red local'), h('code', {}, `huella ${d.fingerprint}${d.pin_required ? ' · PIN' : ''}`)),
     h('div', { class: 'speeds' }, h('span', { class: 'd', html: ico('down') + fmtS(d.speed_down) }), h('span', { class: 'u', html: ico('up') + fmtS(d.speed_up) }))));
   root.append(h('div', { class: 'quick' },
-    qa('lan', 'send', 'Enviar LAN'), qa('receive', 'inbox', 'Recibir', 'amber'), qa('qr', 'qr', mobile ? 'Escanear' : 'Mi QR'), qa('download', 'dl', 'Descargar')));
+    qa('lan', 'send', 'Enviar LAN'), qa('global', 'globe', 'Subir link'), qa('receive', 'inbox', 'Recibir', 'amber'), qa('qr', 'qr', mobile ? 'Escanear' : 'Mi QR'), qa('download', 'dl', 'Descargar')));
   if (d.pending.length) { root.append(h('div', { class: 'sec' }, `Solicitudes (${d.pending.length})`)); d.pending.forEach(o => root.append(offerCard(o))); }
   if (act.length) { root.append(h('div', { class: 'sec' }, `En curso (${act.length})`, h('span', { class: 'sp' }), h('button', { 'data-go': 'jobs', html: 'Ver todas ' + ico('chev') })), h('div', { class: 'list' }, act.map(jobRow))); }
   if (recent.length) { root.append(h('div', { class: 'sec' }, 'Recientes', h('span', { class: 'sp' }), h('button', { 'data-push': 'history', html: 'Historial ' + ico('chev') })), h('div', { class: 'list' }, recent.map(jobRow))); }
@@ -248,7 +306,7 @@ function qa(q, icon, label, cls = '') { return h('button', { class: 'qa', 'data-
 function wireHome(root) {
   $$('[data-q]', root).forEach(b => b.onclick = () => {
     const q = b.dataset.q;
-    if (q === 'lan') return openNew('lan'); if (q === 'download') return openNew('download');
+    if (q === 'lan') return openNew('lan'); if (q === 'global') return openNew('global'); if (q === 'download') return openNew('download');
     if (q === 'qr') return mobile ? Android.scanQr() : go('share');
     if (q === 'receive') return receiveSheet();
   });
@@ -281,7 +339,7 @@ function viewJobs() {
 function wireJobs(root) {
   const q = $('#q', root); if (q) { q.oninput = () => { S.q = q.value; const pos = q.selectionStart; render(); const nq = $('#q'); nq.focus(); try { nq.setSelectionRange(pos, pos); } catch { /* search inputs on some browsers */ } }; }
   $$('[data-f]', root).forEach(b => b.onclick = () => { S.filter = b.dataset.f; render(); });
-  const c = $('#clear-done', root); if (c) c.onclick = async () => { if (await confirmSheet('Se quitan de la lista las transferencias terminadas (el historial se conserva).', 'Quitar')) { await api('/api/jobs/clear-finished', { method: 'POST' }).catch(e => toast(e.message, 'err')); } };
+  const c = $('#clear-done', root); if (c) c.onclick = async () => { if (await confirmSheet('Se quitan de la lista las transferencias terminadas (el historial se conserva).', 'Quitar')) { try { await api('/api/jobs/clear-finished', { method: 'POST' }); S.data.jobs = S.data.jobs.filter(isActive); render(); toast('Lista limpia', 'ok', 1500); } catch (e) { toast(e.message, 'err'); } } };
 }
 
 function viewJob(id) {
@@ -295,6 +353,7 @@ function viewJob(id) {
     h('div', { class: 'nums' }, h('span', {}, `${fmtB(j.done)} / ${fmtB(j.total)}`), h('span', {}, act ? `${p}% · ${fmtS(j.speed)}${j.eta != null ? ' · ' + fmtT(j.eta) : ''}` : `${p}%`)),
     j.current_file && act ? h('div', { class: 'hint trunc', style: 'margin-top:8px' }, j.current_file) : null,
     j.message ? h('div', { class: `alert ${j.state === 'failed' ? 'err' : ''}`, style: 'margin:10px 0 0', html: ico(j.state === 'failed' ? 'x' : 'info') + `<span>${esc(j.message)}</span>` }) : null));
+  root.append(scanCard(j));
   const btns = h('div', { class: 'btns', style: 'margin:0 0 12px' });
   if (act) btns.append(h('button', { class: 'btn danger', 'data-a': 'cancel', html: ico('stop') + 'Cancelar' }));
   if (j.link || j.ticket_uri) btns.append(h('button', { class: 'btn primary', 'data-a': 'share', html: ico('share') + 'Compartir' }));
@@ -315,6 +374,30 @@ function viewJob(id) {
   }
   if (j.log && j.log.length) root.append(h('div', { class: 'sec' }, 'Registro'), h('pre', { class: 'log' }, j.log.slice(-60).join('\n')));
   return root;
+}
+/** "Análisis de seguridad" card: verdict, engines and per-file findings (was only in the log). */
+function scanCard(j) {
+  const r = j.scan_report; const frag = document.createDocumentFragment();
+  if (!r) return frag;
+  const sv = SCAN[r.severity] || SCAN.info; const cls = sv[0] === 'danger' ? 'err' : sv[0] === 'warn' ? 'warn' : 'ok';
+  const card = h('div', { class: 'card scan' });
+  card.append(h('h3', {}, 'Análisis de seguridad'));
+  card.append(h('div', { class: `alert ${cls}`, html: ico('shield') + `<span><b>${sv[1]}</b> · ${r.files} archivo${r.files === 1 ? '' : 's'}${r.dangers ? ` · ${r.dangers} peligroso${r.dangers === 1 ? '' : 's'}` : ''}${r.warnings ? ` · ${r.warnings} con avisos` : ''}</span>` }));
+  card.append(h('div', { class: 'hint', style: 'margin-top:6px' }, `${(r.engines || []).join(', ')} · ${(r.duration_ms / 1000).toFixed(1)} s · ${fmtDate(r.at)}`));
+  if (r.findings && r.findings.length) {
+    const list = h('div', { class: 'list findings', style: 'margin-top:8px' });
+    r.findings.slice(0, 30).forEach(f => {
+      const fs = SCAN[f.severity] || SCAN.warning;
+      list.append(h('div', { class: 'row', style: 'align-items:flex-start' }, h('span', { class: `ic ${fs[0]}`, html: ico('shield') }), h('span', { class: 'body' },
+        h('div', { class: 'ttl mono' }, f.path.split('/').pop()), h('div', { class: 'sub' }, `${f.kind} · ${f.path}`),
+        ...f.findings.map(x => h('div', { class: 'sub finding' }, `• ${x.message}`)),
+        f.quarantined ? h('div', { class: 'sub' }, `En cuarentena: ${f.quarantined}`) : null)));
+    });
+    if (r.findings.length > 30) list.append(h('div', { class: 'row hint' }, `… y ${r.findings.length - 30} más`));
+    card.append(list);
+  } else card.append(h('div', { class: 'hint', style: 'margin-top:6px' }, 'Sin hallazgos: el contenido coincide con la extensión, sin ejecutables disfrazados ni archivos comprimidos anómalos.'));
+  frag.append(card);
+  return frag;
 }
 function wireJob(root, id) {
   const j = job(id); if (!j) return;
@@ -383,7 +466,7 @@ function viewSettings() {
   const nav = (id, icon, ttl, sub) => h('button', { class: 'sw', 'data-push': id }, h('span', { class: 'ic', html: ico(icon) }), h('span', { class: 'body' }, h('div', { class: 'ttl' }, ttl), sub ? h('div', { class: 'sub' }, sub) : null), h('span', { class: 'chev', html: ico('chev') }));
   root.append(h('div', { class: 'sec' }, 'Dispositivo'), h('div', { class: 'list' },
     val('device_name', 'devices', 'Nombre visible', c.device_name),
-    mobile ? h('button', { class: 'sw', id: 's-saf' }, h('span', { class: 'ic', html: ico('folder') }), h('span', { class: 'body' }, h('div', { class: 'ttl' }, 'Carpeta de descargas'), h('div', { class: 'sub' }, 'Los archivos recibidos se copian ahí al terminar')), h('span', { class: 'val' }, (ai && ai.downloadTree) || 'privada de la app'), h('span', { class: 'chev', html: ico('chev') }))
+    mobile ? h('button', { class: 'sw', id: 's-saf' }, h('span', { class: 'ic', html: ico('folder') }), h('span', { class: 'body' }, h('div', { class: 'ttl' }, 'Carpeta de descargas'), h('div', { class: 'sub' }, 'Los archivos recibidos se copian ahí al terminar')), h('span', { class: 'val' }, (ai && (ai.downloadTarget || ai.downloadTree)) || 'Downloads/unishare'), h('span', { class: 'chev', html: ico('chev') }))
       : val('download_dir', 'folder', 'Carpeta de descargas', String(c.download_dir)),
     val('rate_limit_mbps', 'up', 'Límite de velocidad', c.rate_limit_mbps ? c.rate_limit_mbps + ' Mbps' : 'sin límite'),
     h('button', { class: 'sw', id: 's-theme' }, h('span', { class: 'ic', html: ico(document.documentElement.dataset.theme === 'light' ? 'sun' : 'moon') }), h('span', { class: 'body' }, h('div', { class: 'ttl' }, 'Tema'), h('div', { class: 'sub' }, 'Solo afecta a esta pantalla')), h('span', { class: 'val' }, document.documentElement.dataset.theme === 'light' ? 'claro' : 'oscuro'), h('span', { class: 'chev', html: ico('chev') }))));
@@ -394,43 +477,46 @@ function viewSettings() {
     sw('compress_folders', 'file', 'Comprimir carpetas', 'Empaqueta carpetas antes de enviar', c.compress_folders)));
   root.append(h('div', { class: 'sec' }, 'Links y tickets'), h('div', { class: 'list' },
     val('backend', 'globe', 'Servicio de subida', c.global.backend),
-    val('expiry_days', 'history', 'Caducidad por defecto', c.global.expiry_days + ' días'),
+    val('expiry_days', 'history', 'Tiempo online por defecto', `${c.global.expiry_days} día${c.global.expiry_days > 1 ? 's' : ''} · máx. 7`),
     val('parallel_parts', 'ul', 'Partes en paralelo', String(c.global.parallel_parts)),
     sw('sign_tickets', 'shield', 'Firmar tickets', `Ed25519 · ${d.signer_fingerprint}`, c.sign_tickets)));
   root.append(h('div', { class: 'sec' }, 'Más'), h('div', { class: 'list' },
     nav('security', 'shield', 'Seguridad y análisis', d.scan_enabled ? `Análisis activado${d.clamav ? ' · ' + d.clamav : ''}` : 'Análisis desactivado'),
     nav('history', 'history', 'Historial', 'Todas las transferencias registradas'),
+    nav('logs', 'list', 'Registro', 'Mensajes del motor y de la app para diagnosticar problemas'),
     nav('about', 'info', 'Acerca de uni-share', `v${d.version}${ai ? ' · app ' + ai.version : ''}`)));
   root.append(h('p', { class: 'hint', style: 'text-align:center;margin:6px 0 0;font-family:var(--mono);font-size:var(--fs-xs)' }, S.cfgPath || ''));
   return root;
 }
 async function patch(body) { try { const r = await api('/api/config', { method: 'PUT', body }); S.cfg = r.config || (await api('/api/config')).config; render(); toast('Guardado', 'ok', 1500); } catch (e) { toast(e.message, 'err'); } }
-function toggleSetting(id) { patch({ [id]: !S.cfg[id] }); }
+// scan_* switches live in the state snapshot (S.data), the rest in the config document (S.cfg).
+function toggleSetting(id) { const cur = (S.cfg && id in S.cfg) ? S.cfg[id] : (S.data || {})[id]; patch({ [id]: !cur }); }
 async function editSetting(id) {
   const c = S.cfg;
   if (id === 'device_name') { const v = await promptSheet('Nombre visible', { label: 'Así te verán los demás dispositivos', value: c.device_name }); if (v != null && v.trim()) patch({ device_name: v.trim() }); }
   else if (id === 'download_dir') { const p = await pickPath({ dirsOnly: true, start: String(c.download_dir), title: 'Carpeta de descargas' }); if (p) patch({ download_dir: p }); }
   else if (id === 'rate_limit_mbps') { const v = await promptSheet('Límite de velocidad', { label: 'Mbps (0 = sin límite)', value: c.rate_limit_mbps || 0, type: 'number' }); if (v != null) patch({ rate_limit_mbps: Math.max(0, Number(v) || 0) }); }
   else if (id === 'pin') { const v = await promptSheet('PIN de recepción', { label: 'Deja vacío para quitarlo', value: '', type: 'password', sub: 'Quien te envíe tendrá que escribirlo' }); if (v != null) patch({ pin: v }); }
-  else if (id === 'expiry_days') { const v = await promptSheet('Caducidad de los links', { label: 'Días', value: c.global.expiry_days, type: 'number' }); if (v != null) patch({ expiry_days: Math.max(1, Number(v) || 7) }); }
+  else if (id === 'expiry_days') { const v = await promptSheet('Tiempo que el link está online', { label: 'Días (1-7)', value: c.global.expiry_days, type: 'number', sub: 'storage.to conserva los archivos anónimos como máximo 7 días; después el link deja de funcionar.' }); if (v != null) patch({ expiry_days: Math.min(7, Math.max(1, Number(v) || 7)) }); }
   else if (id === 'parallel_parts') { const v = await promptSheet('Partes en paralelo', { label: 'Conexiones simultáneas por subida', value: c.global.parallel_parts, type: 'number' }); if (v != null) patch({ parallel_parts: Math.min(16, Math.max(1, Number(v) || 4)) }); }
   else if (id === 'backend') toast('El servicio de subida se cambia en config.toml ([global].backend)', 'info', 5000);
 }
 function wireSettings(root) {
   $$('[data-sw]', root).forEach(b => b.onclick = () => toggleSetting(b.dataset.sw));
   $$('[data-edit]', root).forEach(b => b.onclick = () => editSetting(b.dataset.edit));
-  const saf = $('#s-saf', root); if (saf) saf.onclick = () => menuSheet('Carpeta de descargas', [{ icon: 'folder', label: 'Elegir carpeta…', sub: 'Selector del sistema (SAF)', fn: () => Android.pickDownloadFolder() }, { icon: 'x', label: 'Usar la carpeta privada de la app', fn: () => { Android.clearDownloadFolder(); render(); } }]);
+  const saf = $('#s-saf', root); if (saf) saf.onclick = () => menuSheet('Carpeta de descargas', [{ icon: 'folder', label: 'Otra carpeta…', sub: 'Selector del sistema. Android no permite elegir la raíz de Descargas: elige o crea una subcarpeta', fn: () => Android.pickDownloadFolder() }, { icon: 'dl', label: 'Usar Downloads/unishare (por defecto)', sub: 'Carpeta creada automáticamente dentro de Descargas del dispositivo, visible en Archivos', fn: () => { Android.clearDownloadFolder(); render(); } }]);
   $('#s-theme', root).onclick = toggleTheme;
 }
 
 // ── security ──
 function viewSecurity() {
   const d = S.data; const c = S.cfg || {}; const root = h('div');
-  root.append(h('div', { class: 'alert', html: ico('shield') + '<span>Todo lo recibido se analiza antes de darlo por bueno: tipo real del archivo, extensiones dobles, ejecutables, scripts, archivos con macros y, si está instalado, ClamAV.</span>' }));
+  root.append(h('div', { class: 'alert', html: ico('shield') + '<span>Todo lo recibido se analiza antes de darlo por bueno: tipo real del archivo, extensiones dobles, ejecutables, scripts, archivos con macros y, si están disponibles, ClamAV y tus reglas YARA.</span>' }));
   const sw = (id, ttl, sub, on) => h('button', { class: 'sw', 'data-sw': id, role: 'switch', 'aria-checked': on ? 'true' : 'false' }, h('span', { class: 'body' }, h('div', { class: 'ttl' }, ttl), sub ? h('div', { class: 'sub' }, sub) : null), h('span', { class: `tg${on ? ' on' : ''}` }));
   root.append(h('div', { class: 'sec' }, 'Análisis'), h('div', { class: 'list' },
     sw('scan_enabled', 'Analizar lo recibido', 'Recepciones LAN y descargas', d.scan_enabled),
     sw('scan_clamav', 'Usar ClamAV', d.clamav ? `Detectado: ${d.clamav}` : 'No se ha encontrado clamscan/clamdscan', d.scan_clamav),
+    sw('scan_yara', 'Usar reglas YARA', `${d.yara || 'yara'} · *.yar en ${d.yara_rules_dir || 'rules/'}`, d.scan_yara),
     h('div', { class: 'sw' }, h('span', { class: 'body' }, h('div', { class: 'ttl' }, 'Si hay peligro'), h('div', { class: 'sub' }, 'Qué hacer con un archivo marcado como peligroso')),
       h('select', { id: 's-danger', style: 'height:36px;border-radius:6px;background:var(--bg-3);color:var(--fg);border:1px solid var(--line);padding:0 8px' }, ...[['report', 'Solo avisar'], ['quarantine', 'Cuarentena'], ['delete', 'Eliminar']].map(([v, l]) => h('option', { value: v, selected: d.scan_on_danger === v }, l))))));
   root.append(h('div', { class: 'sec' }, 'Identidad'), h('div', { class: 'card' }, h('dl', { class: 'kv' },
@@ -474,6 +560,57 @@ function wireHistory(root) {
     menuSheet(r.name, items); });
 }
 
+// ── logs (engine + Android shell) ──
+const LOGLV = { error: ['err', 'Errores'], warn: ['warn', 'Avisos'], info: ['info', 'Info'], debug: ['dbg', 'Depuración'], trace: ['dbg', 'Todo'] };
+async function loadLogs(incremental = false) {
+  try {
+    const after = incremental && S.logs ? S.logSeq : 0;
+    const r = await api(`/api/logs?after=${after}&level=${S.logLevel === 'trace' ? '' : S.logLevel}&limit=${after ? 500 : 800}`);
+    if (!incremental || !S.logs) S.logs = r.entries; else if (r.entries.length) S.logs = S.logs.concat(r.entries).slice(-2000);
+    S.logSeq = r.last_seq || S.logSeq; S.logFile = r.file; S.logTotal = r.total;
+    if (!incremental || r.entries.length) { const top = S.stack[S.stack.length - 1]; if (top && top.kind === 'logs') render({ quiet: true }); }
+  } catch (e) { if (!incremental) toast(e.message, 'err'); }
+}
+function fmtLogTs(ms) { const d = new Date(ms); return d.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + '.' + String(d.getMilliseconds()).padStart(3, '0'); }
+function shortTarget(t) { return (t || '').replace(/^uni_share::/, '').replace(/^android::/, 'app·'); }
+function viewLogs() {
+  const root = h('div');
+  if (S.logs == null) { loadLogs(); root.append(empty('list', 'Cargando registro…', '')); return root; }
+  const chips = h('div', { class: 'chips' });
+  for (const [k, [, label]] of Object.entries(LOGLV)) chips.append(h('button', { class: `chip${S.logLevel === k ? ' active' : ''}`, 'data-lv': k }, label));
+  root.append(chips);
+  root.append(h('div', { class: 'search', style: 'margin-bottom:10px' }, h('span', { html: ico('search') }), h('input', { id: 'log-q', type: 'search', placeholder: 'Filtrar mensajes…', value: S.logQ, enterkeyhint: 'search' })));
+  const q = S.logQ.trim().toLowerCase();
+  const rows = S.logs.filter(e => !q || e.message.toLowerCase().includes(q) || e.target.toLowerCase().includes(q));
+  const n = rows.length;
+  root.append(h('div', { class: 'hint', style: 'margin:0 0 8px' }, `${n} línea${n === 1 ? '' : 's'}${S.logTotal ? ` · ${S.logTotal} desde el arranque` : ''}${S.logFile ? ' · fichero: ' + S.logFile : ''}`));
+  if (!n) root.append(empty('list', 'Nada que mostrar', q ? 'Ningún mensaje coincide con el filtro.' : 'Con este nivel no hay mensajes todavía.'));
+  else {
+    const pre = h('div', { class: 'loglist', id: 'loglist' });
+    for (const e of rows.slice(-600)) pre.append(h('div', { class: `ll ${e.level}` }, h('span', { class: 'ts' }, fmtLogTs(e.ts)), h('span', { class: 'lv' }, e.level.toUpperCase().slice(0, 5)), h('span', { class: 'tg' }, shortTarget(e.target)), h('span', { class: 'msg' }, e.message)));
+    root.append(pre);
+  }
+  root.append(h('div', { class: 'btns', style: 'margin-top:12px' },
+    h('button', { class: 'btn', id: 'log-refresh', html: ico('refresh') + 'Actualizar' }),
+    h('button', { class: 'btn', id: 'log-copy', html: ico('copy') + 'Copiar' }),
+    h('button', { class: 'btn', id: 'log-share', html: ico('share') + 'Compartir' }),
+    h('button', { class: 'btn ghost', id: 'log-clear', html: ico('trash') + 'Vaciar' })));
+  return root;
+}
+function wireLogs(root) {
+  if (!$('#log-refresh', root)) return; // still loading
+  $$('[data-lv]', root).forEach(b => b.onclick = () => { S.logLevel = b.dataset.lv; localStorage.mloglevel = S.logLevel; S.logs = null; render({ quiet: true }); });
+  const q = $('#log-q', root); if (q) q.oninput = () => { S.logQ = q.value; render({ quiet: true }); };
+  const list = $('#loglist', root); if (list && !S.logQ) list.scrollTop = list.scrollHeight;
+  const text = () => (S.logs || []).map(e => `${new Date(e.ts).toISOString()} ${e.level.toUpperCase().padStart(5)} ${e.target}  ${e.message}`).join('\n');
+  $('#log-refresh', root).onclick = () => { S.logs = null; render({ quiet: true }); };
+  $('#log-copy', root).onclick = () => copy(text(), 'Registro copiado');
+  $('#log-share', root).onclick = () => shareText(text(), 'Registro de uni-share');
+  $('#log-clear', root).onclick = async () => { if (await confirmSheet('Se vacía el registro en memoria (el fichero en disco no se toca).', 'Vaciar', true)) { await api('/api/logs', { method: 'DELETE' }).catch(e => toast(e.message, 'err')); S.logs = null; S.logSeq = 0; render({ quiet: true }); } };
+  // Live tail while the view is open.
+  clearInterval(S.logTimer); S.logTimer = setInterval(() => { const top = S.stack[S.stack.length - 1]; if (!top || top.kind !== 'logs' || S.shot) return clearInterval(S.logTimer); loadLogs(true); }, 2000);
+}
+
 // ── about ──
 function viewAbout() {
   const d = S.data; const ai = androidInfo(); const root = h('div');
@@ -515,6 +652,31 @@ function openShareSheet(j) {
 }
 
 /** New transfer sheet: lan | global | download | ticket. preset: {path, device, target, url, links} */
+/** Entry point for files shared *into* the app (Android share sheet): ask LAN vs public link first. */
+function openShared(path) {
+  menuSheet('¿Cómo quieres compartirlo?', [
+    { icon: 'send', label: 'Enviar por la red local', sub: 'Directo a otro dispositivo con uni-share', fn: () => openNew('lan', { path }) },
+    { icon: 'globe', label: 'Subir y obtener link', sub: `storage.to · online ${S.cfg?.global?.expiry_days || 7} día(s) · sin cuenta`, fn: () => openNew('global', { path }) },
+  ]);
+}
+/** A POST created a job: show it *now* (merge into the snapshot, open its detail) instead of
+ *  waiting for the next SSE frame — on Android the WebView may throttle the stream while the
+ *  sheet animates, which made the new transfer appear only after a reload. `r.job` is the full
+ *  Job (or null if it already finished); `r.job_id` is always present. */
+function jobCreated(r, title) {
+  if (!r) return;
+  const j = r.job && typeof r.job === 'object' ? r.job : null;
+  const id = j ? j.id : (r.job_id ?? (typeof r.job === 'number' ? r.job : null));
+  if (j && S.data) {
+    const i = S.data.jobs.findIndex(x => x.id === j.id);
+    if (i >= 0) S.data.jobs[i] = j; else S.data.jobs.unshift(j);
+    S.lastStates.set(j.id, j.state);
+  }
+  if (id != null) push({ kind: 'job', id, title: title || (j && KIND[j.kind]) || 'Transferencia' });
+  else render({ quiet: true });
+  // Belt and braces: pull a fresh snapshot in case the SSE stream is asleep.
+  api('/api/state').then(applyState).catch(() => {});
+}
 function openNew(mode = 'lan', preset = {}) {
   const d = S.data || { devices: [] }; const c = S.cfg || { global: {} };
   const st = { mode, path: preset.path || '', device: preset.device || '', target: preset.target || '', url: preset.url || '', dest: '', links: preset.links || '' };
@@ -540,7 +702,7 @@ function openNew(mode = 'lan', preset = {}) {
       okBtn.innerHTML = ico('send') + 'Enviar';
     } else if (st.mode === 'global') {
       body.append(field('Qué subir', picked()));
-      body.append(h('div', { class: 'grid2' }, field('Contraseña', h('input', { id: 'f-pw', type: 'password', placeholder: 'opcional' })), field('Caduca en', h('input', { id: 'f-exp', type: 'number', min: 1, value: c.global.expiry_days || 7 }), 'días')));
+      body.append(h('div', { class: 'grid2' }, field('Contraseña', h('input', { id: 'f-pw', type: 'password', placeholder: 'opcional' })), field('Tiempo online', h('select', { id: 'f-exp' }, EXPIRY_DAYS.map(n => h('option', { value: n, selected: n === (c.global.expiry_days || 7) ? 'selected' : null }, `${n} día${n > 1 ? 's' : ''}`))), 'storage.to guarda hasta 7 días')));
       body.append(field('Mensaje', h('input', { id: 'f-msg', placeholder: 'opcional · se incluye en el ticket' })));
       body.append(toggle('ticket', 'Crear ticket .unishare', 'Firmado, con hashes para verificar', tg.ticket));
       body.append(toggle('compress', 'Comprimir carpetas', null, tg.compress));
@@ -591,7 +753,7 @@ function openNew(mode = 'lan', preset = {}) {
         return openShareSheet({ name: t.ticket.name || 'ticket', ticket_uri: t.uri, ticket_path: String(t.path) });
       }
       ov.close(); vib(20);
-      if (r && r.job) push({ kind: 'job', id: r.job.id, title: KIND[r.job.kind] || 'Transferencia' });
+      jobCreated(r);
     } catch (e) { err.textContent = e.message; okBtn.disabled = false; }
   };
   return ov;
@@ -651,19 +813,63 @@ function jobMenu(j) {
     !act && { icon: 'trash', label: 'Quitar de la lista', danger: true, fn: () => removeJob(j) }]);
 }
 async function cancelJob(j) { if (await confirmSheet(`Se cancela «${j.name}».`, 'Cancelar transferencia', true)) api(`/api/jobs/${j.id}/cancel`, { method: 'POST' }).then(() => toast('Cancelada', 'info')).catch(e => toast(e.message, 'err')); }
-async function removeJob(j) { try { await api(`/api/jobs/${j.id}`, { method: 'DELETE' }); if (S.stack.length && S.stack[S.stack.length - 1].id === j.id) pop(); } catch (e) { toast(e.message, 'err'); } }
+async function removeJob(j) { try { await api(`/api/jobs/${j.id}`, { method: 'DELETE' }); if (S.stack.length && S.stack[S.stack.length - 1].id === j.id) pop(); S.data.jobs = S.data.jobs.filter(x => x.id !== j.id); render(); } catch (e) { toast(e.message, 'err'); } }
 async function retryJob(j) { try { const r = await api(`/api/jobs/${j.id}/retry`, { method: 'POST' }); toast('Reintentando…', 'ok'); S.stack = []; push({ kind: 'job', id: r.id, title: KIND[j.kind] }); } catch (e) { toast(e.message, 'err'); } }
 async function rescanJob(j) {
   toast('Analizando…', 'info', 2000);
   try { const r = await api(`/api/jobs/${j.id}/scan`, { method: 'POST' }); const sv = SCAN[r.severity] || SCAN.info;
     sheet({ title: 'Resultado del análisis', body: h('div', {}, h('div', { class: `alert ${sv[0] === 'danger' ? 'err' : sv[0]}`, html: ico('shield') + `<span><b>${sv[1]}</b> · ${esc(r.summary)}</span>` }), r.detail ? h('pre', { class: 'log' }, r.detail) : null) });
+    renderKey = ''; render({ quiet: true }); // the job now carries scan_report → refresh the detail card
   } catch (e) { toast(e.message, 'err'); }
 }
 
 // ───────────────────────── wiring, theme, init ─────────────────────────
+/** Swipe a job row left to reveal Cancelar (active) / Quitar (finished); tap the action or swipe far to trigger it. */
+function wireSwipe(root) {
+  if (S.shot) return;
+  $$('.list [data-job]', root).forEach(row => {
+    const j = job(Number(row.dataset.job)); if (!j) return;
+    const act = isActive(j); const label = act ? T.swipe.cancel : T.swipe.remove;
+    const wrap = h('div', { class: 'swipe' }); row.replaceWith(wrap);
+    const btn = h('button', { class: `swipe-act ${act ? 'cancel' : 'remove'}`, tabindex: -1, html: ico(act ? 'stop' : 'trash') + label });
+    wrap.append(btn, row);
+    let x0 = null, y0 = null, dx = 0, horiz = null; const OPEN = 96;
+    const setX = (x, anim) => { row.style.transition = anim ? 'transform .18s ease' : ''; row.style.transform = x ? `translateX(${x}px)` : ''; wrap.classList.toggle('open', x <= -OPEN + 4); wrap.classList.toggle('moving', x < 0); };
+    row.addEventListener('touchstart', e => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = wrap.classList.contains('open') ? -OPEN : 0; horiz = null; }, { passive: true });
+    row.addEventListener('touchmove', e => {
+      if (x0 == null) return; const mx = e.touches[0].clientX - x0, my = e.touches[0].clientY - y0;
+      if (horiz == null) { if (Math.abs(mx) < 6 && Math.abs(my) < 6) return; horiz = Math.abs(mx) > Math.abs(my); }
+      if (!horiz) return; const base = wrap.classList.contains('open') ? -OPEN : 0; dx = Math.min(0, Math.max(-OPEN * 1.9, base + mx)); setX(dx, false);
+    }, { passive: true });
+    row.addEventListener('touchend', () => {
+      if (x0 == null) return; x0 = null; if (!horiz) return;
+      row.dataset.swiped = '1'; setTimeout(() => delete row.dataset.swiped, 350);
+      if (dx < -OPEN * 1.7) { setX(-OPEN, true); vib(20); btn.click(); } else setX(dx < -OPEN / 2 ? -OPEN : 0, true);
+    });
+    // A tap right after a swipe (or while open) only closes the row instead of opening the detail.
+    row.addEventListener('click', e => { if (wrap.classList.contains('open') || row.dataset.swiped) { e.stopImmediatePropagation(); e.preventDefault(); setX(0, true); } }, true);
+    btn.onclick = () => { setX(0, true); act ? cancelJob(j) : removeJob(j); };
+  });
+}
+/** Pull down at the top of Dispositivos to re-scan the LAN. */
+function wirePullToRefresh(page) {
+  if (S.shot || S.tab !== 'devices' || S.stack.length || !page) return;
+  const ind = h('div', { class: 'ptr', html: ico('refresh') + `<span>${T.ptr.pull}</span>` }); page.prepend(ind);
+  let y0 = null, dy = 0; const TH = 72;
+  const onStart = e => { if (page.scrollTop > 0 || S.scanning) return; y0 = e.touches[0].clientY; dy = 0; };
+  const onMove = e => { if (y0 == null) return; dy = Math.max(0, (e.touches[0].clientY - y0) * 0.55); if (page.scrollTop === 0) { ind.style.height = Math.min(dy, TH + 20) + 'px'; ind.classList.toggle('ready', dy >= TH); ind.querySelector('span').textContent = dy >= TH ? T.ptr.release : T.ptr.pull; } };
+  const onEnd = () => { if (y0 == null) return; y0 = null; if (dy >= TH) { ind.classList.add('busy'); ind.querySelector('span').textContent = T.ptr.busy; vib(20); rescanDevices(); } else { ind.style.height = ''; ind.classList.remove('ready'); } };
+  // Listeners live on the page element and are replaced on every render (page.innerHTML is rebuilt, but the element is not).
+  if (page._ptr) for (const [k, f] of Object.entries(page._ptr)) page.removeEventListener(k, f);
+  page._ptr = { touchstart: onStart, touchmove: onMove, touchend: onEnd };
+  for (const [k, f] of Object.entries(page._ptr)) page.addEventListener(k, f, { passive: true });
+}
 function wire(root, top) {
   wireCommon(root);
-  if (top) { if (top.kind === 'job') wireJob(root, top.id); else if (top.kind === 'security') wireSecurity(root); else if (top.kind === 'history') wireHistory(root); return; }
+  wireSwipe(root);
+  const page = $('#page'); if (page && page._ptr && (S.tab !== 'devices' || top)) { for (const [k, f] of Object.entries(page._ptr)) page.removeEventListener(k, f); page._ptr = null; }
+  wirePullToRefresh(page);
+  if (top) { if (top.kind === 'job') wireJob(root, top.id); else if (top.kind === 'security') wireSecurity(root); else if (top.kind === 'history') wireHistory(root); else if (top.kind === 'logs') wireLogs(root); return; }
   ({ home: wireHome, jobs: wireJobs, devices: wireDevices, share: wireShare, settings: wireSettings })[S.tab](root);
 }
 function setTheme(t) { document.documentElement.dataset.theme = t; localStorage.mtheme = t; $('#t-theme').innerHTML = ico(t === 'light' ? 'sun' : 'moon'); const m = $('meta[name=theme-color]'); if (m) m.content = t === 'light' ? '#f4f5f7' : '#151719'; }
@@ -688,7 +894,7 @@ function init() {
     poll().then(() => {
       if (!S.data) return;
       const jid = Number(hp.get('job')); const j = jid && job(jid); if (j) push({ kind: 'job', id: j.id, title: KIND[j.kind] });
-      const v = hp.get('view'); if (v && ['history', 'security', 'about'].includes(v)) push({ kind: v, title: { history: 'Historial', security: 'Seguridad', about: 'Acerca de' }[v] });
+      const v = hp.get('view'); if (v && ['history', 'security', 'logs', 'about'].includes(v)) push({ kind: v, title: T.views[v] });
       const sh = hp.get('sheet'); if (sh === 'new') openNew(hp.get('mode') || 'lan'); else if (sh === 'receive') receiveSheet(); else if (sh === 'share') { const l = S.data.jobs.find(x => x.link || x.ticket_uri); if (l) openShareSheet(l); }
     });
   } else connect();

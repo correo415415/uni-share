@@ -18,6 +18,18 @@ use std::time::Duration;
 pub const DEFAULT_API: &str = "https://storage.to/api";
 pub const MAX_FILE_SIZE: u64 = 25 * 1024 * 1024 * 1024; // 25 GB
 pub const MAX_COLLECTION_SIZE: u64 = 25 * 1024 * 1024 * 1024;
+/// Retention window accepted by storage.to for anonymous uploads (`expiry_days` on
+/// `/upload/confirm` and `/collection`, `days` on `/{file|collection}/{id}/expiry`).
+/// Verified live on 2026-09-09: `8` → "The days field must not be greater than 7",
+/// `null` → "Permanent files not available on your plan" (premium only), omitted → 3 days.
+pub const MIN_EXPIRY_DAYS: u32 = 1;
+pub const MAX_EXPIRY_DAYS: u32 = 7;
+pub const DEFAULT_EXPIRY_DAYS: u32 = 3;
+
+/// Clamp a user-supplied retention to what the anonymous API accepts.
+pub fn clamp_expiry_days(days: u32) -> u32 {
+    days.clamp(MIN_EXPIRY_DAYS, MAX_EXPIRY_DAYS)
+}
 
 #[derive(Clone)]
 pub struct Client {
@@ -252,8 +264,11 @@ impl Client {
         Ok(r)
     }
 
-    pub async fn create_collection(&self, expected_files: u32) -> Result<CollectionResponse> {
-        let body = serde_json::json!({ "expected_file_count": expected_files });
+    pub async fn create_collection(&self, expected_files: u32, expiry_days: Option<u32>) -> Result<CollectionResponse> {
+        let mut body = serde_json::json!({ "expected_file_count": expected_files });
+        if let Some(d) = expiry_days {
+            body["expiry_days"] = serde_json::json!(clamp_expiry_days(d));
+        }
         let r: CollectionResponse = self.post_json("/collection", &body, None).await?;
         if !r.success || r.collection.is_none() {
             bail!("collection create failed: {}", r.error.unwrap_or_default());
@@ -443,4 +458,13 @@ mod tests {
         assert_eq!(r.file.unwrap().id, "XJRJIcIeY");
         assert_eq!(r.owner_token.as_deref(), Some("owner_v1_x"));
     }
+
+    #[test]
+    fn expiry_clamp() {
+        assert_eq!(clamp_expiry_days(0), 1);
+        assert_eq!(clamp_expiry_days(3), 3);
+        assert_eq!(clamp_expiry_days(30), 7);
+        assert_eq!(DEFAULT_EXPIRY_DAYS, 3);
+    }
+
 }

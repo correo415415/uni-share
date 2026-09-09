@@ -165,6 +165,9 @@ pub async fn scan(ctx: Ctx, a: ScanArgs) -> Result<()> {
     if a.no_clamav {
         cfg.clamav = false;
     }
+    if a.no_yara {
+        cfg.yara = false;
+    }
     // Explicit command: never touch files unless asked.
     cfg.on_danger = if a.quarantine {
         DangerAction::Quarantine

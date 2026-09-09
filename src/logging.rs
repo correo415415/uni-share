@@ -18,6 +18,10 @@ pub fn init(verbosity: u8, quiet: bool) {
         .with_target(verbosity >= 2)
         .with_writer(std::io::stderr)
         .compact();
+    // Ring buffer + rotating file behind the "Registro" screens (GUI/app/API). The buffer
+    // keeps everything the filter lets through; the file lives in `<data_dir>/logs/`.
+    let logs_dir = crate::config::data_dir().join("logs");
+    crate::logbuf::set_file_dir(&logs_dir);
     // Ignore error if a global subscriber was already set (tests).
-    let _ = tracing_subscriber::registry().with(filter).with(layer).try_init();
+    let _ = tracing_subscriber::registry().with(filter).with(layer).with(crate::logbuf::layer()).try_init();
 }

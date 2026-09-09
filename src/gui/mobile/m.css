@@ -104,8 +104,8 @@ svg{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-l
 .btns.col{flex-direction:column}
 
 /* quick actions grid */
-.quick{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
-.qa{display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 4px 12px;border-radius:var(--r-xl);background:var(--bg-2);border:1px solid var(--line);color:var(--fg-2);font-size:var(--fs-xs);font-weight:500;transition:background var(--t)}
+.quick{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px}
+.qa{display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 2px 12px;min-width:0;text-align:center;line-height:1.15;border-radius:var(--r-xl);background:var(--bg-2);border:1px solid var(--line);color:var(--fg-2);font-size:var(--fs-xs);font-weight:500;transition:background var(--t)}
 .qa:active{background:var(--bg-3)}
 .qa .ic{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:var(--bg-3);color:var(--accent)}
 .qa .ic svg{width:22px;height:22px;stroke-width:2}.qa .ic.amber{color:var(--accent-2)}
@@ -260,7 +260,25 @@ svg{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-l
 .about b{display:block;color:var(--fg);font-size:var(--fs-lg);font-weight:600}
 
 /* motion */
-.page>*{animation:fadein 160ms both}@keyframes fadein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.page.anim>*{animation:fadein 160ms both}@keyframes fadein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 html.shot *{animation:none!important;transition:none!important}
 @media (min-width:560px){.page{padding-left:max(12px,calc(50% - 320px));padding-right:max(12px,calc(50% - 320px))}}
+
+/* security scan card in the job detail */
+.card.scan .alert{margin:0}.list.findings .row .ic.warn{color:var(--warn)}.list.findings .row .ic.danger{color:var(--err)}.list.findings .row .ic.ok{color:var(--ok)}.list.findings .sub.finding{color:var(--fg);opacity:.9;white-space:normal}.list.findings .ttl.mono{font-family:var(--mono);font-size:12px}
+
+/* Registro (logs) */
+.loglist{font-family:var(--mono);font-size:var(--fs-xs);background:var(--bg-3);border:1px solid var(--line);border-radius:var(--r-lg);padding:8px 10px;max-height:60vh;overflow:auto;-webkit-overflow-scrolling:touch}
+.ll{display:grid;grid-template-columns:auto auto 1fr;gap:0 8px;padding:3px 0;border-bottom:1px solid var(--line);color:var(--fg-2);line-height:1.35}.ll:last-child{border-bottom:0}
+.ll .ts{color:var(--fg-3)}.ll .lv{font-weight:700;color:var(--fg-3)}.ll .tg{color:var(--fg-3);grid-column:3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ll .msg{grid-column:1/4;color:var(--fg);white-space:pre-wrap;word-break:break-word}
+.ll.warn .lv{color:var(--warn)}.ll.error .lv,.ll.error .msg{color:var(--err)}.ll.debug,.ll.trace{opacity:.75}
+
+/* swipe-to-act rows (Transferencias) */
+.swipe{position:relative;overflow:hidden}.swipe>.row{position:relative;z-index:1;background:var(--bg-2)}
+.swipe-act{position:absolute;top:0;right:0;bottom:0;width:96px;border:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:var(--fs-xs);font-weight:600;color:#fff;background:var(--err);cursor:pointer;opacity:0;transition:opacity var(--t)}
+.swipe-act.remove{background:var(--fg-3)}.swipe.open .swipe-act,.swipe.moving .swipe-act{opacity:1}.swipe-act svg{width:20px;height:20px}
+/* pull to refresh (Dispositivos) */
+.ptr{height:0;overflow:hidden;display:flex;align-items:center;justify-content:center;gap:8px;color:var(--fg-3);font-size:var(--fs-sm);transition:height .15s ease}
+.ptr svg{width:16px;height:16px;transition:transform .2s}.ptr.ready svg{transform:rotate(180deg);color:var(--accent)}.ptr.busy svg{animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}

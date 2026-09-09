@@ -1,4 +1,3 @@
-//! Global backends (storage.to, Smash).
+//! Global backends (storage.to).
 pub mod storage_to;
-pub mod smash;
 pub mod upload;

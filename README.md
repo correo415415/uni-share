@@ -35,9 +35,13 @@ La GUI nativa incrusta sus propias fuentes (`ui/fonts/`: Inter para la interfaz 
 
 Extras de escritorio: **arrastrar y soltar** sobre la ventana (un archivo o carpeta abre «Enviar LAN» con la ruta; varios del mismo directorio, la carpeta; un ticket `.unishare` abre «Descargar» o el emparejamiento), **bandeja del sistema** con menú rápido (Mostrar/Ocultar · Enviar por LAN · Compartir link · Descargar · Abrir ticket · Salir) y el ajuste «minimizar a la bandeja al cerrar» para seguir recibiendo con la ventana oculta (en Linux hace falta un host StatusNotifierItem: KDE, o la extensión AppIndicator en GNOME). Para revisar el diseño sin red: `uni-share app --demo [--empty] [--size 1024x600] [--light] [--dialog new|share|pair|settings|logs|fs|confirm] [--drag-over] [--screenshot out.png]`.
 
+**Registro (logs).** Todo lo que emite `tracing` pasa por un búfer en memoria (últimas 2 000 líneas) y por un fichero rotativo `<data_dir>/logs/uni-share.log` (5 × 2 MiB). Se consulta desde la GUI web (botón ☰ o tecla `G`: nivel, filtro, cola en vivo, copiar, descargar `.log`, vaciar), desde la app nativa (mismo botón/tecla), desde la app Android (Ajustes → Registro) o por API (`GET /api/logs?after=<seq>&level=warn`, `GET /api/logs/text`, `DELETE /api/logs`). El nivel que llega al búfer es el del filtro normal (`-v`, `-vv`, `RUST_LOG`).
+
 ### Android
 
 La app Android (`android/`, paquete `dev.unishare.app`) es una cáscara Kotlin que arranca el mismo core Rust como biblioteca (`libuni_share.so`, JNI en `src/android.rs`) y muestra la **GUI móvil** (`/m`, ver abajo) servida en `127.0.0.1`. Requisitos: Android SDK + NDK r26+, `cargo install cargo-ndk`, `rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android`.
+
+Detalles de la cáscara: los archivos recibidos se copian al terminar a la carpeta pública **`Descargas/uni-share`** (MediaStore en Android 10+, sin permisos; `WRITE_EXTERNAL_STORAGE` solo hasta Android 9), o a la carpeta que se elija con el selector del sistema (Android no permite elegir la raíz de Descargas: hay que elegir o crear una subcarpeta). El **escáner QR** usa una actividad propia en vertical con `TRY_HARDER` y lectura de códigos invertidos; el QR de emparejamiento va sin firma y con corrección de errores L para que tenga pocos módulos. Las líneas de la propia app (permisos, escáner, exportación) se envían al mismo **Registro** que las del motor (`Native.log`), visible en Ajustes → Registro.
 
 ```bash
 android/build-android.sh            # compila las .so y las deja en android/app/src/main/jniLibs/
@@ -53,10 +57,10 @@ La interfaz de teléfono es una capa web propia (`src/gui/mobile/`: `index.html`
 | Pestaña | Contenido |
 |---|---|
 | **Inicio** | Estado del dispositivo (nombre, dirección, huella, velocidades), accesos rápidos Enviar LAN · Recibir (QR de emparejamiento) · Escanear · Descargar, solicitudes entrantes como tarjeta destacada, transferencias en curso y recientes. |
-| **Transferencias** | Buscador, chips de filtro (activas, recibiendo, enviando, links, descargas, completadas, fallidas), progreso, ficha de detalle con acciones (cancelar, compartir, reintentar, analizar, quitar), archivos y registro. |
-| **Dispositivos** | Radar de descubrimiento LAN, buscar de nuevo, enviar / copiar dirección / copiar huella por dispositivo, emparejar por QR. |
+| **Transferencias** | Buscador, chips de filtro (activas, recibiendo, enviando, links, descargas, completadas, fallidas), progreso, deslizar una fila a la izquierda para cancelar/quitar, ficha de detalle con acciones (cancelar, compartir, reintentar, analizar, quitar), tarjeta **Análisis de seguridad** (veredicto, motores, hallazgos por archivo), archivos y registro. |
+| **Dispositivos** | Radar de descubrimiento LAN, buscar de nuevo (o tirar hacia abajo), enviar / copiar dirección / copiar huella por dispositivo, emparejar por QR. |
 | **Compartir** | QR de emparejamiento a pantalla completa, subir y crear link, crear ticket desde links, enviar por LAN, links recientes con QR/copiar/compartir con la hoja del sistema. |
-| **Ajustes** | Nombre, carpeta de descargas (SAF en Android), límite de velocidad, tema, PIN, auto-aceptar, notificaciones, comprimir carpetas, servicio de subida, caducidad, partes en paralelo, firma de tickets; subpantallas **Seguridad y análisis**, **Historial** y **Acerca de**. |
+| **Ajustes** | Nombre, carpeta de descargas (en Android: `Descargas/uni-share` por defecto u otra carpeta vía SAF), límite de velocidad, tema, PIN, auto-aceptar, notificaciones, comprimir carpetas, servicio de subida, caducidad, partes en paralelo, firma de tickets; subpantallas **Seguridad y análisis**, **Historial**, **Registro** (logs del motor y de la app: nivel, filtro, cola en vivo, copiar/compartir) y **Acerca de**. |
 
 Funciona también en cualquier navegador de móvil (`http://<pc>:47900/m`); dentro de la app Android se añaden el escáner QR, el selector de archivos del sistema, la exportación a la carpeta SAF y la hoja de compartir nativa a través de `window.Android`. Deep links para revisiones: `/m#jobs`, `/m#home&theme=light`. `uni-share gui --demo` sirve ambas interfaces con un estado de ejemplo sin arrancar el motor (capturas en CI con Chromium headless, publicadas en la release nightly: `m-home`, `m-jobs`, `m-devices`, `m-share`, `m-settings`, `m-light`, `m-job`, `m-job-scan`, `m-new`, `m-download`, `m-receive`, `m-share-link`, `m-security`, `m-logs`, y `m-home-412`/`m-jobs-412` a 412×915).
 

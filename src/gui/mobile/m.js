@@ -77,9 +77,23 @@ function applyState(d) {
   S.lastPending = pend;
   for (const n of d.notices || []) if (n.id > S.lastNotice) { toast(n.text, n.kind === 'danger' ? 'err' : n.kind === 'warning' ? 'warn' : 'info', 8000); S.lastNotice = n.id; }
   if (S.lastNotice) api('/api/notices/ack', { method: 'POST', body: { up_to: S.lastNotice } }).catch(() => {});
-  S.data = d;
+  const prev = S.data; S.data = d;
   const act = d.jobs.filter(isActive).length + d.pending.length; const dot = $('#tab-dot'); dot.hidden = !act; dot.textContent = act > 9 ? '9+' : act;
-  render();
+  if (first) render(); else refreshView(prev, d);
+}
+function refreshView(prev, d) {
+  const top = S.stack[S.stack.length - 1];
+  if (top && top.kind === 'job') { const j = job(top.id); if (j && isActive(j)) return patchJobDetail(j); return render({ quiet: true }); }
+  if (top) return; // history / security / about do not depend on the snapshot
+  refresh(prev, d);
+}
+function patchJobDetail(j) {
+  const p = pct(j); const root = $('#page');
+  const bar = root.querySelector('.bigprog .bar>i'); if (!bar) return render({ quiet: true });
+  bar.style.width = p + '%';
+  const nums = root.querySelectorAll('.bigprog .nums span'); if (nums[0]) nums[0].textContent = `${fmtB(j.done)} / ${fmtB(j.total)}`; if (nums[1]) nums[1].textContent = `${p}% · ${fmtS(j.speed)}${j.eta != null ? ' · ' + fmtT(j.eta) : ''}`;
+  const cf = root.querySelector('.bigprog .trunc'); if (cf) cf.textContent = j.current_file;
+  const log = root.querySelector('pre.log'); if (log && j.log) { const t = j.log.slice(-60).join('\n'); if (log.textContent !== t) { log.textContent = t; log.scrollTop = log.scrollHeight; } }
 }
 let es = null, pollT = null;
 function connect() {
@@ -169,18 +183,41 @@ function push(view) { S.stack.push(view); render(); syncBack(); }
 function pop() { if (S.stack.length) { S.stack.pop(); render(); syncBack(); } }
 
 const TITLES = { home: '', jobs: 'Transferencias', devices: 'Dispositivos', share: 'Compartir', settings: 'Ajustes' };
-function render() {
+let renderKey = '';
+function render(opts = {}) {
   const page = $('#page'); const top = S.stack[S.stack.length - 1];
+  // Enter animation only when the view actually changes (tab/stack), never on data refreshes → no flicker.
+  const key = top ? `${top.kind}:${top.id || ''}` : `tab:${S.tab}`;
+  const navigated = key !== renderKey; renderKey = key;
+  page.classList.toggle('anim', navigated && !opts.quiet);
   const title = top ? top.title : TITLES[S.tab];
   $('#t-title').textContent = title || ''; $('#t-brand').hidden = !!title; $('#t-back').hidden = !top; $('#t-qr').hidden = !mobile || !!top;
   $$('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === S.tab));
   const fabOn = !top && (S.tab === 'home' || S.tab === 'jobs' || S.tab === 'share'); $('#fab').classList.toggle('hide', !fabOn); page.classList.toggle('no-fab', !fabOn);
-  const y = page.scrollTop;
+  const y = page.scrollTop; const focused = document.activeElement && page.contains(document.activeElement) ? document.activeElement.id : null;
   page.innerHTML = '';
   if (!S.data) { page.append(h('div', { class: 'empty' }, h('span', { html: ico('wifi') }), h('b', {}, 'Conectando con el motor…'), h('p', {}, 'Si tarda, comprueba que uni-share está en ejecución.'))); return; }
   page.append(top ? renderStack(top) : SCREENS[S.tab]());
   wire(page, top);
-  if (top && top.keepScroll) page.scrollTop = y;
+  if (!navigated) { page.scrollTop = y; if (focused) { const f = document.getElementById(focused); if (f) f.focus({ preventScroll: true }); } }
+  else if (!(top && top.keepScroll)) page.scrollTop = 0;
+}
+/** Cheap refresh for SSE frames: when the set of jobs/offers is unchanged, patch progress in place. */
+function refresh(prev, d) {
+  const sig = x => (x.jobs.map(j => j.id + j.state).join(',') + '|' + x.pending.map(o => o.transfer_id).join(',') + '|' + x.devices.length);
+  if (!prev || sig(prev) !== sig(d)) return render({ quiet: true });
+  $('#page').classList.remove('anim');
+  let patched = 0;
+  for (const j of d.jobs) {
+    if (!isActive(j)) continue;
+    const row = $(`#page [data-job="${j.id}"]`); if (!row) continue;
+    const p = pct(j); const bar = row.querySelector('.bar>i'); if (bar) bar.style.width = p + '%';
+    const pc = row.querySelector('.pct'); if (pc) pc.textContent = j.state === 'queued' ? 'cola' : p + '%';
+    const sub = row.querySelector('.sub'); if (sub) sub.textContent = `${fmtB(j.done)} / ${fmtB(j.total)}${j.speed ? ' · ' + fmtS(j.speed) : ''}${j.eta != null ? ' · ' + fmtT(j.eta) : ''}`;
+    patched++;
+  }
+  const sp = $('#page .speeds'); if (sp) { const [dn, up] = sp.querySelectorAll('span'); if (dn) dn.innerHTML = ico('down') + fmtS(d.speed_down); if (up) up.innerHTML = ico('up') + fmtS(d.speed_up); }
+  if (!patched && d.jobs.some(isActive) && $$('#page [data-job]').length === 0) render({ quiet: true });
 }
 function renderStack(v) {
   if (v.kind === 'job') return viewJob(v.id);
@@ -215,7 +252,7 @@ function empty(icon, title, text, action) {
   return h('div', { class: 'empty' }, h('span', { html: ico(icon) }), h('b', {}, title), h('p', {}, text), action ? h('button', { class: 'btn primary', style: 'margin-top:10px', 'data-empty-act': action[1], html: ico(action[2] || 'plus') + action[0] }) : null);
 }
 function wireCommon(root) {
-  $$('[data-job]', root).forEach(el => el.onclick = () => { const id = Number(el.dataset.job); const j = job(id); if (j) push({ kind: 'job', id, title: KIND[j.kind] || 'Transferencia' }); });
+  $$('[data-job]', root).forEach(el => el.onclick = () => { const id = Number(el.dataset.job); const j = job(id); if (j) push({ kind: 'job', id, title: KIND[j.kind] || 'Transferencia', keepScroll: true }); });
   $$('[data-offer]', root).forEach(card => {
     const id = card.dataset.offer;
     $$('[data-act]', card).forEach(b => b.onclick = async e => { e.stopPropagation(); b.disabled = true; try { if (b.dataset.act === 'accept') { const r = await api(`/api/offers/${encodeURIComponent(id)}/accept`, { method: 'POST', body: {} }); toast('Recibiendo…', 'ok'); if (r.job) push({ kind: 'job', id: r.job.id, title: 'Recepción LAN' }); } else { await api(`/api/offers/${encodeURIComponent(id)}/reject`, { method: 'POST' }); toast('Rechazada', 'info'); } } catch (err) { toast(err.message, 'err'); b.disabled = false; } });

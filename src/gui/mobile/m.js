@@ -5,6 +5,8 @@
 'use strict';
 
 // ───────────────────────── helpers ─────────────────────────
+/** Retention accepted by storage.to for anonymous links (verified against the API: 8+ rejected, permanent = premium). */
+const EXPIRY_DAYS = [1, 2, 3, 4, 5, 6, 7];
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -68,7 +70,7 @@ function androidEvent(kind, payload) {
   if (kind === 'exported') return toast(`«${payload.name}»: ${payload.files} archivo(s) copiados a ${payload.folder}`, 'ok', 6000);
 }
 function exportToSaf(j) { if (!mobile || !j.saved || !j.saved.length) return; try { Android.exportJob(j.id, JSON.stringify(j.saved), j.name); } catch { /* bridge unavailable */ } }
-// Classic script: top-level function declarations (openScanned, androidEvent, openNew) are already window globals for the Kotlin shell.
+// Classic script: top-level function declarations (openScanned, androidEvent, openNew, openShared) are already window globals for the Kotlin shell.
 
 // ───────────────────────── state & API ─────────────────────────
 const S = { data: null, cfg: null, online: false, tab: localStorage.mtab || 'home', stack: [], filter: 'all', q: '', history: null, lastStates: new Map(), lastPending: new Set(), lastNotice: 0, scanning: false, logs: null, logSeq: 0, logLevel: localStorage.mloglevel || 'info', logQ: '', logTimer: 0 };
@@ -293,7 +295,7 @@ function viewHome() {
     h('div', { class: 'body' }, h('b', {}, d.device_name), h('div', { class: 'st' }, h('i', { class: online ? '' : 'off' }), online ? `Visible en la red · ${d.lan_addr}` : 'Sin red local'), h('code', {}, `huella ${d.fingerprint}${d.pin_required ? ' · PIN' : ''}`)),
     h('div', { class: 'speeds' }, h('span', { class: 'd', html: ico('down') + fmtS(d.speed_down) }), h('span', { class: 'u', html: ico('up') + fmtS(d.speed_up) }))));
   root.append(h('div', { class: 'quick' },
-    qa('lan', 'send', 'Enviar LAN'), qa('receive', 'inbox', 'Recibir', 'amber'), qa('qr', 'qr', mobile ? 'Escanear' : 'Mi QR'), qa('download', 'dl', 'Descargar')));
+    qa('lan', 'send', 'Enviar LAN'), qa('global', 'globe', 'Subir link'), qa('receive', 'inbox', 'Recibir', 'amber'), qa('qr', 'qr', mobile ? 'Escanear' : 'Mi QR'), qa('download', 'dl', 'Descargar')));
   if (d.pending.length) { root.append(h('div', { class: 'sec' }, `Solicitudes (${d.pending.length})`)); d.pending.forEach(o => root.append(offerCard(o))); }
   if (act.length) { root.append(h('div', { class: 'sec' }, `En curso (${act.length})`, h('span', { class: 'sp' }), h('button', { 'data-go': 'jobs', html: 'Ver todas ' + ico('chev') })), h('div', { class: 'list' }, act.map(jobRow))); }
   if (recent.length) { root.append(h('div', { class: 'sec' }, 'Recientes', h('span', { class: 'sp' }), h('button', { 'data-push': 'history', html: 'Historial ' + ico('chev') })), h('div', { class: 'list' }, recent.map(jobRow))); }
@@ -304,7 +306,7 @@ function qa(q, icon, label, cls = '') { return h('button', { class: 'qa', 'data-
 function wireHome(root) {
   $$('[data-q]', root).forEach(b => b.onclick = () => {
     const q = b.dataset.q;
-    if (q === 'lan') return openNew('lan'); if (q === 'download') return openNew('download');
+    if (q === 'lan') return openNew('lan'); if (q === 'global') return openNew('global'); if (q === 'download') return openNew('download');
     if (q === 'qr') return mobile ? Android.scanQr() : go('share');
     if (q === 'receive') return receiveSheet();
   });
@@ -475,7 +477,7 @@ function viewSettings() {
     sw('compress_folders', 'file', 'Comprimir carpetas', 'Empaqueta carpetas antes de enviar', c.compress_folders)));
   root.append(h('div', { class: 'sec' }, 'Links y tickets'), h('div', { class: 'list' },
     val('backend', 'globe', 'Servicio de subida', c.global.backend),
-    val('expiry_days', 'history', 'Caducidad por defecto', c.global.expiry_days + ' días'),
+    val('expiry_days', 'history', 'Tiempo online por defecto', `${c.global.expiry_days} día${c.global.expiry_days > 1 ? 's' : ''} · máx. 7`),
     val('parallel_parts', 'ul', 'Partes en paralelo', String(c.global.parallel_parts)),
     sw('sign_tickets', 'shield', 'Firmar tickets', `Ed25519 · ${d.signer_fingerprint}`, c.sign_tickets)));
   root.append(h('div', { class: 'sec' }, 'Más'), h('div', { class: 'list' },
@@ -494,7 +496,7 @@ async function editSetting(id) {
   else if (id === 'download_dir') { const p = await pickPath({ dirsOnly: true, start: String(c.download_dir), title: 'Carpeta de descargas' }); if (p) patch({ download_dir: p }); }
   else if (id === 'rate_limit_mbps') { const v = await promptSheet('Límite de velocidad', { label: 'Mbps (0 = sin límite)', value: c.rate_limit_mbps || 0, type: 'number' }); if (v != null) patch({ rate_limit_mbps: Math.max(0, Number(v) || 0) }); }
   else if (id === 'pin') { const v = await promptSheet('PIN de recepción', { label: 'Deja vacío para quitarlo', value: '', type: 'password', sub: 'Quien te envíe tendrá que escribirlo' }); if (v != null) patch({ pin: v }); }
-  else if (id === 'expiry_days') { const v = await promptSheet('Caducidad de los links', { label: 'Días', value: c.global.expiry_days, type: 'number' }); if (v != null) patch({ expiry_days: Math.max(1, Number(v) || 7) }); }
+  else if (id === 'expiry_days') { const v = await promptSheet('Tiempo que el link está online', { label: 'Días (1-7)', value: c.global.expiry_days, type: 'number', sub: 'storage.to conserva los archivos anónimos como máximo 7 días; después el link deja de funcionar.' }); if (v != null) patch({ expiry_days: Math.min(7, Math.max(1, Number(v) || 7)) }); }
   else if (id === 'parallel_parts') { const v = await promptSheet('Partes en paralelo', { label: 'Conexiones simultáneas por subida', value: c.global.parallel_parts, type: 'number' }); if (v != null) patch({ parallel_parts: Math.min(16, Math.max(1, Number(v) || 4)) }); }
   else if (id === 'backend') toast('El servicio de subida se cambia en config.toml ([global].backend)', 'info', 5000);
 }
@@ -648,6 +650,13 @@ function openShareSheet(j) {
 }
 
 /** New transfer sheet: lan | global | download | ticket. preset: {path, device, target, url, links} */
+/** Entry point for files shared *into* the app (Android share sheet): ask LAN vs public link first. */
+function openShared(path) {
+  menuSheet('¿Cómo quieres compartirlo?', [
+    { icon: 'send', label: 'Enviar por la red local', sub: 'Directo a otro dispositivo con uni-share', fn: () => openNew('lan', { path }) },
+    { icon: 'globe', label: 'Subir y obtener link', sub: `storage.to · online ${S.cfg?.global?.expiry_days || 7} día(s) · sin cuenta`, fn: () => openNew('global', { path }) },
+  ]);
+}
 function openNew(mode = 'lan', preset = {}) {
   const d = S.data || { devices: [] }; const c = S.cfg || { global: {} };
   const st = { mode, path: preset.path || '', device: preset.device || '', target: preset.target || '', url: preset.url || '', dest: '', links: preset.links || '' };
@@ -673,7 +682,7 @@ function openNew(mode = 'lan', preset = {}) {
       okBtn.innerHTML = ico('send') + 'Enviar';
     } else if (st.mode === 'global') {
       body.append(field('Qué subir', picked()));
-      body.append(h('div', { class: 'grid2' }, field('Contraseña', h('input', { id: 'f-pw', type: 'password', placeholder: 'opcional' })), field('Caduca en', h('input', { id: 'f-exp', type: 'number', min: 1, value: c.global.expiry_days || 7 }), 'días')));
+      body.append(h('div', { class: 'grid2' }, field('Contraseña', h('input', { id: 'f-pw', type: 'password', placeholder: 'opcional' })), field('Tiempo online', h('select', { id: 'f-exp' }, EXPIRY_DAYS.map(n => h('option', { value: n, selected: n === (c.global.expiry_days || 7) ? 'selected' : null }, `${n} día${n > 1 ? 's' : ''}`))), 'storage.to guarda hasta 7 días')));
       body.append(field('Mensaje', h('input', { id: 'f-msg', placeholder: 'opcional · se incluye en el ticket' })));
       body.append(toggle('ticket', 'Crear ticket .unishare', 'Firmado, con hashes para verificar', tg.ticket));
       body.append(toggle('compress', 'Comprimir carpetas', null, tg.compress));

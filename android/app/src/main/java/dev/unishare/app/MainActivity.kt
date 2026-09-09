@@ -171,7 +171,7 @@ class MainActivity : AppCompatActivity() {
                 val uri = i.getParcelableUri(Intent.EXTRA_STREAM)
                 val text = i.getStringExtra(Intent.EXTRA_TEXT)
                 when {
-                    uri != null -> importToCache(uri)?.let { "openNew('lan', {path: ${jsStr(it)}})" }
+                    uri != null -> importToCache(uri)?.let { "openShared(${jsStr(it)})" }
                     !text.isNullOrBlank() && looksLikeLink(text) -> "openNew('download', {url: ${jsStr(text.trim())}})"
                     else -> null
                 }
@@ -179,7 +179,7 @@ class MainActivity : AppCompatActivity() {
             Intent.ACTION_SEND_MULTIPLE -> {
                 val uris = i.getParcelableUris(Intent.EXTRA_STREAM)
                 val dir = importManyToCache(uris)
-                dir?.let { "openNew('lan', {path: ${jsStr(it)}})" }
+                dir?.let { "openShared(${jsStr(it)})" }
             }
             Intent.ACTION_VIEW -> {
                 val u = i.data

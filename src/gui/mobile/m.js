@@ -332,6 +332,7 @@ function viewJob(id) {
     h('div', { class: 'nums' }, h('span', {}, `${fmtB(j.done)} / ${fmtB(j.total)}`), h('span', {}, act ? `${p}% · ${fmtS(j.speed)}${j.eta != null ? ' · ' + fmtT(j.eta) : ''}` : `${p}%`)),
     j.current_file && act ? h('div', { class: 'hint trunc', style: 'margin-top:8px' }, j.current_file) : null,
     j.message ? h('div', { class: `alert ${j.state === 'failed' ? 'err' : ''}`, style: 'margin:10px 0 0', html: ico(j.state === 'failed' ? 'x' : 'info') + `<span>${esc(j.message)}</span>` }) : null));
+  root.append(scanCard(j));
   const btns = h('div', { class: 'btns', style: 'margin:0 0 12px' });
   if (act) btns.append(h('button', { class: 'btn danger', 'data-a': 'cancel', html: ico('stop') + 'Cancelar' }));
   if (j.link || j.ticket_uri) btns.append(h('button', { class: 'btn primary', 'data-a': 'share', html: ico('share') + 'Compartir' }));
@@ -352,6 +353,30 @@ function viewJob(id) {
   }
   if (j.log && j.log.length) root.append(h('div', { class: 'sec' }, 'Registro'), h('pre', { class: 'log' }, j.log.slice(-60).join('\n')));
   return root;
+}
+/** "Análisis de seguridad" card: verdict, engines and per-file findings (was only in the log). */
+function scanCard(j) {
+  const r = j.scan_report; const frag = document.createDocumentFragment();
+  if (!r) return frag;
+  const sv = SCAN[r.severity] || SCAN.info; const cls = sv[0] === 'danger' ? 'err' : sv[0] === 'warn' ? 'warn' : 'ok';
+  const card = h('div', { class: 'card scan' });
+  card.append(h('h3', {}, 'Análisis de seguridad'));
+  card.append(h('div', { class: `alert ${cls}`, html: ico('shield') + `<span><b>${sv[1]}</b> · ${r.files} archivo${r.files === 1 ? '' : 's'}${r.dangers ? ` · ${r.dangers} peligroso${r.dangers === 1 ? '' : 's'}` : ''}${r.warnings ? ` · ${r.warnings} con avisos` : ''}</span>` }));
+  card.append(h('div', { class: 'hint', style: 'margin-top:6px' }, `${(r.engines || []).join(', ')} · ${(r.duration_ms / 1000).toFixed(1)} s · ${fmtDate(r.at)}`));
+  if (r.findings && r.findings.length) {
+    const list = h('div', { class: 'list findings', style: 'margin-top:8px' });
+    r.findings.slice(0, 30).forEach(f => {
+      const fs = SCAN[f.severity] || SCAN.warning;
+      list.append(h('div', { class: 'row', style: 'align-items:flex-start' }, h('span', { class: `ic ${fs[0]}`, html: ico('shield') }), h('span', { class: 'body' },
+        h('div', { class: 'ttl mono' }, f.path.split('/').pop()), h('div', { class: 'sub' }, `${f.kind} · ${f.path}`),
+        ...f.findings.map(x => h('div', { class: 'sub finding' }, `• ${x.message}`)),
+        f.quarantined ? h('div', { class: 'sub' }, `En cuarentena: ${f.quarantined}`) : null)));
+    });
+    if (r.findings.length > 30) list.append(h('div', { class: 'row hint' }, `… y ${r.findings.length - 30} más`));
+    card.append(list);
+  } else card.append(h('div', { class: 'hint', style: 'margin-top:6px' }, 'Sin hallazgos: el contenido coincide con la extensión, sin ejecutables disfrazados ni archivos comprimidos anómalos.'));
+  frag.append(card);
+  return frag;
 }
 function wireJob(root, id) {
   const j = job(id); if (!j) return;
@@ -694,6 +719,7 @@ async function rescanJob(j) {
   toast('Analizando…', 'info', 2000);
   try { const r = await api(`/api/jobs/${j.id}/scan`, { method: 'POST' }); const sv = SCAN[r.severity] || SCAN.info;
     sheet({ title: 'Resultado del análisis', body: h('div', {}, h('div', { class: `alert ${sv[0] === 'danger' ? 'err' : sv[0]}`, html: ico('shield') + `<span><b>${sv[1]}</b> · ${esc(r.summary)}</span>` }), r.detail ? h('pre', { class: 'log' }, r.detail) : null) });
+    renderKey = ''; render({ quiet: true }); // the job now carries scan_report → refresh the detail card
   } catch (e) { toast(e.message, 'err'); }
 }
 

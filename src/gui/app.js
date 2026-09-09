@@ -110,7 +110,7 @@ function renderDetails() {
       <dt>Velocidad</dt><dd class="mono">${j.state === 'running' ? fmtRate(j.speed) + ' · ETA ' + fmtEta(j.eta) : '—'}</dd><dt>Archivo actual</dt><dd class="mono">${h(j.current_file) || '—'}</dd></dl>
       <dl class="kv"><dt>${j.kind === 'lan_send' || j.kind === 'global_upload' ? 'Destino' : 'Origen'}</dt><dd>${h(j.peer)}</dd><dt>Carpeta</dt><dd>${j.dest ? `<a href="#" id="open-dest">${h(j.dest)}</a>` : '—'}</dd>
       <dt>Archivos</dt><dd>${j.files.length || '—'}</dd><dt>Inicio</dt><dd class="mono">${fmtTime(j.started)}</dd><dt>Fin</dt><dd class="mono">${fmtTime(j.finished)}</dd>
-      <dt>Link</dt><dd>${j.link ? `<a href="${h(j.link)}" target="_blank" rel="noopener">${h(j.link)}</a>` : '—'}</dd></dl></div>`;
+      <dt>Link</dt><dd>${j.link ? `<a href="${h(j.link)}" target="_blank" rel="noopener">${h(j.link)}</a>` : '—'}</dd></dl></div>${scanSection(j)}`;
     const rs = $('#rescan'); if (rs) rs.onclick = (e) => { e.preventDefault(); rescanJob(j); };
     const rt = $('#retry'); if (rt) rt.onclick = (e) => { e.preventDefault(); retryJob(j); };
     const od = $('#open-dest'); if (od) od.onclick = (e) => { e.preventDefault(); api('/api/open', { method: 'POST', body: { path: j.dest } }).catch(er => toast(er.message, 'err')); };
@@ -325,6 +325,15 @@ function contextMenu(x, y, j) {
     if (a === 'open') api('/api/open', { method: 'POST', body: { path: j.dest } }).catch(er => toast(er.message, 'err')); if (a === 'cancel') cancelSel(); if (a === 'scan') rescanJob(j); if (a === 'retry') retryJob(j);
     if (a === 'remove') api(`/api/jobs/${j.id}`, { method: 'DELETE' }).then(() => { S.sel = null; }).catch(er => toast(er.message, 'err')); };
 }
+/** Structured result of the safety scan (engine `scan_report`), shown under the general details. */
+function scanSection(j) {
+  const r = j.scan_report; if (!r) return '';
+  const sv = SCAN[r.severity] || SCAN.info;
+  const head = `<div class="scan-head"><span class="badge scan ${sv[0]}">🛡 ${sv[1]}</span> <span>${r.files} archivo${r.files === 1 ? '' : 's'}${r.dangers ? ` · <b>${r.dangers} peligroso${r.dangers === 1 ? '' : 's'}</b>` : ''}${r.warnings ? ` · ${r.warnings} con avisos` : ''}</span> <span class="muted">· ${h((r.engines || []).join(', '))} · ${(r.duration_ms / 1000).toFixed(1)} s · ${fmtTime(r.at)}</span></div>`;
+  const rows = (r.findings || []).slice(0, 100).map(f => { const fs = SCAN[f.severity] || SCAN.warning; return `<tr><td><span class="badge scan ${fs[0]}">${fs[1]}</span></td><td class="mono" title="${h(f.path)}">${h(f.path)}<span class="muted"> · ${h(f.kind)}</span>${f.quarantined ? `<div class="muted">En cuarentena: <span class="mono">${h(f.quarantined)}</span></div>` : ''}</td><td>${f.findings.map(x => `<div>${h(x.message)} <span class="muted mono">${h(x.code)}</span></div>`).join('')}</td></tr>`; }).join('');
+  const body = rows ? `<table class="filelist scan-table"><thead><tr><th>Nivel</th><th>Archivo</th><th>Hallazgos</th></tr></thead><tbody>${rows}</tbody></table>${r.findings.length > 100 ? `<div class="muted">… y ${r.findings.length - 100} más</div>` : ''}` : `<div class="muted">Sin hallazgos: el contenido coincide con la extensión, sin ejecutables disfrazados, macros, PDF con JavaScript ni archivos comprimidos anómalos.</div>`;
+  return `<section class="scan-sec"><h3>Análisis de seguridad</h3>${head}${body}</section>`;
+}
 const canRescan = (j) => j && (j.kind === 'lan_receive' || j.kind === 'download') && j.state === 'completed';
 function rescanJob(j) {
   if (!canRescan(j)) return;
@@ -332,7 +341,7 @@ function rescanJob(j) {
   api(`/api/jobs/${j.id}/scan`, { method: 'POST' }).then(r => {
     const sev = r.severity || 'info';
     toast(r.summary || 'Análisis terminado', sev === 'danger' ? 'err' : sev === 'warning' ? 'warn' : 'ok', sev === 'info' ? 4500 : 9000);
-    if (sev !== 'info') S.tab = 'log'; poll();
+    S.tab = 'general'; poll();
   }).catch(er => toast(er.message, 'err'));
 }
 function retryJob(j) {

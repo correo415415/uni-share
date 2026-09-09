@@ -124,3 +124,6 @@ td.name .kind svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-wi
 
 /* CI headless captures (#shot=1): Chromium does not advance animations, freeze them at their final state */
 html.shot *{animation:none!important;transition:none!important}
+
+/* security scan section in the details pane */
+.scan-sec{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}.scan-sec h3{margin:0 0 8px;font-size:var(--fs);font-weight:600}.scan-head{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;font-size:var(--fs-sm)}.scan-table td{vertical-align:top}.scan-table td:first-child{white-space:nowrap}

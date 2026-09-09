@@ -594,6 +594,7 @@ function viewLogs() {
   return root;
 }
 function wireLogs(root) {
+  if (!$('#log-refresh', root)) return; // still loading
   $$('[data-lv]', root).forEach(b => b.onclick = () => { S.logLevel = b.dataset.lv; localStorage.mloglevel = S.logLevel; S.logs = null; render({ quiet: true }); });
   const q = $('#log-q', root); if (q) q.oninput = () => { S.logQ = q.value; render({ quiet: true }); };
   const list = $('#loglist', root); if (list && !S.logQ) list.scrollTop = list.scrollHeight;

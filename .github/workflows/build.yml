@@ -236,6 +236,11 @@ jobs:
           web m-receive  "$M#home&sheet=receive&shot=1" 390,844
           web m-share-link "$M#share&sheet=share&shot=1" 390,844
           web m-security "$M#settings&view=security&shot=1" 390,844
+          web m-logs     "$M#settings&view=logs&shot=1"     390,844
+          web m-job-scan "$M#jobs&job=4&shot=1"            390,844
+          # Pixel 7-class viewport (412×915) for the two densest screens
+          web m-home-412 "$M#home&shot=1"                  412,915
+          web m-jobs-412 "$M#jobs&shot=1"                  412,915
           web web-main   "http://127.0.0.1:47911/#shot=1" 1400,900
           ls -la shots || true
 

@@ -88,7 +88,7 @@ function connect() {
   es.addEventListener('state', e => { try { applyState(JSON.parse(e.data)); } catch (err) { console.error(err); } });
   es.onerror = () => { S.online = false; $('#offline').hidden = false; es.close(); es = null; if (!pollT) pollT = setInterval(poll, 2000); };
 }
-async function poll() { try { applyState(await api('/api/state')); clearInterval(pollT); pollT = null; connect(); } catch { S.online = false; $('#offline').hidden = false; } }
+async function poll() { try { applyState(await api('/api/state')); clearInterval(pollT); pollT = null; if (!S.shot) connect(); } catch { S.online = false; $('#offline').hidden = false; } }
 async function loadCfg() { try { const r = await api('/api/config'); S.cfg = r.config; S.cfgPath = r.path; if (S.tab === 'settings') render(); } catch { /* engine not up yet */ } }
 
 // ───────────────────────── toasts, clipboard, haptics ─────────────────────────
@@ -681,6 +681,7 @@ function init() {
   if (mobile) document.documentElement.classList.add('android');
   history.replaceState({ depth: 0 }, '');
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && !es) poll(); });
-  render(); loadCfg(); connect();
+  render(); loadCfg();
+  S.shot = !!hp.get('shot'); if (S.shot) poll(); else connect(); // shot=1: one /api/state fetch, no SSE (headless screenshots)
 }
 init();

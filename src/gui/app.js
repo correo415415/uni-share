@@ -191,7 +191,8 @@ async function poll() {
   if (!es) { const fast = S.data.jobs?.some(j => j.state === 'running') || S.data.pending?.length; pollTimer = setTimeout(poll, document.hidden ? 4000 : fast ? 700 : 1800); }
 }
 function connectEvents() {
-  if (!window.EventSource) return poll();
+  // `#shot=1` (CI headless screenshots): one snapshot, no SSE, so the document reaches `load`.
+  if (!window.EventSource || /(^|[#&])shot=1/.test(location.hash)) return api('/api/state').then(applyState).catch(() => {});
   es = new EventSource('/api/events');
   es.addEventListener('state', (ev) => { try { applyState(JSON.parse(ev.data)); } catch { } });
   es.onopen = () => { clearTimeout(pollTimer); };

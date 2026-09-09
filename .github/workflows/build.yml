@@ -209,18 +209,21 @@ jobs:
           for i in $(seq 1 40); do curl -sf http://127.0.0.1:47911/api/state >/dev/null && break; sleep 0.25; done
           web() {  # name url WxH [extra chrome flags]
             local name="$1" url="$2" size="$3"; shift 3
-            timeout 60 "$CHROME" --headless=new --no-sandbox --disable-gpu --hide-scrollbars --force-device-scale-factor=2 \
-              --window-size="$size" --virtual-time-budget=4000 "$@" --screenshot="shots/$name.png" "$url" \
+            # `&shot=1`: la página carga el estado una sola vez (sin SSE), así el documento llega a
+            # «load» y --timeout dispara la captura a los 2,5 s en vez de agotar el tiempo.
+            timeout 45 "$CHROME" --headless=new --no-sandbox --disable-gpu --hide-scrollbars --force-device-scale-factor=2 \
+              --disable-extensions --disable-sync --no-first-run --user-data-dir="$RUNNER_TEMP/chrome-shots" \
+              --window-size="$size" --timeout=2500 "$@" --screenshot="shots/$name.png" "$url" \
               > "shots/$name.log" 2>&1 && rm -f "shots/$name.log" || { echo "::warning::captura $name falló"; tail -20 "shots/$name.log"; }
           }
           M=http://127.0.0.1:47911/m
-          web m-home     "$M#home"     390,844
-          web m-jobs     "$M#jobs"     390,844
-          web m-devices  "$M#devices"  390,844
-          web m-share    "$M#share"    390,844
-          web m-settings "$M#settings" 390,844
-          web m-light    "$M#home&theme=light" 390,844
-          web web-main   http://127.0.0.1:47911/ 1400,900
+          web m-home     "$M#home&shot=1"     390,844
+          web m-jobs     "$M#jobs&shot=1"     390,844
+          web m-devices  "$M#devices&shot=1"  390,844
+          web m-share    "$M#share&shot=1"    390,844
+          web m-settings "$M#settings&shot=1" 390,844
+          web m-light    "$M#home&theme=light&shot=1" 390,844
+          web web-main   "http://127.0.0.1:47911/#shot=1" 1400,900
           ls -la shots || true
 
       # Android: solo si el runner tiene SDK + NDK (ANDROID_HOME / ANDROID_NDK_HOME o

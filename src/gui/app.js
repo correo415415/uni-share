@@ -192,7 +192,8 @@ async function poll() {
 }
 function connectEvents() {
   // `#shot=1` (CI headless screenshots): one snapshot, no SSE, so the document reaches `load`.
-  if (!window.EventSource || /(^|[#&])shot=1/.test(location.hash)) return api('/api/state').then(applyState).catch(() => {});
+  if (/(^|[#&])shot=1/.test(location.hash)) { document.documentElement.classList.add('shot'); return api('/api/state').then(applyState).catch(() => {}); }
+  if (!window.EventSource) return poll();
   es = new EventSource('/api/events');
   es.addEventListener('state', (ev) => { try { applyState(JSON.parse(ev.data)); } catch { } });
   es.onopen = () => { clearTimeout(pollTimer); };

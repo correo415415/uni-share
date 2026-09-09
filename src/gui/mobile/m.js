@@ -672,7 +672,8 @@ function init() {
   // Deep link for reviews/screenshots: /m#jobs or /m#home&theme=light (also honoured when the page is reloaded).
   const hash = location.hash.replace(/^#/, ''); const hp = new URLSearchParams(hash.replace(/^([a-z]+)(&|$)/, 'tab=$1$2'));
   if (hp.get('tab') && SCREENS[hp.get('tab')]) { S.tab = hp.get('tab'); localStorage.mtab = S.tab; }
-  setTheme(hp.get('theme') || localStorage.mtheme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+  S.shot = !!hp.get('shot'); if (S.shot) document.documentElement.classList.add('shot'); // headless captures: no animations, dark unless theme=light
+  setTheme(hp.get('theme') || (S.shot ? 'dark' : localStorage.mtheme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')));
   $$('#tabs button').forEach(b => b.onclick = () => { if (S.tab === b.dataset.tab && !S.stack.length) { try { $('#page').scrollTo({ top: 0, behavior: 'smooth' }); } catch { $('#page').scrollTop = 0; } } else go(b.dataset.tab); });
   $('#fab').onclick = () => openNew(S.tab === 'share' ? 'global' : 'lan');
   $('#t-back').onclick = pop;
@@ -682,6 +683,6 @@ function init() {
   history.replaceState({ depth: 0 }, '');
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && !es) poll(); });
   render(); loadCfg();
-  S.shot = !!hp.get('shot'); if (S.shot) poll(); else connect(); // shot=1: one /api/state fetch, no SSE (headless screenshots)
+  if (S.shot) poll(); else connect(); // shot=1: one /api/state fetch, no SSE (headless screenshots)
 }
 init();

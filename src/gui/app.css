@@ -121,3 +121,6 @@ td.name .kind svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-wi
 .ctx div{padding:6px 12px;border-radius:var(--radius-sm);cursor:pointer;color:var(--fg-2);display:flex;justify-content:space-between;gap:10px}.ctx div:hover{background:var(--bg-4);color:var(--fg)}.ctx div.dis{opacity:.4;pointer-events:none}.ctx hr{border:0;border-top:1px solid var(--line);margin:4px 0}
 .settings h3{margin:4px 0 0;font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:.7px;color:var(--fg-3);font-weight:700}
 @media (max-width:900px){#app{grid-template-columns:1fr;grid-template-areas:"toolbar" "main" "status"}.sidebar{display:none}.search{width:140px}}
+
+/* CI headless captures (#shot=1): Chromium does not advance animations, freeze them at their final state */
+html.shot *{animation:none!important;transition:none!important}

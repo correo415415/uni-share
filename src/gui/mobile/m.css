@@ -262,4 +262,5 @@ svg{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-l
 /* motion */
 .page>*{animation:fadein 160ms both}@keyframes fadein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+html.shot *{animation:none!important;transition:none!important}
 @media (min-width:560px){.page{padding-left:max(12px,calc(50% - 320px));padding-right:max(12px,calc(50% - 320px))}}

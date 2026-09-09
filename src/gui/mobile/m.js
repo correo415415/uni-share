@@ -669,7 +669,10 @@ function wire(root, top) {
 function setTheme(t) { document.documentElement.dataset.theme = t; localStorage.mtheme = t; $('#t-theme').innerHTML = ico(t === 'light' ? 'sun' : 'moon'); const m = $('meta[name=theme-color]'); if (m) m.content = t === 'light' ? '#f4f5f7' : '#151719'; }
 function toggleTheme() { setTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'); render(); }
 function init() {
-  setTheme(localStorage.mtheme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+  // Deep link for reviews/screenshots: /m#jobs or /m#home&theme=light (also honoured when the page is reloaded).
+  const hash = location.hash.replace(/^#/, ''); const hp = new URLSearchParams(hash.replace(/^([a-z]+)(&|$)/, 'tab=$1$2'));
+  if (hp.get('tab') && SCREENS[hp.get('tab')]) { S.tab = hp.get('tab'); localStorage.mtab = S.tab; }
+  setTheme(hp.get('theme') || localStorage.mtheme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
   $$('#tabs button').forEach(b => b.onclick = () => { if (S.tab === b.dataset.tab && !S.stack.length) { try { $('#page').scrollTo({ top: 0, behavior: 'smooth' }); } catch { $('#page').scrollTop = 0; } } else go(b.dataset.tab); });
   $('#fab').onclick = () => openNew(S.tab === 'share' ? 'global' : 'lan');
   $('#t-back').onclick = pop;

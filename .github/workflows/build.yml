@@ -186,6 +186,43 @@ jobs:
           shot light-settings --light --dialog settings
           ls -la shots || true
 
+      # GUI móvil (/m) y web (/) con estado demo, capturadas con Chromium headless si el
+      # runner lo tiene (chromium / chromium-browser / google-chrome). Sin navegador: aviso y se sigue.
+      - name: Screenshots de la GUI web y móvil (gui --demo, headless Chromium)
+        if: runner.os == 'Linux'
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          BIN=target/release/uni-share
+          [ -x "$BIN" ] || { echo "sin binario"; exit 0; }
+          CHROME=""
+          for c in chromium chromium-browser google-chrome google-chrome-stable; do
+            if command -v "$c" >/dev/null 2>&1; then CHROME="$c"; break; fi
+          done
+          [ -n "$CHROME" ] || { echo "::warning::sin Chromium en el runner: no hay capturas web/móvil"; exit 0; }
+          mkdir -p shots
+          export UNI_SHARE_HOME="$RUNNER_TEMP/uni-share-web-shots"
+          "$BIN" gui --demo --no-open --port 47911 > shots/gui-demo.log 2>&1 &
+          GUI=$!
+          trap 'kill $GUI 2>/dev/null || true' EXIT
+          for i in $(seq 1 40); do curl -sf http://127.0.0.1:47911/api/state >/dev/null && break; sleep 0.25; done
+          web() {  # name url WxH [extra chrome flags]
+            local name="$1" url="$2" size="$3"; shift 3
+            timeout 60 "$CHROME" --headless=new --no-sandbox --disable-gpu --hide-scrollbars --force-device-scale-factor=2 \
+              --window-size="$size" --virtual-time-budget=4000 "$@" --screenshot="shots/$name.png" "$url" \
+              > "shots/$name.log" 2>&1 && rm -f "shots/$name.log" || { echo "::warning::captura $name falló"; tail -20 "shots/$name.log"; }
+          }
+          M=http://127.0.0.1:47911/m
+          web m-home     "$M#home"     390,844
+          web m-jobs     "$M#jobs"     390,844
+          web m-devices  "$M#devices"  390,844
+          web m-share    "$M#share"    390,844
+          web m-settings "$M#settings" 390,844
+          web m-light    "$M#home&theme=light" 390,844
+          web web-main   http://127.0.0.1:47911/ 1400,900
+          ls -la shots || true
+
       # Android: solo si el runner tiene SDK + NDK (ANDROID_HOME / ANDROID_NDK_HOME o
       # ~/Android/Sdk). No falla el build si faltan: se avisa y se sigue.
       - name: Android (cargo-ndk + APK debug, si hay SDK/NDK)

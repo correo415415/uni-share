@@ -438,6 +438,38 @@ async fn handle_cmd(engine: &Arc<Engine>, cmd: Cmd, etx: &std::sync::mpsc::Sende
 fn fmt_time(ms: i64) -> String {
     chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms).map(|d| d.with_timezone(&chrono::Local).format("%H:%M:%S").to_string()).unwrap_or_else(|| "—".into())
 }
+/// "3 archivos · 1 con avisos · heuristics, clamav (clamdscan 1.4.1) · 1.8 s"
+fn scan_summary_line(r: &crate::engine::ScanSummary) -> String {
+    let mut parts = vec![format!("{} archivo{}", r.files, if r.files == 1 { "" } else { "s" })];
+    if r.dangers > 0 {
+        parts.push(format!("{} peligroso{}", r.dangers, if r.dangers == 1 { "" } else { "s" }));
+    }
+    if r.warnings > 0 {
+        parts.push(format!("{} con avisos", r.warnings));
+    }
+    parts.push(r.engines.join(", "));
+    parts.push(format!("{:.1} s", r.duration_ms as f64 / 1000.0));
+    parts.join(" · ")
+}
+
+/// One block per flagged file: `PELIGRO [pe] ruta` followed by its findings.
+fn scan_detail_text(r: &crate::engine::ScanSummary) -> String {
+    let mut out = String::new();
+    for f in &r.findings {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&format!("{} [{}] {}\n", f.severity.label(), f.kind, f.path));
+        for x in &f.findings {
+            out.push_str(&format!("   • {}\n", x.message));
+        }
+        if let Some(q) = &f.quarantined {
+            out.push_str(&format!("   → en cuarentena: {q}\n"));
+        }
+    }
+    out.trim_end().to_string()
+}
+
 fn fmt_eta(s: Option<u64>) -> String {
     match s {
         None => "—".into(),
@@ -575,6 +607,8 @@ fn render(ctx: &UiCtx) {
                 indeterminate: j.state == JobState::Running && j.total == 0,
                 scan: j.scan.map(|s| match s { Severity::Info => "info", Severity::Warning => "warning", Severity::Danger => "danger" }).unwrap_or("").into(),
                 scan_label: j.scan.map(|s| match s { Severity::Info => "Análisis OK", Severity::Warning => "Avisos", Severity::Danger => "PELIGRO" }).unwrap_or("").into(),
+                scan_summary: j.scan_report.as_ref().map(scan_summary_line).unwrap_or_default().into(),
+                scan_detail: j.scan_report.as_ref().map(scan_detail_text).unwrap_or_default().into(),
                 retryable: j.retryable,
             }
         })

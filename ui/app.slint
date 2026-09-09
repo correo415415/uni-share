@@ -38,6 +38,8 @@ export struct JobRow {
     indeterminate: bool,
     scan: string,        // "" | info | warning | danger
     scan-label: string,
+    scan-summary: string, // one-line verdict ("3 archivos · 1 con avisos · heuristics, clamav · 1.8 s")
+    scan-detail: string,  // per-file findings, one block per file ("" when clean)
     retryable: bool,
 }
 export struct FileRow { path: string, size-text: string }
@@ -432,6 +434,17 @@ export component MainWindow inherits Window {
                                                 Text { text: root.sel().link == "" ? "—" : root.sel().link; color: root.sel().link == "" ? Theme.fg : Theme.accent; vertical-alignment: center; overflow: elide; horizontal-stretch: 1;
                                                     TouchArea { mouse-cursor: pointer; clicked => { if root.sel().link != "" { root.open-url(root.sel().link); } } } } }
                                         }
+                                    }
+                                    // Security scan (receptions/downloads) — what the scanner found, not only the badge
+                                    if root.tab == 0 && root.sel().id >= 0 && root.sel().scan != "": VerticalLayout { spacing: 6px; min-width: 0px;
+                                        Rectangle { height: 1px; background: Theme.line; }
+                                        HorizontalLayout { spacing: 8px; height: 24px; min-width: 0px;
+                                            Text { text: "Análisis de seguridad"; color: Theme.fg; font-weight: 600; vertical-alignment: center; }
+                                            Badge { y: 3px; text: root.sel().scan-label; kind: root.sel().scan == "info" ? "completed" : root.sel().scan == "warning" ? "warn" : "danger"; }
+                                            Text { text: root.sel().scan-summary; color: Theme.fg3; font-size: Theme.fs-sm; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; min-width: 0px; }
+                                        }
+                                        if root.sel().scan-detail == "": Hint { min-width: 0px; horizontal-stretch: 1; text: "Sin hallazgos: el contenido coincide con la extensión, sin ejecutables disfrazados, macros, PDF con JavaScript ni archivos comprimidos anómalos."; }
+                                        if root.sel().scan-detail != "": Text { text: root.sel().scan-detail; color: Theme.fg2; font-family: Theme.mono; font-size: 12px; wrap: word-wrap; min-width: 0px; horizontal-stretch: 1; }
                                     }
                                     // Files
                                     if root.tab == 1 && root.sel().id >= 0: VerticalLayout { spacing: 0px;

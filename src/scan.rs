@@ -1168,10 +1168,9 @@ pub mod yara {
             pub fn compile(files: &[PathBuf]) -> Result<Self> {
                 let fp = fingerprint(files);
                 let cache = CACHE.get_or_init(|| Mutex::new(None));
-                if let Some((cfp, rules, n, failed)) = cache.lock().ok().and_then(|g| (*g).clone()) {
-                    if cfp == fp {
-                        return Ok(Self { rules, rule_count: n, file_count: files.len() - failed, failed_files: failed });
-                    }
+                let cached = cache.lock().ok().and_then(|g| (*g).clone()).filter(|(cfp, ..)| *cfp == fp);
+                if let Some((_, rules, n, failed)) = cached {
+                    return Ok(Self { rules, rule_count: n, file_count: files.len() - failed, failed_files: failed });
                 }
                 let mut compiler = yara_x::Compiler::new();
                 compiler.relaxed_re_syntax(true);
@@ -1727,7 +1726,7 @@ private rule hidden { condition: true }
         let tiny = write(d.path(), "tiny.txt", b"hi");
         let rep = scan_paths(&[eicar.clone(), ps.clone(), tiny.clone()], &cfg);
         assert!(rep.engines.iter().any(|e| e.starts_with("yara-x (3 regla(s), 1 archivo(s))")), "{:?}", rep.engines);
-        let find = |p: &PathBuf| rep.files.iter().find(|f| &f.path == p).unwrap();
+        let find = |p: &Path| rep.files.iter().find(|f| f.path.as_path() == p).unwrap();
         let e = find(&eicar);
         assert!(e.findings.iter().any(|f| f.code == "yara" && f.severity == Severity::Danger && f.message.contains("test/eicar_like") && f.message.contains("EICAR de prueba")), "{:?}", e.findings);
         let p = find(&ps);

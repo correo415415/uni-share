@@ -1194,7 +1194,7 @@ pub mod yara {
                     }
                 }
                 let rules = Arc::new(compiler.build());
-                let n = rules.iter().len();
+                let n = rules.iter().filter(|r| !r.is_private()).count();
                 if let Ok(mut g) = cache.lock() {
                     *g = Some((fp, rules.clone(), n, failed));
                 }

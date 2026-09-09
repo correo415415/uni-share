@@ -52,6 +52,8 @@ const MAX_ARCHIVE_ENTRIES: usize = 200_000;
 const MAX_NESTING: u32 = 3;
 const TAR_BUDGET: u64 = 8 * 1024 * 1024 * 1024;
 const CLAMAV_TIMEOUT: Duration = Duration::from_secs(120);
+#[cfg_attr(not(feature = "yara"), allow(dead_code))]
+const YARA_TIMEOUT: Duration = Duration::from_secs(60);
 
 // ───────────────────────── model ─────────────────────────
 
@@ -183,13 +185,25 @@ pub struct ScanConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clamav_path: Option<PathBuf>,
     pub on_danger: DangerAction,
-    /// Skip ClamAV for files larger than this many MiB (0 = no limit).
+    /// Skip ClamAV/YARA for files larger than this many MiB (0 = no limit).
     pub max_file_mib: u64,
+    /// Run YARA-X with the user's rules (only when compiled with `--features yara`).
+    pub yara: bool,
+    /// Directory with `*.yar`/`*.yara` rules (default `<data_dir>/rules`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yara_rules_dir: Option<PathBuf>,
 }
 
 impl Default for ScanConfig {
     fn default() -> Self {
-        Self { enabled: true, clamav: true, clamav_path: None, on_danger: DangerAction::Quarantine, max_file_mib: 0 }
+        Self { enabled: true, clamav: true, clamav_path: None, on_danger: DangerAction::Quarantine, max_file_mib: 0, yara: true, yara_rules_dir: None }
+    }
+}
+
+impl ScanConfig {
+    /// Effective YARA rules directory.
+    pub fn yara_rules_dir(&self) -> PathBuf {
+        self.yara_rules_dir.clone().unwrap_or_else(|| crate::config::data_dir().join("rules"))
     }
 }
 
@@ -232,6 +246,26 @@ pub fn scan_paths(paths: &[PathBuf], cfg: &ScanConfig) -> Report {
                 }
             }
             None => report.engines.push("clamav: no instalado".into()),
+        }
+    }
+    if cfg.yara {
+        let limit = cfg.max_file_mib.checked_mul(1024 * 1024).filter(|l| *l > 0);
+        match yara::load(&cfg.yara_rules_dir()) {
+            yara::Loaded::Ready(rs) => {
+                report.engines.push(rs.describe());
+                for fr in report.files.iter_mut() {
+                    if limit.map(|l| fr.size > l).unwrap_or(false) {
+                        fr.findings.push(Finding::new(Severity::Info, "yara_skipped", "archivo demasiado grande para YARA (scan.max_file_mib)"));
+                        continue;
+                    }
+                    match rs.scan(&fr.path) {
+                        Ok(hits) => fr.findings.extend(hits.into_iter().map(yara::Hit::into_finding)),
+                        Err(e) => fr.findings.push(Finding::new(Severity::Info, "yara_error", format!("YARA no pudo analizar: {e:#}"))),
+                    }
+                }
+            }
+            yara::Loaded::Note(note) => report.engines.push(note),
+            yara::Loaded::Silent => {}
         }
     }
     if cfg.on_danger != DangerAction::Report {
@@ -994,6 +1028,250 @@ pub mod clamav {
     }
 }
 
+// ───────────────────────── YARA ─────────────────────────
+
+/// YARA-X integration (`cargo build --features yara`).
+///
+/// Rules live in `<data_dir>/rules/` (or `scan.yara_rules_dir`) as `*.yar` / `*.yara`
+/// files, each compiled into its own namespace (the file stem). Files that fail to
+/// compile are logged and skipped, the rest still run. Compiled rules are cached and
+/// recompiled only when a rule file changes.
+///
+/// Severity of a hit comes from the rule's `severity` meta (`info|low` → info,
+/// `warning|medium|suspicious` → warning, `danger|high|critical|malware` → danger) or
+/// from a tag with one of those names; default **danger**. The `description` meta is
+/// appended to the message.
+pub mod yara {
+    use super::*;
+
+    /// Result of loading the rules directory.
+    pub enum Loaded {
+        /// Rules compiled and ready.
+        Ready(RuleSet),
+        /// Engine note to include in the report (`yara: sin reglas`, `yara: no compilado`).
+        Note(String),
+        /// Nothing to say (not compiled and the user has no rules either).
+        Silent,
+    }
+
+    /// One matching rule.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Hit {
+        pub namespace: String,
+        pub rule: String,
+        pub severity: Severity,
+        pub description: Option<String>,
+    }
+
+    impl Hit {
+        pub fn into_finding(self) -> Finding {
+            let mut msg = format!("YARA: {}/{}", self.namespace, self.rule);
+            if let Some(d) = self.description.filter(|d| !d.trim().is_empty()) {
+                msg.push_str(" — ");
+                msg.push_str(d.trim());
+            }
+            Finding::new(self.severity, "yara", msg)
+        }
+    }
+
+    /// Whether this binary was built with the `yara` feature.
+    pub const fn is_compiled() -> bool {
+        cfg!(feature = "yara")
+    }
+
+    /// Map a `severity` meta/tag to a [`Severity`].
+    pub fn severity_from(s: &str) -> Option<Severity> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "info" | "low" | "informational" | "notice" => Some(Severity::Info),
+            "warning" | "warn" | "medium" | "suspicious" => Some(Severity::Warning),
+            "danger" | "high" | "critical" | "malware" | "malicious" => Some(Severity::Danger),
+            _ => None,
+        }
+    }
+
+    pub fn is_rule_file(p: &Path) -> bool {
+        matches!(p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(), Some("yar" | "yara"))
+    }
+
+    /// Rule files under `dir` (recursive, sorted).
+    pub fn rule_files(dir: &Path) -> Vec<PathBuf> {
+        if !dir.is_dir() {
+            return Vec::new();
+        }
+        let mut v: Vec<PathBuf> = walkdir::WalkDir::new(dir)
+            .follow_links(false)
+            .max_depth(4)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file() && is_rule_file(e.path()))
+            .map(|e| e.into_path())
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// Fingerprint of the rules directory (path, mtime, size per file) → recompile when it changes.
+    #[cfg_attr(not(feature = "yara"), allow(dead_code))]
+    fn fingerprint(files: &[PathBuf]) -> Vec<(PathBuf, u64, u64)> {
+        files
+            .iter()
+            .map(|p| {
+                let md = std::fs::metadata(p).ok();
+                let mtime = md.as_ref().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+                (p.clone(), mtime, md.map(|m| m.len()).unwrap_or(0))
+            })
+            .collect()
+    }
+
+    /// Human label for GUIs (`yara-x · 3 reglas (2 archivos)`, `sin reglas en …`, `no compilado`).
+    pub fn status(dir: &Path) -> String {
+        match load(dir) {
+            Loaded::Ready(rs) => rs.describe(),
+            Loaded::Note(n) => n,
+            Loaded::Silent => format!("yara: no compilado (cargo build --features yara); reglas en {}", dir.display()),
+        }
+    }
+
+    /// Load and compile the rules in `dir`.
+    pub fn load(dir: &Path) -> Loaded {
+        let files = rule_files(dir);
+        if !is_compiled() {
+            return if files.is_empty() { Loaded::Silent } else { Loaded::Note(format!("yara: no compilado (cargo build --features yara); {} archivo(s) de reglas ignorados", files.len())) };
+        }
+        if files.is_empty() {
+            return Loaded::Note(format!("yara: sin reglas en {}", dir.display()));
+        }
+        match RuleSet::compile(&files) {
+            Ok(rs) if rs.count() == 0 => Loaded::Note(format!("yara: ninguna regla compiló ({} archivo(s) con errores)", rs.failed_files)),
+            Ok(rs) => Loaded::Ready(rs),
+            Err(e) => Loaded::Note(format!("yara: {e:#}")),
+        }
+    }
+
+    #[cfg(feature = "yara")]
+    mod imp {
+        use super::*;
+        use std::sync::{Arc, Mutex, OnceLock};
+
+        type Cache = Mutex<Option<(Vec<(PathBuf, u64, u64)>, Arc<yara_x::Rules>, usize, usize)>>;
+        static CACHE: OnceLock<Cache> = OnceLock::new();
+
+        /// Compiled rule set.
+        pub struct RuleSet {
+            rules: Arc<yara_x::Rules>,
+            rule_count: usize,
+            file_count: usize,
+            pub failed_files: usize,
+        }
+
+        impl RuleSet {
+            pub fn compile(files: &[PathBuf]) -> Result<Self> {
+                let fp = fingerprint(files);
+                let cache = CACHE.get_or_init(|| Mutex::new(None));
+                if let Some((cfp, rules, n, failed)) = cache.lock().ok().and_then(|g| (*g).clone()) {
+                    if cfp == fp {
+                        return Ok(Self { rules, rule_count: n, file_count: files.len() - failed, failed_files: failed });
+                    }
+                }
+                let mut compiler = yara_x::Compiler::new();
+                compiler.relaxed_re_syntax(true);
+                let mut failed = 0usize;
+                for f in files {
+                    let src = match std::fs::read(f) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            tracing::warn!(target: "uni_share::scan", "YARA: no se pudo leer {}: {e}", f.display());
+                            failed += 1;
+                            continue;
+                        }
+                    };
+                    let ns = f.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "rules".into());
+                    compiler.new_namespace(&ns);
+                    let code = yara_x::SourceCode::from(src.as_slice()).with_origin(f.to_string_lossy().to_string());
+                    if let Err(e) = compiler.add_source(code) {
+                        tracing::warn!(target: "uni_share::scan", "YARA: {} no compila: {e}", f.display());
+                        failed += 1;
+                    }
+                }
+                let rules = Arc::new(compiler.build());
+                let n = rules.iter().len();
+                if let Ok(mut g) = cache.lock() {
+                    *g = Some((fp, rules.clone(), n, failed));
+                }
+                Ok(Self { rules, rule_count: n, file_count: files.len() - failed, failed_files: failed })
+            }
+
+            pub fn count(&self) -> usize {
+                self.rule_count
+            }
+
+            pub fn describe(&self) -> String {
+                format!("yara-x ({} regla(s), {} archivo(s))", self.rule_count, self.file_count)
+            }
+
+            pub fn scan(&self, file: &Path) -> Result<Vec<Hit>> {
+                let mut scanner = yara_x::Scanner::new(&self.rules);
+                scanner.set_timeout(YARA_TIMEOUT);
+                let results = scanner.scan_file(file).map_err(|e| anyhow::anyhow!("{e}"))?;
+                let mut hits = Vec::new();
+                for r in results.matching_rules() {
+                    if r.is_private() {
+                        continue;
+                    }
+                    let mut severity = None;
+                    let mut description = None;
+                    for (k, v) in r.metadata() {
+                        let val = match v {
+                            yara_x::MetaValue::String(s) => s.to_string(),
+                            yara_x::MetaValue::Bytes(b) => b.to_string(),
+                            yara_x::MetaValue::Integer(i) => i.to_string(),
+                            yara_x::MetaValue::Float(f) => f.to_string(),
+                            yara_x::MetaValue::Bool(b) => b.to_string(),
+                        };
+                        match k.to_ascii_lowercase().as_str() {
+                            "severity" | "level" | "score" if severity.is_none() => severity = severity_from(&val),
+                            "description" | "desc" | "descripcion" | "descripción" if description.is_none() => description = Some(val),
+                            _ => {}
+                        }
+                    }
+                    if severity.is_none() {
+                        severity = r.tags().find_map(|t| severity_from(t.identifier()));
+                    }
+                    hits.push(Hit { namespace: r.namespace().to_string(), rule: r.identifier().to_string(), severity: severity.unwrap_or(Severity::Danger), description });
+                }
+                Ok(hits)
+            }
+        }
+    }
+
+    #[cfg(not(feature = "yara"))]
+    mod imp {
+        use super::*;
+
+        /// Placeholder when built without the `yara` feature (never constructed).
+        pub struct RuleSet {
+            pub failed_files: usize,
+        }
+
+        impl RuleSet {
+            pub fn compile(_files: &[PathBuf]) -> Result<Self> {
+                anyhow::bail!("no compilado (cargo build --features yara)")
+            }
+            pub fn count(&self) -> usize {
+                0
+            }
+            pub fn describe(&self) -> String {
+                "yara: no compilado".into()
+            }
+            pub fn scan(&self, _file: &Path) -> Result<Vec<Hit>> {
+                Ok(Vec::new())
+            }
+        }
+    }
+
+    pub use imp::RuleSet;
+}
+
 // ───────────────────────── tests ─────────────────────────
 
 #[cfg(test)]
@@ -1297,7 +1575,7 @@ mod tests {
         std::fs::create_dir(&sub).unwrap();
         let bad2 = write(&sub, "readme.pdf.exe", b"MZ\0\0");
 
-        let cfg = ScanConfig { clamav: false, on_danger: DangerAction::Report, ..Default::default() };
+        let cfg = ScanConfig { clamav: false, yara: false, on_danger: DangerAction::Report, ..Default::default() };
         let rep = scan_paths(&[d.path().to_path_buf()], &cfg);
         assert_eq!(rep.files.len(), 3);
         assert_eq!(rep.dangers(), 2);
@@ -1352,7 +1630,7 @@ mod tests {
         assert!(r.is_clean());
 
         // pointing ClamAV to a non-existent binary → engine reports "no instalado", nothing dangerous
-        let cfg = ScanConfig { clamav: true, clamav_path: Some(d.path().join("nope/clamscan")), on_danger: DangerAction::Report, ..Default::default() };
+        let cfg = ScanConfig { clamav: true, clamav_path: Some(d.path().join("nope/clamscan")), yara: false, on_danger: DangerAction::Report, ..Default::default() };
         let rep = scan_paths(std::slice::from_ref(&p), &cfg);
         assert!(rep.engines.iter().any(|e| e.contains("no instalado")));
         assert!(rep.is_clean());
@@ -1373,5 +1651,90 @@ mod tests {
             assert!(f.findings.iter().any(|x| x.code == "clamav" && x.message.contains("Eicar-Test-Signature")), "{:?}", f.findings);
             assert_eq!(rep.dangers(), 1);
         }
+    }
+
+    #[test]
+    fn yara_helpers() {
+        assert_eq!(yara::severity_from("HIGH"), Some(Severity::Danger));
+        assert_eq!(yara::severity_from(" medium "), Some(Severity::Warning));
+        assert_eq!(yara::severity_from("info"), Some(Severity::Info));
+        assert_eq!(yara::severity_from("whatever"), None);
+        assert!(yara::is_rule_file(Path::new("a/b/c.YAR")));
+        assert!(yara::is_rule_file(Path::new("x.yara")));
+        assert!(!yara::is_rule_file(Path::new("x.txt")));
+        let f = yara::Hit { namespace: "mine".into(), rule: "evil".into(), severity: Severity::Danger, description: Some(" bad stuff ".into()) }.into_finding();
+        assert_eq!(f.code, "yara");
+        assert_eq!(f.message, "YARA: mine/evil — bad stuff");
+        assert_eq!(f.severity, Severity::Danger);
+    }
+
+    #[test]
+    fn yara_rules_dir_listing_and_missing() {
+        let d = tempfile::tempdir().unwrap();
+        // no dir at all
+        assert!(yara::rule_files(&d.path().join("nope")).is_empty());
+        let rules = d.path().join("rules");
+        std::fs::create_dir_all(rules.join("sub")).unwrap();
+        write(&rules, "b.yar", b"rule b { condition: true }");
+        write(&rules.join("sub"), "a.yara", b"rule a { condition: true }");
+        write(&rules, "notes.txt", b"ignored");
+        let files = yara::rule_files(&rules);
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().all(|p| yara::is_rule_file(p)));
+
+        // ScanConfig with an explicit dir → engine note or real engine depending on the feature
+        let cfg = ScanConfig { clamav: false, yara: true, yara_rules_dir: Some(rules.clone()), on_danger: DangerAction::Report, ..Default::default() };
+        assert_eq!(cfg.yara_rules_dir(), rules);
+        let p = write(d.path(), "ok.txt", b"hello");
+        let rep = scan_paths(std::slice::from_ref(&p), &cfg);
+        if yara::is_compiled() {
+            assert!(rep.engines.iter().any(|e| e.starts_with("yara-x (2 regla(s)")), "{:?}", rep.engines);
+        } else {
+            assert!(rep.engines.iter().any(|e| e.contains("no compilado")), "{:?}", rep.engines);
+        }
+        // empty rules dir
+        let empty = d.path().join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        let cfg = ScanConfig { yara_rules_dir: Some(empty), ..cfg };
+        let rep = scan_paths(std::slice::from_ref(&p), &cfg);
+        if yara::is_compiled() {
+            assert!(rep.engines.iter().any(|e| e.contains("sin reglas")), "{:?}", rep.engines);
+        } else {
+            assert_eq!(rep.engines, vec!["heuristics".to_string()]);
+        }
+    }
+
+    #[cfg(feature = "yara")]
+    #[test]
+    fn yara_matches_with_severity_and_broken_file() {
+        let d = tempfile::tempdir().unwrap();
+        let rules = d.path().join("rules");
+        std::fs::create_dir_all(&rules).unwrap();
+        write(
+            &rules,
+            "test.yar",
+            br#"
+rule eicar_like { meta: severity = "high" description = "EICAR de prueba" strings: $a = "EICAR-STANDARD-ANTIVIRUS-TEST-FILE" condition: $a }
+rule suspicious_word : suspicious { strings: $a = "powershell" nocase condition: $a }
+rule note_only { meta: severity = "info" condition: filesize < 10 }
+private rule hidden { condition: true }
+"#,
+        );
+        write(&rules, "broken.yar", b"rule x { condition: nonsense( }");
+        let cfg = ScanConfig { clamav: false, yara: true, yara_rules_dir: Some(rules), on_danger: DangerAction::Report, ..Default::default() };
+        let eicar = write(d.path(), "eicar.txt", b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*");
+        let ps = write(d.path(), "run.txt", b"echo PowerShell -enc AAAA");
+        let tiny = write(d.path(), "tiny.txt", b"hi");
+        let rep = scan_paths(&[eicar.clone(), ps.clone(), tiny.clone()], &cfg);
+        assert!(rep.engines.iter().any(|e| e.starts_with("yara-x (3 regla(s), 1 archivo(s))")), "{:?}", rep.engines);
+        let find = |p: &PathBuf| rep.files.iter().find(|f| &f.path == p).unwrap();
+        let e = find(&eicar);
+        assert!(e.findings.iter().any(|f| f.code == "yara" && f.severity == Severity::Danger && f.message.contains("test/eicar_like") && f.message.contains("EICAR de prueba")), "{:?}", e.findings);
+        let p = find(&ps);
+        assert!(p.findings.iter().any(|f| f.code == "yara" && f.severity == Severity::Warning && f.message.contains("suspicious_word")), "{:?}", p.findings);
+        let t = find(&tiny);
+        assert!(t.findings.iter().any(|f| f.code == "yara" && f.severity == Severity::Info && f.message.contains("note_only")), "{:?}", t.findings);
+        assert!(!t.findings.iter().any(|f| f.message.contains("hidden")));
+        assert_eq!(rep.dangers(), 1);
     }
 }

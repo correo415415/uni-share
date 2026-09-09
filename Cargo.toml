@@ -81,6 +81,10 @@ tempfile = "3"
 bytesize = "2"
 regex = "1"
 
+# --- optional: YARA rules engine (`cargo build --features yara`) ---
+# YARA-X (VirusTotal's Rust rewrite). Pulls in wasmtime, so it is opt-in.
+yara-x = { version = "1.20", optional = true }
+
 # --- native desktop GUI (optional; `cargo build --features slint`) ---
 # Skia renderer: proper glyph hinting/subpixel positioning (femtovg's GPU atlas
 # smeared small text). femtovg stays as a fallback via SLINT_BACKEND=winit-femtovg.
@@ -107,6 +111,8 @@ jni = "0.21"
 default = []
 # Native Slint window (`uni-share app`). Needs system libs on Linux: libfontconfig1-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev.
 slint = ["dep:slint", "dep:rfd", "dep:image", "dep:slint-build"]
+# YARA-X scanning with the user's own rules (`<data_dir>/rules/*.yar|*.yara`). Heavy build (wasmtime).
+yara = ["dep:yara-x"]
 
 [build-dependencies]
 slint-build = { version = "1.17", optional = true }

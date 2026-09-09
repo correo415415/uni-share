@@ -53,7 +53,7 @@ function exportToSaf(j) { if (!mobile || !j.saved || !j.saved.length) return; tr
 // Classic script: top-level function declarations (openScanned, androidEvent, openNew) are already window globals for the Kotlin shell.
 
 // ───────────────────────── state & API ─────────────────────────
-const S = { data: null, cfg: null, online: false, tab: localStorage.mtab || 'home', stack: [], filter: 'all', q: '', history: null, lastStates: new Map(), lastPending: new Set(), lastNotice: 0, scanning: false };
+const S = { data: null, cfg: null, online: false, tab: localStorage.mtab || 'home', stack: [], filter: 'all', q: '', history: null, lastStates: new Map(), lastPending: new Set(), lastNotice: 0, scanning: false, logs: null, logSeq: 0, logLevel: localStorage.mloglevel || 'info', logQ: '', logTimer: 0 };
 async function api(path, { method = 'GET', body } = {}) {
   const r = await fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
   const txt = await r.text(); let j = null; try { j = txt ? JSON.parse(txt) : null; } catch { j = { raw: txt }; }
@@ -223,6 +223,7 @@ function renderStack(v) {
   if (v.kind === 'job') return viewJob(v.id);
   if (v.kind === 'history') return viewHistory();
   if (v.kind === 'security') return viewSecurity();
+  if (v.kind === 'logs') return viewLogs();
   if (v.kind === 'about') return viewAbout();
   return h('div');
 }
@@ -259,7 +260,7 @@ function wireCommon(root) {
   });
   $$('[data-empty-act]', root).forEach(b => b.onclick = () => { const a = b.dataset.emptyAct; if (a === 'scan') return mobile ? Android.scanQr() : openNew('download'); if (a === 'qr') return go('share'); openNew(a === 'new' ? 'lan' : a); });
   $$('[data-go]', root).forEach(b => b.onclick = () => go(b.dataset.go));
-  $$('[data-push]', root).forEach(b => b.onclick = () => push({ kind: b.dataset.push, title: b.dataset.title || { history: 'Historial', security: 'Seguridad', about: 'Acerca de' }[b.dataset.push] }));
+  $$('[data-push]', root).forEach(b => b.onclick = () => push({ kind: b.dataset.push, title: b.dataset.title || { history: 'Historial', security: 'Seguridad', logs: 'Registro', about: 'Acerca de' }[b.dataset.push] }));
   $$('[data-copy]', root).forEach(b => b.onclick = () => copy(b.dataset.copy, b.dataset.what || 'Copiado'));
 }
 
@@ -462,6 +463,7 @@ function viewSettings() {
   root.append(h('div', { class: 'sec' }, 'Más'), h('div', { class: 'list' },
     nav('security', 'shield', 'Seguridad y análisis', d.scan_enabled ? `Análisis activado${d.clamav ? ' · ' + d.clamav : ''}` : 'Análisis desactivado'),
     nav('history', 'history', 'Historial', 'Todas las transferencias registradas'),
+    nav('logs', 'list', 'Registro', 'Mensajes del motor y de la app para diagnosticar problemas'),
     nav('about', 'info', 'Acerca de uni-share', `v${d.version}${ai ? ' · app ' + ai.version : ''}`)));
   root.append(h('p', { class: 'hint', style: 'text-align:center;margin:6px 0 0;font-family:var(--mono);font-size:var(--fs-xs)' }, S.cfgPath || ''));
   return root;
@@ -534,6 +536,56 @@ function wireHistory(root) {
     if (r.error) items.push({ icon: 'info', label: 'Error', sub: r.error, fn: () => copy(r.error, 'Error copiado') });
     items.push({ icon: 'info', label: fmtDate(r.timestamp), sub: `${r.kind} · ${r.status}${r.meta ? ' · ' + JSON.stringify(r.meta).slice(0, 80) : ''}`, fn: () => {} });
     menuSheet(r.name, items); });
+}
+
+// ── logs (engine + Android shell) ──
+const LOGLV = { error: ['err', 'Errores'], warn: ['warn', 'Avisos'], info: ['info', 'Info'], debug: ['dbg', 'Depuración'], trace: ['dbg', 'Todo'] };
+async function loadLogs(incremental = false) {
+  try {
+    const after = incremental && S.logs ? S.logSeq : 0;
+    const r = await api(`/api/logs?after=${after}&level=${S.logLevel === 'trace' ? '' : S.logLevel}&limit=${after ? 500 : 800}`);
+    if (!incremental || !S.logs) S.logs = r.entries; else if (r.entries.length) S.logs = S.logs.concat(r.entries).slice(-2000);
+    S.logSeq = r.last_seq || S.logSeq; S.logFile = r.file; S.logTotal = r.total;
+    if (!incremental || r.entries.length) { const top = S.stack[S.stack.length - 1]; if (top && top.kind === 'logs') render({ quiet: true }); }
+  } catch (e) { if (!incremental) toast(e.message, 'err'); }
+}
+function fmtLogTs(ms) { const d = new Date(ms); return d.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + '.' + String(d.getMilliseconds()).padStart(3, '0'); }
+function shortTarget(t) { return (t || '').replace(/^uni_share::/, '').replace(/^android::/, 'app·'); }
+function viewLogs() {
+  const root = h('div');
+  if (S.logs == null) { loadLogs(); root.append(empty('list', 'Cargando registro…', '')); return root; }
+  const chips = h('div', { class: 'chips' });
+  for (const [k, [, label]] of Object.entries(LOGLV)) chips.append(h('button', { class: `chip${S.logLevel === k ? ' active' : ''}`, 'data-lv': k }, label));
+  root.append(chips);
+  root.append(h('div', { class: 'search', style: 'margin-bottom:10px' }, h('span', { html: ico('search') }), h('input', { id: 'log-q', type: 'search', placeholder: 'Filtrar mensajes…', value: S.logQ, enterkeyhint: 'search' })));
+  const q = S.logQ.trim().toLowerCase();
+  const rows = S.logs.filter(e => !q || e.message.toLowerCase().includes(q) || e.target.toLowerCase().includes(q));
+  const n = rows.length;
+  root.append(h('div', { class: 'hint', style: 'margin:0 0 8px' }, `${n} línea${n === 1 ? '' : 's'}${S.logTotal ? ` · ${S.logTotal} desde el arranque` : ''}${S.logFile ? ' · fichero: ' + S.logFile : ''}`));
+  if (!n) root.append(empty('list', 'Nada que mostrar', q ? 'Ningún mensaje coincide con el filtro.' : 'Con este nivel no hay mensajes todavía.'));
+  else {
+    const pre = h('div', { class: 'loglist', id: 'loglist' });
+    for (const e of rows.slice(-600)) pre.append(h('div', { class: `ll ${e.level}` }, h('span', { class: 'ts' }, fmtLogTs(e.ts)), h('span', { class: 'lv' }, e.level.toUpperCase().slice(0, 5)), h('span', { class: 'tg' }, shortTarget(e.target)), h('span', { class: 'msg' }, e.message)));
+    root.append(pre);
+  }
+  root.append(h('div', { class: 'btns', style: 'margin-top:12px' },
+    h('button', { class: 'btn', id: 'log-refresh', html: ico('refresh') + 'Actualizar' }),
+    h('button', { class: 'btn', id: 'log-copy', html: ico('copy') + 'Copiar' }),
+    h('button', { class: 'btn', id: 'log-share', html: ico('share') + 'Compartir' }),
+    h('button', { class: 'btn ghost', id: 'log-clear', html: ico('trash') + 'Vaciar' })));
+  return root;
+}
+function wireLogs(root) {
+  $$('[data-lv]', root).forEach(b => b.onclick = () => { S.logLevel = b.dataset.lv; localStorage.mloglevel = S.logLevel; S.logs = null; render({ quiet: true }); });
+  const q = $('#log-q', root); if (q) q.oninput = () => { S.logQ = q.value; render({ quiet: true }); };
+  const list = $('#loglist', root); if (list && !S.logQ) list.scrollTop = list.scrollHeight;
+  const text = () => (S.logs || []).map(e => `${new Date(e.ts).toISOString()} ${e.level.toUpperCase().padStart(5)} ${e.target}  ${e.message}`).join('\n');
+  $('#log-refresh', root).onclick = () => { S.logs = null; render({ quiet: true }); };
+  $('#log-copy', root).onclick = () => copy(text(), 'Registro copiado');
+  $('#log-share', root).onclick = () => shareText(text(), 'Registro de uni-share');
+  $('#log-clear', root).onclick = async () => { if (await confirmSheet('Se vacía el registro en memoria (el fichero en disco no se toca).', 'Vaciar', true)) { await api('/api/logs', { method: 'DELETE' }).catch(e => toast(e.message, 'err')); S.logs = null; S.logSeq = 0; render({ quiet: true }); } };
+  // Live tail while the view is open.
+  clearInterval(S.logTimer); S.logTimer = setInterval(() => { const top = S.stack[S.stack.length - 1]; if (!top || top.kind !== 'logs' || S.shot) return clearInterval(S.logTimer); loadLogs(true); }, 2000);
 }
 
 // ── about ──
@@ -726,7 +778,7 @@ async function rescanJob(j) {
 // ───────────────────────── wiring, theme, init ─────────────────────────
 function wire(root, top) {
   wireCommon(root);
-  if (top) { if (top.kind === 'job') wireJob(root, top.id); else if (top.kind === 'security') wireSecurity(root); else if (top.kind === 'history') wireHistory(root); return; }
+  if (top) { if (top.kind === 'job') wireJob(root, top.id); else if (top.kind === 'security') wireSecurity(root); else if (top.kind === 'history') wireHistory(root); else if (top.kind === 'logs') wireLogs(root); return; }
   ({ home: wireHome, jobs: wireJobs, devices: wireDevices, share: wireShare, settings: wireSettings })[S.tab](root);
 }
 function setTheme(t) { document.documentElement.dataset.theme = t; localStorage.mtheme = t; $('#t-theme').innerHTML = ico(t === 'light' ? 'sun' : 'moon'); const m = $('meta[name=theme-color]'); if (m) m.content = t === 'light' ? '#f4f5f7' : '#151719'; }
@@ -751,7 +803,7 @@ function init() {
     poll().then(() => {
       if (!S.data) return;
       const jid = Number(hp.get('job')); const j = jid && job(jid); if (j) push({ kind: 'job', id: j.id, title: KIND[j.kind] });
-      const v = hp.get('view'); if (v && ['history', 'security', 'about'].includes(v)) push({ kind: v, title: { history: 'Historial', security: 'Seguridad', about: 'Acerca de' }[v] });
+      const v = hp.get('view'); if (v && ['history', 'security', 'logs', 'about'].includes(v)) push({ kind: v, title: { history: 'Historial', security: 'Seguridad', logs: 'Registro', about: 'Acerca de' }[v] });
       const sh = hp.get('sheet'); if (sh === 'new') openNew(hp.get('mode') || 'lan'); else if (sh === 'receive') receiveSheet(); else if (sh === 'share') { const l = S.data.jobs.find(x => x.link || x.ticket_uri); if (l) openShareSheet(l); }
     });
   } else connect();

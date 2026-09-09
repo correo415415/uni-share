@@ -267,3 +267,9 @@ html.shot *{animation:none!important;transition:none!important}
 
 /* security scan card in the job detail */
 .card.scan .alert{margin:0}.list.findings .row .ic.warn{color:var(--warn)}.list.findings .row .ic.danger{color:var(--err)}.list.findings .row .ic.ok{color:var(--ok)}.list.findings .sub.finding{color:var(--fg);opacity:.9;white-space:normal}.list.findings .ttl.mono{font-family:var(--mono);font-size:12px}
+
+/* Registro (logs) */
+.loglist{font-family:var(--mono);font-size:var(--fs-xs);background:var(--bg-3);border:1px solid var(--line);border-radius:var(--r-lg);padding:8px 10px;max-height:60vh;overflow:auto;-webkit-overflow-scrolling:touch}
+.ll{display:grid;grid-template-columns:auto auto 1fr;gap:0 8px;padding:3px 0;border-bottom:1px solid var(--line);color:var(--fg-2);line-height:1.35}.ll:last-child{border-bottom:0}
+.ll .ts{color:var(--fg-3)}.ll .lv{font-weight:700;color:var(--fg-3)}.ll .tg{color:var(--fg-3);grid-column:3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ll .msg{grid-column:1/4;color:var(--fg);white-space:pre-wrap;word-break:break-word}
+.ll.warn .lv{color:var(--warn)}.ll.error .lv,.ll.error .msg{color:var(--err)}.ll.debug,.ll.trace{opacity:.75}

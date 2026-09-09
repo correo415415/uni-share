@@ -31,6 +31,15 @@ cargo build --release --features slint     # necesita clang + ninja (renderer Sk
 ./target/release/uni-share app
 ```
 
+### Motor YARA (opcional)
+
+```bash
+cargo build --release --features yara      # añade YARA-X (VirusTotal); compila wasmtime, tarda más la 1.ª vez
+mkdir -p ~/.config/uni-share/rules && cp mis-reglas.yar ~/.config/uni-share/rules/
+```
+
+Con la *feature* `yara` el análisis de seguridad ejecuta además tus propias reglas: cualquier `*.yar`/`*.yara` dentro de `<data_dir>/rules/` (o `scan.yara_rules_dir`), cada archivo en su propio *namespace*. Los que no compilan se registran en el log y se ignoran; el resto sigue funcionando. La severidad de cada coincidencia sale de `meta: severity = "info|low|medium|suspicious|high|critical|malware"` o de una etiqueta con ese nombre (por defecto **peligro**), y `meta: description` se añade al mensaje. Los binarios de las releases ya incluyen el motor (excepto la APK Android). Sin la *feature*, el ajuste sigue visible pero indica «yara: no compilado».
+
 La GUI nativa incrusta sus propias fuentes (`ui/fonts/`: Inter para la interfaz y JetBrains Mono para hashes, puertos y velocidades; licencia OFL) y usa el renderer **Skia** con FemtoVG como alternativa, de modo que el texto se ve igual de nítido en cualquier equipo aunque no tenga esas fuentes instaladas.
 
 Extras de escritorio: **arrastrar y soltar** sobre la ventana (un archivo o carpeta abre «Enviar LAN» con la ruta; varios del mismo directorio, la carpeta; un ticket `.unishare` abre «Descargar» o el emparejamiento), **bandeja del sistema** con menú rápido (Mostrar/Ocultar · Enviar por LAN · Compartir link · Descargar · Abrir ticket · Salir) y el ajuste «minimizar a la bandeja al cerrar» para seguir recibiendo con la ventana oculta (en Linux hace falta un host StatusNotifierItem: KDE, o la extensión AppIndicator en GNOME). Para revisar el diseño sin red: `uni-share app --demo [--empty] [--size 1024x600] [--light] [--dialog new|share|pair|settings|logs|fs|confirm] [--drag-over] [--screenshot out.png]`.
@@ -117,7 +126,7 @@ uni-share gui [--port 47900] [--no-open] [--demo]  # GUI web local (+ GUI móvil
 uni-share app [fotos.unishare]               # app nativa Slint (cargo build --features slint)
 uni-share app --demo --screenshot app.png [--dialog new|share|pair|settings|logs|fs|confirm] [--select ID[:TAB]] [--light]
 uni-share associate [--remove] [--status]    # doble clic en .unishare / links unishare: abren la app
-uni-share scan <ruta…> [--json] [--no-clamav] [--quarantine|--delete] [-v]   # análisis de seguridad local (exit 0/1/2)
+uni-share scan <ruta…> [--json] [--no-clamav] [--no-yara] [--quarantine|--delete] [-v]   # análisis de seguridad local (exit 0/1/2)
 uni-share config [--path]
 ```
 
@@ -177,7 +186,9 @@ enabled = true
 clamav = true                # usar clamdscan/clamscan si están instalados
 # clamav_path = "/usr/bin/clamdscan"
 on_danger = "quarantine"     # quarantine | report | delete
-max_file_mib = 0             # no pasar a ClamAV archivos mayores (0 = sin límite)
+max_file_mib = 0             # no pasar a ClamAV/YARA archivos mayores (0 = sin límite)
+yara = true                  # reglas YARA propias (binario con --features yara)
+# yara_rules_dir = "/ruta/a/mis/reglas"   # por defecto <data_dir>/rules (*.yar / *.yara)
 
 [global]
 backend = "storage_to"
@@ -261,7 +272,7 @@ El receptor escribe en `archivo.part`, hashea mientras escribe y renombra solo s
 - Claves/tokens solo en `config.toml` (excluido del repo por `.gitignore`); la clave privada TLS y la de firma se guardan con permisos `0600`.
 - **Tickets de emparejamiento LAN** (`receive --qr`): llevan IP, puerto, huella TLS y PIN del receptor; quien lo escanea conecta con la huella fijada desde la primera conexión (sin mDNS). Equivale a compartir el PIN: no publicarlo.
 - **Firma Ed25519 de tickets** (opcional, activa por defecto): el ticket incluye la clave pública del emisor y una firma sobre su contenido. `ticket show`, `download`, `send-lan` y las GUIs muestran «firma válida · huella» o rechazan el ticket si la firma no cuadra (manipulado/falsificado). La huella del firmante (`ticket identity`) se puede comparar una vez por otro canal, como una host key de SSH. La versión compacta para QR va sin firma.
-- **Análisis de seguridad local** (`[scan]`, activo por defecto; también `uni-share scan`): tras cada recepción LAN o descarga se analizan los archivos **sin enviar nada fuera del equipo**. Heurísticas propias: tipo real por *magic bytes* frente a extensión (ejecutable PE/ELF/Mach-O/script disfrazado de `.jpg`/`.pdf`… = peligro), extensiones ejecutables, nombres engañosos (doble extensión `informe.pdf.exe`, RTLO `\u202e`, caracteres invisibles, relleno de espacios, nombres reservados), tamaño distinto al declarado, ZIP/OOXML/JAR/APK por directorio central sin extraer (bombas de descompresión por ratio o >20 GiB, >200k entradas, *path traversal*, anidados, cifrados, `vbaProject.bin`), tar y `.tar.zst` por cabeceras (traversal, setuid/setgid, enlaces que escapan), PDF (`/JavaScript`, `/Launch`, embebidos, acciones), OLE (macros VBA, `Ole10Native`, `DDEAUTO`), SVG/HTML con scripts o iframes, `.desktop`/`.url` que ejecutan comandos, shebangs en «texto». **ClamAV opcional**: si `clamdscan`/`clamscan` están instalados (PATH o rutas típicas) se usan además, con *timeout*; si no, se indica «no instalado» y se sigue con las heurísticas. Política ante peligro: **cuarentena** (renombrar a `*.unishare-quarantine` con `0600`; por defecto), solo avisar o eliminar. Resultado en CLI (verde/amarillo/rojo con detalle), registro del job y toast/etiqueta 🛡 en ambas GUIs; ajustes en «Seguridad».
+- **Análisis de seguridad local** (`[scan]`, activo por defecto; también `uni-share scan`): tras cada recepción LAN o descarga se analizan los archivos **sin enviar nada fuera del equipo**. Heurísticas propias: tipo real por *magic bytes* frente a extensión (ejecutable PE/ELF/Mach-O/script disfrazado de `.jpg`/`.pdf`… = peligro), extensiones ejecutables, nombres engañosos (doble extensión `informe.pdf.exe`, RTLO `\u202e`, caracteres invisibles, relleno de espacios, nombres reservados), tamaño distinto al declarado, ZIP/OOXML/JAR/APK por directorio central sin extraer (bombas de descompresión por ratio o >20 GiB, >200k entradas, *path traversal*, anidados, cifrados, `vbaProject.bin`), tar y `.tar.zst` por cabeceras (traversal, setuid/setgid, enlaces que escapan), PDF (`/JavaScript`, `/Launch`, embebidos, acciones), OLE (macros VBA, `Ole10Native`, `DDEAUTO`), SVG/HTML con scripts o iframes, `.desktop`/`.url` que ejecutan comandos, shebangs en «texto». **ClamAV opcional**: si `clamdscan`/`clamscan` están instalados (PATH o rutas típicas) se usan además, con *timeout*; si no, se indica «no instalado» y se sigue con las heurísticas. **YARA opcional** (`--features yara`, motor YARA-X en Rust): reglas del usuario en `<data_dir>/rules/*.yar|*.yara`, severidad por `meta: severity`/etiqueta, cacheadas y recompiladas solo cuando cambian, con *timeout*; `yara: sin reglas` / `yara: no compilado` cuando no aplica. Política ante peligro: **cuarentena** (renombrar a `*.unishare-quarantine` con `0600`; por defecto), solo avisar o eliminar. Resultado en CLI (verde/amarillo/rojo con detalle), registro del job y toast/etiqueta 🛡 en ambas GUIs; ajustes en «Seguridad».
 - **Reanudación entre ejecuciones**: el receptor guarda registros de transferencias interrumpidas (`transfers/*.json`, 30 días) y, si el mismo emisor vuelve a ofrecer el mismo contenido, reutiliza destino, `.part` y hashes verificados.
 
 ## Licencia

@@ -853,7 +853,12 @@ impl Engine {
         for id in removed {
             h.remove(&id);
         }
-        before - jobs.len()
+        let n = before - jobs.len();
+        drop(h);
+        drop(jobs);
+        // Wake the SSE stream right away (otherwise the GUI waits for the 15 s keep-alive).
+        self.touch();
+        n
     }
 
     // ───────── offers ─────────

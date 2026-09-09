@@ -355,7 +355,7 @@ function init() {
   $('#b-new').onclick = () => openNew('lan'); $('#b-sendlan').onclick = () => openNew('lan'); $('#b-upload').onclick = () => openNew('global'); $('#b-download').onclick = () => openNew('download'); $('#b-ticket').onclick = () => openNew('ticket');
   $('#b-settings').onclick = openSettings; $('#b-cancel').onclick = cancelSel;
   if (mobile) { document.documentElement.classList.add('mobile'); const q = $('#b-qr'); q.hidden = false; q.onclick = () => Android.scanQr(); }
-  $('#b-clear').onclick = () => api('/api/jobs/clear-finished', { method: 'POST' }).then(r => toast(`${r.removed} eliminada(s)`, 'info', 2000));
+  $('#b-clear').onclick = () => api('/api/jobs/clear-finished', { method: 'POST' }).then(r => { if (S.data) { S.data.jobs = S.data.jobs.filter(j => j.state === 'queued' || j.state === 'running'); render(); } toast(`${r.removed} eliminada(s)`, 'info', 2000); }).catch(e => toast(e.message, 'err'));
   $('#b-scan').onclick = async () => { $('#b-scan').disabled = true; try { S.data.devices = await api('/api/devices'); render(); } finally { $('#b-scan').disabled = false; } };
   $('#q').oninput = (e) => { S.q = e.target.value; renderTable(); };
   $$('#tabs .tab').forEach(t => t.onclick = () => { S.tab = t.dataset.tab; if (S.tab === 'history') loadHistory(); renderDetails(); });

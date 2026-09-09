@@ -281,7 +281,7 @@ function viewJobs() {
 function wireJobs(root) {
   const q = $('#q', root); if (q) { q.oninput = () => { S.q = q.value; const pos = q.selectionStart; render(); const nq = $('#q'); nq.focus(); try { nq.setSelectionRange(pos, pos); } catch { /* search inputs on some browsers */ } }; }
   $$('[data-f]', root).forEach(b => b.onclick = () => { S.filter = b.dataset.f; render(); });
-  const c = $('#clear-done', root); if (c) c.onclick = async () => { if (await confirmSheet('Se quitan de la lista las transferencias terminadas (el historial se conserva).', 'Quitar')) { await api('/api/jobs/clear-finished', { method: 'POST' }).catch(e => toast(e.message, 'err')); } };
+  const c = $('#clear-done', root); if (c) c.onclick = async () => { if (await confirmSheet('Se quitan de la lista las transferencias terminadas (el historial se conserva).', 'Quitar')) { try { await api('/api/jobs/clear-finished', { method: 'POST' }); S.data.jobs = S.data.jobs.filter(isActive); render(); toast('Lista limpia', 'ok', 1500); } catch (e) { toast(e.message, 'err'); } } };
 }
 
 function viewJob(id) {
@@ -651,7 +651,7 @@ function jobMenu(j) {
     !act && { icon: 'trash', label: 'Quitar de la lista', danger: true, fn: () => removeJob(j) }]);
 }
 async function cancelJob(j) { if (await confirmSheet(`Se cancela «${j.name}».`, 'Cancelar transferencia', true)) api(`/api/jobs/${j.id}/cancel`, { method: 'POST' }).then(() => toast('Cancelada', 'info')).catch(e => toast(e.message, 'err')); }
-async function removeJob(j) { try { await api(`/api/jobs/${j.id}`, { method: 'DELETE' }); if (S.stack.length && S.stack[S.stack.length - 1].id === j.id) pop(); } catch (e) { toast(e.message, 'err'); } }
+async function removeJob(j) { try { await api(`/api/jobs/${j.id}`, { method: 'DELETE' }); if (S.stack.length && S.stack[S.stack.length - 1].id === j.id) pop(); S.data.jobs = S.data.jobs.filter(x => x.id !== j.id); render(); } catch (e) { toast(e.message, 'err'); } }
 async function retryJob(j) { try { const r = await api(`/api/jobs/${j.id}/retry`, { method: 'POST' }); toast('Reintentando…', 'ok'); S.stack = []; push({ kind: 'job', id: r.id, title: KIND[j.kind] }); } catch (e) { toast(e.message, 'err'); } }
 async function rescanJob(j) {
   toast('Analizando…', 'info', 2000);

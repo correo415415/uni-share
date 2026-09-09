@@ -25,6 +25,15 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:supportsRtl="true">
 
+        <!-- Portrait QR scanner (subclass of zxing CaptureActivity); replaces the library's landscape default. -->
+        <activity
+            android:name=".ScanActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:stateNotNeeded="true"
+            android:theme="@style/zxing_CaptureTheme"
+            android:windowSoftInputMode="stateAlwaysHidden" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

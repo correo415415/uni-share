@@ -216,8 +216,9 @@ class MainActivity : AppCompatActivity() {
             setDesiredBarcodeFormats(ScanOptions.QR_CODE)
             setPrompt(getString(R.string.scan_prompt))
             setBeepEnabled(false)
-            setOrientationLocked(false)
+            setOrientationLocked(true)
             setBarcodeImageEnabled(false)
+            setCaptureActivity(ScanActivity::class.java)
         }
         try {
             scanLauncher.launch(opts)

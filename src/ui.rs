@@ -54,9 +54,17 @@ pub fn spinner(section: &str, msg: &str) -> ProgressBar {
     pb
 }
 
+/// QR code for `data`. Lowest error-correction level → fewest modules for a given payload,
+/// which is what decides whether a phone camera can read a 600-1200 byte ticket at arm's length.
+pub fn qr_code(data: &str) -> Option<qrcode::QrCode> {
+    qrcode::QrCode::with_error_correction_level(data.as_bytes(), qrcode::EcLevel::L)
+        .or_else(|_| qrcode::QrCode::new(data.as_bytes()))
+        .ok()
+}
+
 /// Render a QR code as UTF-8 half-blocks (2 rows per line) for the terminal.
 pub fn qr_string(data: &str) -> Option<String> {
-    let code = qrcode::QrCode::new(data.as_bytes()).ok()?;
+    let code = qr_code(data)?;
     let w = code.width();
     let colors = code.to_colors();
     let dark = |x: isize, y: isize| -> bool {
@@ -87,7 +95,7 @@ pub fn qr_string(data: &str) -> Option<String> {
 
 /// Render a QR code as a standalone SVG (used by the GUI and `qr --svg`).
 pub fn qr_svg(data: &str) -> Option<String> {
-    let code = qrcode::QrCode::new(data.as_bytes()).ok()?;
+    let code = qr_code(data)?;
     let w = code.width();
     let colors = code.to_colors();
     let margin = 4usize;

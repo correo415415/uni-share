@@ -1005,13 +1005,11 @@ impl Engine {
             local_ips: local_ips(),
             pairing_uri: local_ips()
                 .first()
+                // Not signed on purpose: the QR must stay scannable by a phone camera (an Ed25519
+                // signature + key adds ~150 bytes ≈ 8 QR versions) and the pinned TLS fingerprint
+                // inside the ticket already authenticates the receiver.
                 .map(|ip| Ticket::lan_pairing(&cfg.device_name, ip, self.lan_addr.port(), &self.identity.fingerprint, cfg.pin.as_deref()))
-                .and_then(|mut t| {
-                    if cfg.sign_tickets {
-                        t.sign(&self.signing_key).ok()?;
-                    }
-                    t.to_uri().ok()
-                })
+                .and_then(|t| t.to_uri().ok())
                 .unwrap_or_default(),
             signer_fingerprint: self.signing_key.fingerprint(),
             sign_tickets: cfg.sign_tickets,

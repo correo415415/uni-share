@@ -703,7 +703,7 @@ fn handle_evt(ctx: &UiCtx, evt: Evt) {
 
 /// Render a QR code into a Slint image (1 module = 1 px, scaled by the UI with nearest filtering).
 fn qr_image(data: &str) -> slint::Image {
-    let Ok(code) = qrcode::QrCode::new(data.as_bytes()) else {
+    let Some(code) = crate::ui::qr_code(data) else {
         return slint::Image::default();
     };
     let w = code.width();

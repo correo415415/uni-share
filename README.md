@@ -35,7 +35,7 @@ Extras de escritorio: **arrastrar y soltar** sobre la ventana (un archivo o carp
 
 ### Android
 
-La app Android (`android/`, paquete `dev.unishare.app`) es una cáscara Kotlin que arranca el mismo core Rust como biblioteca (`libuni_share.so`, JNI en `src/android.rs`) y muestra la GUI web servida en `127.0.0.1`. Requisitos: Android SDK + NDK r26+, `cargo install cargo-ndk`, `rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android`.
+La app Android (`android/`, paquete `dev.unishare.app`) es una cáscara Kotlin que arranca el mismo core Rust como biblioteca (`libuni_share.so`, JNI en `src/android.rs`) y muestra la **GUI móvil** (`/m`, ver abajo) servida en `127.0.0.1`. Requisitos: Android SDK + NDK r26+, `cargo install cargo-ndk`, `rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android`.
 
 ```bash
 android/build-android.sh            # compila las .so y las deja en android/app/src/main/jniLibs/
@@ -43,6 +43,20 @@ android/build-android.sh --apk      # + APK debug (android/app/build/outputs/apk
 android/build-android.sh --release  # + APK firmado con android/release.keystore (se crea la primera vez;
                                     #   contraseña en UNISHARE_KEYSTORE_PASS, alias en UNISHARE_KEY_ALIAS)
 ```
+
+#### GUI móvil (`/m`)
+
+La interfaz de teléfono es una capa web propia (`src/gui/mobile/`: `index.html`, `m.css`, `m.js`, embebida en el binario) sobre el mismo motor y la misma API que la GUI de escritorio, diseñada para pulgar: barra inferior de cinco pestañas + botón «Nueva», hojas inferiores (con deslizar para cerrar) para cada flujo, botón *Atrás* del sistema sincronizado con la pila de vistas, *safe areas*, modo claro/oscuro y la misma identidad «Graphite» (superficies, acento azul, ámbar para lo saliente, Inter/JetBrains Mono).
+
+| Pestaña | Contenido |
+|---|---|
+| **Inicio** | Estado del dispositivo (nombre, dirección, huella, velocidades), accesos rápidos Enviar LAN · Recibir (QR de emparejamiento) · Escanear · Descargar, solicitudes entrantes como tarjeta destacada, transferencias en curso y recientes. |
+| **Transferencias** | Buscador, chips de filtro (activas, recibiendo, enviando, links, descargas, completadas, fallidas), progreso, ficha de detalle con acciones (cancelar, compartir, reintentar, analizar, quitar), archivos y registro. |
+| **Dispositivos** | Radar de descubrimiento LAN, buscar de nuevo, enviar / copiar dirección / copiar huella por dispositivo, emparejar por QR. |
+| **Compartir** | QR de emparejamiento a pantalla completa, subir y crear link, crear ticket desde links, enviar por LAN, links recientes con QR/copiar/compartir con la hoja del sistema. |
+| **Ajustes** | Nombre, carpeta de descargas (SAF en Android), límite de velocidad, tema, PIN, auto-aceptar, notificaciones, comprimir carpetas, servicio de subida, caducidad, partes en paralelo, firma de tickets; subpantallas **Seguridad y análisis**, **Historial** y **Acerca de**. |
+
+Funciona también en cualquier navegador de móvil (`http://<pc>:47900/m`); dentro de la app Android se añaden el escáner QR, el selector de archivos del sistema, la exportación a la carpeta SAF y la hoja de compartir nativa a través de `window.Android`. Deep links para revisiones: `/m#jobs`, `/m#home&theme=light`. `uni-share gui --demo` sirve ambas interfaces con un estado de ejemplo sin arrancar el motor (capturas en CI con Chromium headless: `m-home.png`, `m-jobs.png`, … en la release nightly).
 
 En Windows, `android\build-android.bat` con los mismos argumentos. Funciones: compartir archivos desde cualquier app («Enviar con uni-share»), abrir links `unishare:` y tickets `.unishare`, servicio en primer plano para seguir recibiendo con la pantalla apagada, **escáner QR** (botón «Escanear QR»: tickets `.unishare`, emparejamiento LAN y links), **compartir** links/tickets con la hoja del sistema y **carpeta de descargas propia** elegida con el selector de Android (Ajustes → «Carpeta de descargas (Android)», Storage Access Framework): el motor escribe en `Android/data/dev.unishare.app/files/Download/` y, al terminar cada recepción o descarga, la app copia los archivos a la carpeta elegida respetando las subcarpetas.
 
@@ -89,7 +103,7 @@ uni-share download fotos.unishare            # o "unishare:…" — verifica BLA
 # Historial, daemon, GUIs, config
 uni-share history [-n 20] [--json] [--clear]
 uni-share daemon start|stop|status
-uni-share gui [--port 47900] [--no-open]     # GUI web local
+uni-share gui [--port 47900] [--no-open] [--demo]  # GUI web local (+ GUI móvil en /m); --demo: estado de ejemplo sin motor
 uni-share app [fotos.unishare]               # app nativa Slint (cargo build --features slint)
 uni-share app --demo --screenshot app.png [--dialog new|share|settings|fs|confirm] [--select ID[:TAB]] [--light]
 uni-share associate [--remove] [--status]    # doble clic en .unishare / links unishare: abren la app

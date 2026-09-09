@@ -128,7 +128,9 @@ pub fn demo_router(cfg: Config, cfg_path: PathBuf) -> Router {
     cfg.pin = None;
     cfg.global.smash_api_key = None;
     cfg.global.storage_to_token = None;
-    let cfg_path = if cfg_path.as_os_str().is_empty() { cfg_path } else { PathBuf::from("/home/user/.config/uni-share/config.toml") };
+    cfg.global.storage_to_visitor_token = None;
+    let _ = cfg_path;
+    let cfg_path = PathBuf::from("/home/user/.config/uni-share/config.toml");
     let d = Demo { snap, cfg, cfg_path, t0: std::time::Instant::now() };
     async fn ok() -> Response {
         Json(serde_json::json!({ "ok": true })).into_response()

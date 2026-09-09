@@ -10,7 +10,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use bytes::Bytes;
 use reqwest::StatusCode;
 use std::net::IpAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -124,7 +124,17 @@ impl Sender {
         let mut file = tokio::fs::File::open(&entry.abs_path)
             .await
             .with_context(|| format!("opening {}", entry.abs_path.display()))?;
-        file.seek(std::io::SeekFrom::Start(offset)).await?;
+        // The manifest promised `entry.size` bytes; a file that changed meanwhile would
+        // truncate the body and surface as an obscure I/O error on either side.
+        let len = file.metadata().await.map(|m| m.len()).unwrap_or(entry.size);
+        anyhow::ensure!(
+            len == entry.size,
+            "{} changed size since the offer ({} → {} bytes); start the transfer again",
+            entry.rel_path,
+            entry.size,
+            len
+        );
+        file.seek(std::io::SeekFrom::Start(offset)).await.with_context(|| format!("seeking {} to {offset}", entry.rel_path))?;
         let remaining = entry.size - offset;
         let rel = entry.rel_path.clone();
         let progress = progress.clone();
@@ -298,7 +308,17 @@ pub fn build_manifest(sender: &str, fingerprint: &str, name: &str, files: &[File
 
 /// Helper for `--compress`: pack folder into temp .tar.zst and return a single entry.
 pub async fn compress_to_temp(src: &Path) -> Result<(tempfile::TempDir, Vec<FileEntry>)> {
-    let tmp = tempfile::tempdir()?;
+    // `std::env::temp_dir()` is `/tmp` unless TMPDIR is set; on Android that directory does not
+    // exist (EINVAL/ENOENT), so fall back to the app data dir (`UNI_SHARE_HOME`).
+    let base = std::env::temp_dir();
+    let tmp = if base.is_dir() {
+        tempfile::tempdir()?
+    } else {
+        let home = std::env::var_os("UNI_SHARE_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+        let dir = home.join("tmp");
+        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        tempfile::tempdir_in(dir)?
+    };
     let name = src.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "folder".into());
     let dest = tmp.path().join(format!("{name}.tar.zst"));
     let (src2, dest2) = (src.to_path_buf(), dest.clone());

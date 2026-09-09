@@ -8,7 +8,7 @@
 
 use std::ffi::CString;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread::JoinHandle;
 
@@ -120,8 +120,17 @@ fn start(data_dir: PathBuf, download_dir: PathBuf, device_name: String) -> Resul
         return Ok(r.port);
     }
     // Every path under the app sandbox: config/history/keys live in `data_dir`.
+    // Android has no `/tmp`: point TMPDIR (std::env::temp_dir, tempfile) into our data dir
+    // so compressing folders / staging tickets does not fail with EINVAL/ENOENT.
+    let tmp = data_dir.join("tmp");
+    let _ = std::fs::create_dir_all(&tmp);
     // SAFETY: called from the UI thread before any other thread of ours exists.
-    unsafe { std::env::set_var("UNI_SHARE_HOME", &data_dir) };
+    unsafe {
+        std::env::set_var("UNI_SHARE_HOME", &data_dir);
+        if std::env::var_os("TMPDIR").is_none_or(|t| !Path::new(&t).is_dir()) {
+            std::env::set_var("TMPDIR", &tmp);
+        }
+    }
 
     let (port_tx, port_rx) = std::sync::mpsc::channel::<Result<u16>>();
     let (stop_tx, stop_rx) = oneshot::channel::<()>();

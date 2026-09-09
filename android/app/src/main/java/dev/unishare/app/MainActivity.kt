@@ -51,6 +51,15 @@ class MainActivity : AppCompatActivity() {
         uri?.let { bridge.onTreePicked(it) }
     }
 
+    /** System file picker for "what to send" (files are copied to the app cache so the Rust core can read them). */
+    private val pickFilesLauncher = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNullOrEmpty()) return@registerForActivityResult
+        io.execute {
+            val path = importManyToCache(uris)
+            if (path != null) bridge.emit("picked", path) else bridge.emit("toast", "No se pudieron leer los archivos")
+        }
+    }
+
     /** zxing camera scanner for tickets / pairing QRs. */
     private val scanLauncher = registerForActivityResult(ScanContract()) { result ->
         result.contents?.let { onQr(it) }
@@ -136,7 +145,7 @@ class MainActivity : AppCompatActivity() {
             val port = EngineService.ensureStarted(applicationContext)
             runOnUiThread {
                 if (port > 0) {
-                    web.loadUrl("http://127.0.0.1:$port/")
+                    web.loadUrl("http://127.0.0.1:$port/m")
                 } else {
                     splash.visibility = View.GONE
                     error.visibility = View.VISIBLE
@@ -186,6 +195,14 @@ class MainActivity : AppCompatActivity() {
             pickTreeLauncher.launch(null)
         } catch (_: Exception) {
             bridge.emit("toast", "No hay selector de carpetas disponible")
+        }
+    }
+
+    fun pickFiles() {
+        try {
+            pickFilesLauncher.launch(arrayOf("*/*"))
+        } catch (_: Exception) {
+            bridge.emit("toast", "No hay selector de archivos disponible")
         }
     }
 

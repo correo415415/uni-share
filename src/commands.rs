@@ -122,7 +122,7 @@ fn truncate(s: &str, n: usize) -> String {
 }
 
 pub async fn gui(ctx: Ctx, a: GuiArgs) -> Result<()> {
-    uni_share::gui::run(ctx.cfg, ctx.cfg_path, ctx.history, uni_share::gui::GuiOptions { port: a.port, open_browser: !a.no_open }).await
+    uni_share::gui::run(ctx.cfg, ctx.cfg_path, ctx.history, uni_share::gui::GuiOptions { port: a.port, open_browser: !a.no_open, demo: a.demo }).await
 }
 
 /// Native desktop window. Runs on the main thread (no tokio here; the engine

@@ -6,7 +6,7 @@
 //! same engine, so both behave identically.
 
 use crate::config::Config;
-use crate::engine::{ConfigPatch, DownloadReq, Engine, SendGlobalReq, SendLanReq, TicketCreateReq};
+use crate::engine::{ConfigPatch, DownloadReq, Engine, SendGlobalReq, SendLanReq, Snapshot, TicketCreateReq};
 use crate::history::History;
 use crate::ticket::Ticket;
 use anyhow::{Context, Result};
@@ -25,22 +25,33 @@ use std::sync::Arc;
 pub const INDEX_HTML: &str = include_str!("gui/index.html");
 pub const APP_CSS: &str = include_str!("gui/app.css");
 pub const APP_JS: &str = include_str!("gui/app.js");
+/// Phone GUI (the Android shell loads `/m`): same engine and API, layout designed for thumbs.
+pub const M_HTML: &str = include_str!("gui/mobile/index.html");
+pub const M_CSS: &str = include_str!("gui/mobile/m.css");
+pub const M_JS: &str = include_str!("gui/mobile/m.js");
 
 type St = State<Arc<Engine>>;
 
 pub struct GuiOptions {
     pub port: u16,
     pub open_browser: bool,
+    /// Serve `Snapshot::demo()` instead of starting the engine (design reviews, screenshots; no network).
+    pub demo: bool,
 }
 
 /// Run the web GUI until Ctrl-C.
 pub async fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: GuiOptions) -> Result<()> {
-    let engine = Engine::start(cfg, cfg_path, history).await?;
-    let app = router(engine.clone());
+    let (app, lan) = if opts.demo {
+        (demo_router(cfg, cfg_path), "demo, sin red".to_string())
+    } else {
+        let engine = Engine::start(cfg, cfg_path, history).await?;
+        let lan = engine.lan_addr.to_string();
+        (router(engine), lan)
+    };
     let addr: SocketAddr = format!("127.0.0.1:{}", opts.port).parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("binding {addr}"))?;
     let url = format!("http://{}", listener.local_addr()?);
-    crate::ui::info("GUI", format!("interfaz disponible en {url}  (LAN receiver en {})", engine.lan_addr));
+    crate::ui::info("GUI", format!("interfaz disponible en {url}  (LAN receiver en {lan})"));
     if opts.open_browser {
         crate::engine::open_in_system(&url);
     }
@@ -57,6 +68,9 @@ pub fn router(engine: Arc<Engine>) -> Router {
         .route("/", get(|| async { Html(INDEX_HTML) }))
         .route("/app.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], APP_CSS) }))
         .route("/app.js", get(|| async { ([(header::CONTENT_TYPE, "application/javascript; charset=utf-8")], APP_JS) }))
+        .route("/m", get(|| async { Html(M_HTML) }))
+        .route("/m/m.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], M_CSS) }))
+        .route("/m/m.js", get(|| async { ([(header::CONTENT_TYPE, "application/javascript; charset=utf-8")], M_JS) }))
         .route("/api/state", get(api_state))
         .route("/api/events", get(api_events))
         .route("/api/devices", get(api_devices))
@@ -82,6 +96,91 @@ pub fn router(engine: Arc<Engine>) -> Router {
         .route("/api/ticket/create", post(api_ticket_create))
         .route("/api/ticket/file", get(api_ticket_file))
         .with_state(engine)
+}
+
+/// Static-state router for `gui --demo`: same pages and read endpoints as [`router`], fed by
+/// `Snapshot::demo()` (running jobs tick their progress); mutations answer OK without doing anything.
+pub fn demo_router(cfg: Config, cfg_path: PathBuf) -> Router {
+    #[derive(Clone)]
+    struct Demo {
+        snap: Snapshot,
+        cfg: Config,
+        cfg_path: PathBuf,
+        t0: std::time::Instant,
+    }
+    impl Demo {
+        fn now(&self) -> Snapshot {
+            let mut s = self.snap.clone();
+            let ticks = self.t0.elapsed().as_millis() as u64 / 500;
+            for j in s.jobs.iter_mut().filter(|j| j.state == crate::engine::JobState::Running) {
+                j.done = (j.done + (j.speed / 2).saturating_mul(ticks)).min(j.total);
+                j.eta = (j.speed > 0).then(|| (j.total - j.done) / j.speed);
+            }
+            s.uptime += self.t0.elapsed().as_secs();
+            s
+        }
+    }
+    // Coherent with the snapshot and free of the host's real name/paths (screenshots are published).
+    let snap = Snapshot::demo();
+    let mut cfg = cfg;
+    cfg.device_name = snap.device_name.clone();
+    cfg.download_dir = snap.download_dir.clone();
+    cfg.pin = None;
+    cfg.global.smash_api_key = None;
+    cfg.global.storage_to_token = None;
+    cfg.global.storage_to_visitor_token = None;
+    let _ = cfg_path;
+    let cfg_path = PathBuf::from("/home/user/.config/uni-share/config.toml");
+    let d = Demo { snap, cfg, cfg_path, t0: std::time::Instant::now() };
+    async fn ok() -> Response {
+        Json(serde_json::json!({ "ok": true })).into_response()
+    }
+    async fn no_engine() -> Response {
+        json_err(StatusCode::CONFLICT, "modo demo: sin motor")
+    }
+    async fn events(State(d): State<Demo>) -> Response {
+        let stream = futures::stream::unfold(d, |d| async move {
+            let json = serde_json::to_string(&d.now()).unwrap_or_else(|_| "{}".into());
+            tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+            Some((Ok::<_, std::io::Error>(format!("event: state\ndata: {json}\n\n")), d))
+        });
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/event-stream")
+            .header(header::CACHE_CONTROL, "no-cache")
+            .body(Body::from_stream(stream))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+    }
+    Router::new()
+        .route("/", get(|| async { Html(INDEX_HTML) }))
+        .route("/app.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], APP_CSS) }))
+        .route("/app.js", get(|| async { ([(header::CONTENT_TYPE, "application/javascript; charset=utf-8")], APP_JS) }))
+        .route("/m", get(|| async { Html(M_HTML) }))
+        .route("/m/m.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], M_CSS) }))
+        .route("/m/m.js", get(|| async { ([(header::CONTENT_TYPE, "application/javascript; charset=utf-8")], M_JS) }))
+        .route("/api/state", get(|State(d): State<Demo>| async move { Json(d.now()).into_response() }))
+        .route("/api/events", get(events))
+        .route("/api/devices", get(|State(d): State<Demo>| async move { Json(d.snap.devices.clone()).into_response() }))
+        .route("/api/history", get(|| async { Json(Vec::<crate::history::Record>::new()).into_response() }).delete(ok))
+        .route(
+            "/api/config",
+            get(|State(d): State<Demo>| async move { Json(serde_json::json!({ "path": d.cfg_path, "config": d.cfg })).into_response() })
+                .put(|State(d): State<Demo>| async move { Json(serde_json::json!({ "config": d.cfg })).into_response() }),
+        )
+        .route("/api/fs", get(api_fs))
+        .route("/api/qr", get(api_qr))
+        .route("/api/ticket/parse", post(api_ticket_parse))
+        .route("/api/notices/ack", post(ok))
+        .route("/api/jobs/clear-finished", post(ok))
+        .route("/api/offers/{id}/accept", post(ok))
+        .route("/api/offers/{id}/reject", post(ok))
+        .route("/api/jobs/{id}/cancel", post(ok))
+        .route("/api/jobs/{id}/retry", post(ok))
+        .route("/api/jobs/{id}", axum::routing::delete(ok))
+        .route("/api/send-lan", post(no_engine))
+        .route("/api/send-global", post(no_engine))
+        .route("/api/download", post(no_engine))
+        .with_state(d)
 }
 
 fn json_err(status: StatusCode, msg: impl ToString) -> Response {

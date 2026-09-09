@@ -129,6 +129,12 @@ class Bridge(private val activity: MainActivity, private val web: WebView) {
         android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase())
             ?: "application/octet-stream"
 
+    // ------------------------------------------------------------ file picker --
+
+    /** Opens the system document picker; the chosen file (or a folder with several) arrives via `androidEvent('picked', path)`. */
+    @JavascriptInterface
+    fun pickFiles() = activity.runOnUiThread { activity.pickFiles() }
+
     // -------------------------------------------------------------------- QR --
 
     /** Launches the camera scanner; the decoded text is routed by MainActivity.onQr → `openNew`. */

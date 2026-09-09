@@ -118,7 +118,7 @@ export component MainWindow inherits Window {
     in-out property <string> f-pin;
     in-out property <bool> f-compress;
     in-out property <string> f-password;
-    in-out property <string> f-expiry: "7";
+    in-out property <int> f-expiry: 7;
     in-out property <string> f-max;
     in-out property <string> f-message;
     in-out property <bool> f-ticket: true;
@@ -133,7 +133,7 @@ export component MainWindow inherits Window {
     in-out property <string> s-dir;
     in-out property <string> s-rate;
     in-out property <string> s-parallel;
-    in-out property <string> s-expiry;
+    in-out property <int> s-expiry: 7;
     in-out property <bool> s-auto;
     in-out property <bool> s-notif;
     in-out property <bool> s-tray;
@@ -619,7 +619,12 @@ export component MainWindow inherits Window {
             HorizontalLayout { spacing: 12px;
                 VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "Límite de velocidad (Mbit/s, 0 = sin límite)"; } Input { text <=> root.s-rate; } }
                 VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "Partes paralelas (multipart)"; } Input { text <=> root.s-parallel; } }
-                VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "Caducidad de links (días, 1-7)"; } Input { text <=> root.s-expiry; } }
+            }
+            VerticalLayout { spacing: 5px;
+                FieldLabel { text: "Tiempo online por defecto de los links (storage.to: 1-7 días)"; }
+                HorizontalLayout { spacing: 8px; alignment: start;
+                    Segmented { items: ["1 día", "2", "3", "4", "5", "6", "7 días"]; current: clamp(root.s-expiry - 1, 0, 6); changed(i) => { root.s-expiry = i + 1; } }
+                }
             }
             Check { text: "Aceptar automáticamente las transferencias LAN entrantes"; checked <=> root.s-auto; }
             Check { text: "Notificaciones de escritorio"; checked <=> root.s-notif; }
@@ -705,8 +710,13 @@ export component MainWindow inherits Window {
             if root.new-mode == 1: VerticalLayout { spacing: 10px;
                 HorizontalLayout { spacing: 12px;
                     VerticalLayout { spacing: 5px; horizontal-stretch: 1; FieldLabel { text: "Contraseña (opcional, 4-100)"; } Input { text <=> root.f-password; password: true; } }
-                    VerticalLayout { spacing: 5px; width: 120px; FieldLabel { text: "Caducidad (días)"; } Input { text <=> root.f-expiry; } }
                     VerticalLayout { spacing: 5px; width: 120px; FieldLabel { text: "Máx. descargas"; } Input { text <=> root.f-max; placeholder: "∞"; } }
+                }
+                VerticalLayout { spacing: 5px;
+                    FieldLabel { text: "Tiempo online del link (storage.to conserva los archivos como máximo 7 días)"; }
+                    HorizontalLayout { spacing: 8px; alignment: start;
+                        Segmented { items: ["1 día", "2", "3", "4", "5", "6", "7 días"]; current: clamp(root.f-expiry - 1, 0, 6); changed(i) => { root.f-expiry = i + 1; } }
+                    }
                 }
                 VerticalLayout { spacing: 5px; FieldLabel { text: "Mensaje para el ticket (opcional)"; } Input { text <=> root.f-message; } }
                 Check { text: "Generar ticket .unishare (link + contraseña + digests BLAKE3, compartible por QR)"; checked <=> root.f-ticket; }

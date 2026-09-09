@@ -201,7 +201,7 @@ pub fn run(cfg: Config, cfg_path: PathBuf, history: History, opts: AppOptions) -
     win.set_version(format!("v{}", crate::APP_VERSION).into());
     win.set_download_dir(cfg.download_dir.display().to_string().into());
     win.set_f_dest(cfg.download_dir.display().to_string().into());
-    win.set_f_expiry(cfg.global.expiry_days.to_string().into());
+    win.set_f_expiry(cfg.global.expiry_days as i32);
     let st = Rc::new(std::cell::RefCell::new(UiState {
         filter: "all".into(),
         query: String::new(),
@@ -794,7 +794,7 @@ fn handle_evt(ctx: &UiCtx, evt: Evt) {
                 w.set_s_dir(c.download_dir.display().to_string().into());
                 w.set_s_rate(c.rate_limit_mbps.to_string().into());
                 w.set_s_parallel(c.global.parallel_parts.to_string().into());
-                w.set_s_expiry(c.global.expiry_days.to_string().into());
+                w.set_s_expiry(c.global.expiry_days as i32);
                 w.set_s_auto(c.auto_accept);
                 w.set_s_notif(c.notifications);
                 w.set_s_tray(c.minimize_to_tray);
@@ -1218,7 +1218,7 @@ fn wire_callbacks(win: &MainWindow, ctx: &UiCtx) {
                 2 => DangerAction::Delete,
                 _ => DangerAction::Quarantine,
             }),
-            expiry_days: w.get_s_expiry().trim().parse().ok(),
+            expiry_days: u32::try_from(w.get_s_expiry()).ok().filter(|d| *d > 0),
             parallel_parts: w.get_s_parallel().trim().parse().ok(),
         };
         w.set_dialog("".into());
@@ -1243,7 +1243,7 @@ fn wire_callbacks(win: &MainWindow, ctx: &UiCtx) {
                 c.send(Cmd::SendGlobal(SendGlobalReq {
                     path,
                     password: nonempty(w.get_f_password()),
-                    expiry_days: w.get_f_expiry().trim().parse().ok(),
+                    expiry_days: u32::try_from(w.get_f_expiry()).ok().filter(|d| *d > 0),
                     max_downloads: w.get_f_max().trim().parse().ok(),
                     compress: w.get_f_compress(),
                     ticket: w.get_f_ticket(),

@@ -288,7 +288,8 @@ struct AcceptReq {
 }
 async fn api_accept(State(e): St, AxPath(id): AxPath<String>, body: Option<Json<AcceptReq>>) -> Response {
     let dest = body.and_then(|Json(b)| b.dest).filter(|d| !d.trim().is_empty()).map(PathBuf::from);
-    res_json(e.accept_offer(&id, dest).await.map(|j| serde_json::json!({ "job": j })))
+    let r = e.accept_offer(&id, dest).await;
+    job_created(&e, r).await
 }
 async fn api_reject(State(e): St, AxPath(id): AxPath<String>) -> Response {
     res_json(e.reject_offer(&id).await.map(|_| serde_json::json!({ "ok": true })))
@@ -310,14 +311,29 @@ async fn api_job_remove(State(e): St, AxPath(id): AxPath<u64>) -> Response {
 async fn api_jobs_clear(State(e): St) -> Response {
     Json(serde_json::json!({ "removed": e.clear_finished().await })).into_response()
 }
+/// `{ "job": <Job>, "job_id": n }` — the full job so the clients can show it at once
+/// (the mobile GUI used to read `r.job.id` from a bare number and got `undefined`,
+/// so the new transfer only showed up after a manual reload).
+async fn job_created(e: &Engine, r: Result<u64>) -> Response {
+    match r {
+        Ok(id) => {
+            let job = e.job(id).await;
+            Json(serde_json::json!({ "job": job, "job_id": id })).into_response()
+        }
+        Err(err) => bad(err),
+    }
+}
 async fn api_send_lan(State(e): St, Json(r): Json<SendLanReq>) -> Response {
-    res_json(e.send_lan(r).await.map(|j| serde_json::json!({ "job": j })))
+    let r = e.send_lan(r).await;
+    job_created(&e, r).await
 }
 async fn api_send_global(State(e): St, Json(r): Json<SendGlobalReq>) -> Response {
-    res_json(e.send_global(r).await.map(|j| serde_json::json!({ "job": j })))
+    let r = e.send_global(r).await;
+    job_created(&e, r).await
 }
 async fn api_download(State(e): St, Json(r): Json<DownloadReq>) -> Response {
-    res_json(e.download(r).await.map(|j| serde_json::json!({ "job": j })))
+    let r = e.download(r).await;
+    job_created(&e, r).await
 }
 
 #[derive(Deserialize)]

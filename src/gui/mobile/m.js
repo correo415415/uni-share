@@ -276,7 +276,7 @@ function wireCommon(root) {
   $$('[data-job]', root).forEach(el => el.onclick = () => { const id = Number(el.dataset.job); const j = job(id); if (j) push({ kind: 'job', id, title: KIND[j.kind] || 'Transferencia', keepScroll: true }); });
   $$('[data-offer]', root).forEach(card => {
     const id = card.dataset.offer;
-    $$('[data-act]', card).forEach(b => b.onclick = async e => { e.stopPropagation(); b.disabled = true; try { if (b.dataset.act === 'accept') { const r = await api(`/api/offers/${encodeURIComponent(id)}/accept`, { method: 'POST', body: {} }); toast('Recibiendo…', 'ok'); if (r.job) push({ kind: 'job', id: r.job.id, title: 'Recepción LAN' }); } else { await api(`/api/offers/${encodeURIComponent(id)}/reject`, { method: 'POST' }); toast('Rechazada', 'info'); } } catch (err) { toast(err.message, 'err'); b.disabled = false; } });
+    $$('[data-act]', card).forEach(b => b.onclick = async e => { e.stopPropagation(); b.disabled = true; try { if (b.dataset.act === 'accept') { const r = await api(`/api/offers/${encodeURIComponent(id)}/accept`, { method: 'POST', body: {} }); toast('Recibiendo…', 'ok'); jobCreated(r, 'Recepción LAN'); } else { await api(`/api/offers/${encodeURIComponent(id)}/reject`, { method: 'POST' }); toast('Rechazada', 'info'); } } catch (err) { toast(err.message, 'err'); b.disabled = false; } });
   });
   $$('[data-empty-act]', root).forEach(b => b.onclick = () => { const a = b.dataset.emptyAct; if (a === 'scan') return mobile ? Android.scanQr() : openNew('download'); if (a === 'qr') return go('share'); openNew(a === 'new' ? 'lan' : a); });
   $$('[data-go]', root).forEach(b => b.onclick = () => go(b.dataset.go));
@@ -657,6 +657,24 @@ function openShared(path) {
     { icon: 'globe', label: 'Subir y obtener link', sub: `storage.to · online ${S.cfg?.global?.expiry_days || 7} día(s) · sin cuenta`, fn: () => openNew('global', { path }) },
   ]);
 }
+/** A POST created a job: show it *now* (merge into the snapshot, open its detail) instead of
+ *  waiting for the next SSE frame — on Android the WebView may throttle the stream while the
+ *  sheet animates, which made the new transfer appear only after a reload. `r.job` is the full
+ *  Job (or null if it already finished); `r.job_id` is always present. */
+function jobCreated(r, title) {
+  if (!r) return;
+  const j = r.job && typeof r.job === 'object' ? r.job : null;
+  const id = j ? j.id : (r.job_id ?? (typeof r.job === 'number' ? r.job : null));
+  if (j && S.data) {
+    const i = S.data.jobs.findIndex(x => x.id === j.id);
+    if (i >= 0) S.data.jobs[i] = j; else S.data.jobs.unshift(j);
+    S.lastStates.set(j.id, j.state);
+  }
+  if (id != null) push({ kind: 'job', id, title: title || (j && KIND[j.kind]) || 'Transferencia' });
+  else render({ quiet: true });
+  // Belt and braces: pull a fresh snapshot in case the SSE stream is asleep.
+  api('/api/state').then(applyState).catch(() => {});
+}
 function openNew(mode = 'lan', preset = {}) {
   const d = S.data || { devices: [] }; const c = S.cfg || { global: {} };
   const st = { mode, path: preset.path || '', device: preset.device || '', target: preset.target || '', url: preset.url || '', dest: '', links: preset.links || '' };
@@ -733,7 +751,7 @@ function openNew(mode = 'lan', preset = {}) {
         return openShareSheet({ name: t.ticket.name || 'ticket', ticket_uri: t.uri, ticket_path: String(t.path) });
       }
       ov.close(); vib(20);
-      if (r && r.job) push({ kind: 'job', id: r.job.id, title: KIND[r.job.kind] || 'Transferencia' });
+      jobCreated(r);
     } catch (e) { err.textContent = e.message; okBtn.disabled = false; }
   };
   return ov;

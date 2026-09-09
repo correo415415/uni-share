@@ -7,8 +7,8 @@
 #   mini-commits frecuentes no encolan compilaciones seguidas en el runner. Para los
 #   cambios que solo tocan documentación existe `docs.yml` (sin toolchain, segundos).
 # - Compila:
-#     * uni-share            (features por defecto: CLI + GUI web)
-#     * uni-share-app        (--features slint: CLI + GUI web + app nativa)
+#     * uni-share            (CLI + GUI web; con --features yara salvo que se desactive en el dispatch)
+#     * uni-share-app        (--features slint [+ yara]: CLI + GUI web + app nativa)
 #   y publica los binarios en una *release* rodante `nightly-<rama>` (prerelease),
 #   sobrescribiendo los assets. Los tags `v*` generan una release normal.
 # - Los artefactos NO se guardan en Actions (sin espacio); solo en releases.
@@ -26,6 +26,10 @@ on:
         default: true
       android:
         description: "Compilar también el APK Android"
+        type: boolean
+        default: true
+      yara:
+        description: "Incluir el motor YARA-X (--features yara; compila wasmtime, tarda más la 1.ª vez)"
         type: boolean
         default: true
 
@@ -126,6 +130,16 @@ jobs:
             fi
           fi
 
+      - name: Features opcionales
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ] || [ "${{ inputs.yara }}" = "true" ]; then
+            echo "YARA=--features yara" >> "$GITHUB_ENV"; echo "YARA activado"
+          else
+            echo "YARA=" >> "$GITHUB_ENV"; echo "YARA desactivado"
+          fi
+
       - name: fmt
         shell: bash
         run: cargo fmt --all -- --check || echo "::warning::cargo fmt reporta diferencias"
@@ -138,16 +152,24 @@ jobs:
         shell: bash
         run: cargo test --all-targets
 
-      - name: build release (default)
+      - name: clippy + test (--features yara)
+        if: env.YARA != ''
         shell: bash
-        run: cargo build --release $LOCKED
+        run: |
+          set -euo pipefail
+          cargo clippy --all-targets $YARA -- -D warnings
+          cargo test --all-targets $YARA
+
+      - name: build release (default, + yara si está activado)
+        shell: bash
+        run: cargo build --release $LOCKED $YARA
 
       - name: build release (--features slint)
         if: github.event_name != 'workflow_dispatch' || inputs.slint
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release $LOCKED --features slint --target-dir target/slint
+          cargo build --release $LOCKED --features slint $YARA --target-dir target/slint
 
       - name: Screenshots de la app (demo, sin red)
         if: runner.os == 'Linux' && (github.event_name != 'workflow_dispatch' || inputs.slint)
@@ -301,7 +323,7 @@ jobs:
           {
             echo "## uni-share ${VERSION} (${SHORT}) — ${TARGET}"
             echo
-            echo "- \`uni-share-${TARGET}${EXE}\`: CLI + GUI web (\`uni-share gui\`)."
+            echo "- \`uni-share-${TARGET}${EXE}\`: CLI + GUI web (\`uni-share gui\`)${YARA:+ + motor YARA-X (reglas en \`<data_dir>/rules/\`)}."
             [ -f "dist/uni-share-app-${TARGET}${EXE}" ] && echo "- \`uni-share-app-${TARGET}${EXE}\`: igual + app nativa Slint (\`uni-share app\`)."
             echo "- \`${BASE}.tar.gz\` / \`.zip\`: binarios + docs."
             ls dist/*.apk >/dev/null 2>&1 && echo "- \`$(basename dist/*.apk)\`: app Android (debug, WebView sobre el core Rust)."
